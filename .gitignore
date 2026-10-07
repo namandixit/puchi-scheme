@@ -90,3 +90,8 @@ build-lib/chibi/char-set/width.scm
 *.swp
 
 .vscode
+
+# Puchi amalgamation temps / local builds (keep under puchi/)
+puchi/tools/.amalgamate-tmp/
+puchi/tools/__pycache__/
+puchi/test/build/
