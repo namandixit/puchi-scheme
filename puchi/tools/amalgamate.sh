@@ -49,11 +49,7 @@ cp "$CHIBI/simplify.c" "$WORKDIR/simplify.c"
 cp "$CHIBI/include/chibi/features.h" "$WORKDIR/features.h"
 cp "$CHIBI/include/chibi/eval.h" "$WORKDIR/eval.h"
 cp "$CHIBI/include/chibi/bignum.h" "$WORKDIR/bignum.h"
-cp "$CHIBI/include/chibi/sexp-huff.h" "$WORKDIR/sexp-huff.h"
-cp "$CHIBI/include/chibi/sexp-unhuff.h" "$WORKDIR/sexp-unhuff.h"
-cp "$CHIBI/include/chibi/sexp-hufftabs.h" "$WORKDIR/sexp-hufftabs.h"
-cp "$CHIBI/include/chibi/sexp-hufftabdefs.h" "$WORKDIR/sexp-hufftabdefs.h"
-cp "$CHIBI/include/chibi/sexp-hufftabs.c" "$WORKDIR/sexp-hufftabs.c"
+# Huffman symbol tables are not amalgamated (SEXP_USE_HUFF_SYMS is always off).
 cp "$CHIBI/bignum.c" "$WORKDIR/bignum.c"
 # gc_heap.h intentionally omitted (image packing — empty / unused in puchi)
 
@@ -118,23 +114,20 @@ import sys
 from pathlib import Path
 wd = Path(sys.argv[1])
 sexp_c = (wd / "sexp.c").read_text(encoding="utf-8")
-tabs = (wd / "sexp-hufftabs.h").read_text(encoding="utf-8")
-huff = (wd / "sexp-huff.h").read_text(encoding="utf-8")
-unhuff = (wd / "sexp-unhuff.h").read_text(encoding="utf-8")
-old = '#include "chibi/sexp-hufftabs.h"\n#include "chibi/sexp-huff.h"\n'
-if old not in sexp_c:
-    raise SystemExit("huffman includes not found in sexp.c")
-sexp_c = sexp_c.replace(old, "/* ---- huffman tables (amalgamated) ---- */\n" + tabs + "\n" + huff + "\n")
-old_u = '#include "chibi/sexp-unhuff.h"\n'
-if old_u not in sexp_c:
-    raise SystemExit("unhuff include not found in sexp.c")
-sexp_c = sexp_c.replace(old_u, "/* ---- unhuff (amalgamated) ---- */\n" + unhuff + "\n")
+# Drop huffman includes (tables not shipped; HUFF_SYMS fold deletes the code).
+for old in (
+    '#include "chibi/sexp-hufftabs.h"\n#include "chibi/sexp-huff.h"\n',
+    '#include "chibi/sexp-hufftabs.h"\n',
+    '#include "chibi/sexp-huff.h"\n',
+    '#include "chibi/sexp-unhuff.h"\n',
+):
+    sexp_c = sexp_c.replace(old, "/* puchi: no huffman symbols */\n")
 sexp_c = sexp_c.replace("#ifdef _WIN32\n#include <io.h>\n#endif\n", "/* puchi: no io.h */\n")
 (wd / "sexp.c").write_text(sexp_c, encoding="utf-8")
-print("injected huffman into sexp.c")
+print("dropped huffman includes from sexp.c")
 PY
 
-# Inject bignum.h into sexp.h at the normal include site (gated by SEXP_USE_BIGNUMS)
+# Inject bignum.h into sexp.h at the normal include site (tower-gated)
 "$PYTHON" - "$WORKDIR" <<'PY'
 import sys
 from pathlib import Path
@@ -155,7 +148,7 @@ if old not in sexp_h:
     raise SystemExit("chibi/bignum.h include not found in sexp.h")
 sexp_h = sexp_h.replace(
     old,
-    "/* ---- bignum.h (amalgamated; active only if SEXP_USE_BIGNUMS) ---- */\n"
+    "/* ---- bignum.h (amalgamated; active only under PUCHI_ENABLE_NUMERICAL_TOWER) ---- */\n"
     + bignum_h + "\n",
     1,
 )
@@ -182,7 +175,7 @@ for f in sexp.h eval.h bignum.h features.h gc.c sexp.c eval.c \
     -e 's|#include "chibi/eval.h"|/* amalgamated eval.h */|' \
     -e 's|#include "chibi/bignum.h"|/* amalgamated bignum.h */|' \
     -e 's|#include "chibi/gc_heap.h"|/* puchi: no gc_heap.h */|' \
-    -e 's|#include "chibi/sexp-hufftabdefs.h"|/* amalgamated sexp-hufftabdefs.h */|'
+    -e 's|#include "chibi/sexp-hufftabdefs.h"|/* puchi: no huffman */|'
 done
 
 # Inline opt/fcall.c and opt/opcode_names.h (true single-header)
@@ -209,8 +202,8 @@ if old_n not in ev:
     raise SystemExit("opt/opcode_names.h include not found in eval.c")
 ev = ev.replace(
     old_n,
-    "#if SEXP_USE_STATIC_LIBS\n"
-    "/* ---- opt/opcode_names.h (amalgamated; harness STATIC_LIBS) ---- */\n"
+    "#if defined(PUCHI_TEST)\n"
+    "/* ---- opt/opcode_names.h (amalgamated; harness) ---- */\n"
     + names
     + "#endif\n",
     1,
@@ -261,7 +254,7 @@ echo "[puchi] writing puchi.h..."
   echo "/* ==== resolved feature flags (from features.h; manual omitted) ==== */"
   cat "$WORKDIR/features.h"
 
-  echo "/* ==== sexp.h (bignum.h inlined mid-file under SEXP_USE_BIGNUMS) ==== */"
+  echo "/* ==== sexp.h (bignum.h inlined mid-file under PUCHI_ENABLE_NUMERICAL_TOWER) ==== */"
   cat "$WORKDIR/sexp.h"
 
   echo "/* ==== eval.h ==== */"
@@ -292,7 +285,7 @@ echo "[puchi] writing puchi.h..."
   echo "/* ==== simplify.c ==== */"
   cat "$WORKDIR/simplify.c"
 
-  echo "/* ==== bignum.c (active only if PUCHI_ENABLE_NUMERICAL_TOWER / SEXP_USE_BIGNUMS) ==== */"
+  echo "/* ==== bignum.c (active only if PUCHI_ENABLE_NUMERICAL_TOWER) ==== */"
   cat "$WORKDIR/bignum.c"
 
   cat "$WORKDIR/init7_embed.c"

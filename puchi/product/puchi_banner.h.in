@@ -43,7 +43,7 @@
  *   sexp_delete_context(ctx);
  *
  * Numeric modes: (none) / PUCHI_ENABLE_NUMERICAL_TOWER / PUCHI_INTEGER_ONLY
- * (do not set SEXP_USE_FLONUMS/BIGNUMS by hand).
+ * (set at most one of PUCHI_INTEGER_ONLY / PUCHI_ENABLE_NUMERICAL_TOWER).
  *
  * License: BSD-style (upstream COPYING / Alex Shinn).
  */
@@ -58,9 +58,8 @@ extern "C" {
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
-#include <ctype.h>
 /* Host: include <stdio.h> before this header when using default
- * PUCHI_SNPRINTF / SPRINTF / SSCANF (sexp.h stdio is scrubbed). */
+ * PUCHI_SNPRINTF / SSCANF (sexp.h stdio is scrubbed). */
 #include <math.h>
 #include <float.h>
 #include <limits.h>
@@ -77,12 +76,6 @@ extern "C" {
 #endif
 
 /* ---- overridable libc wrappers (core calls only these names) ---- */
-#ifndef PUCHI_MALLOC
-#define PUCHI_MALLOC malloc
-#endif
-#ifndef PUCHI_FREE
-#define PUCHI_FREE free
-#endif
 #ifndef PUCHI_MEMCPY
 #define PUCHI_MEMCPY memcpy
 #endif
@@ -113,30 +106,50 @@ extern "C" {
 #ifndef PUCHI_SNPRINTF
 #define PUCHI_SNPRINTF snprintf
 #endif
-#ifndef PUCHI_SPRINTF
-#define PUCHI_SPRINTF sprintf
-#endif
 #ifndef PUCHI_SSCANF
 #define PUCHI_SSCANF sscanf
 #endif
+/* ASCII character-class defaults (inline so arguments are evaluated once). */
+static inline int puchi_isalpha(int c) {
+  return (((unsigned)c | 32u) - (unsigned)'a') <= 25u;
+}
+static inline int puchi_isdigit(int c) {
+  return ((unsigned)c - (unsigned)'0') <= 9u;
+}
+static inline int puchi_isxdigit(int c) {
+  return puchi_isdigit(c) || (((unsigned)c | 32u) - (unsigned)'a') <= 5u;
+}
+static inline int puchi_isspace(int c) {
+  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+static inline int puchi_tolower(int c) {
+  return (puchi_isalpha(c) && (unsigned)c < 128u) ? (c | 32) : c;
+}
+static inline int puchi_toupper(int c) {
+  return (puchi_isalpha(c) && (unsigned)c < 128u) ? (c & ~32) : c;
+}
 #ifndef PUCHI_ISALPHA
-#define PUCHI_ISALPHA isalpha
-#endif
-#ifndef PUCHI_ISXDIGIT
-#define PUCHI_ISXDIGIT isxdigit
+#define PUCHI_ISALPHA puchi_isalpha
 #endif
 #ifndef PUCHI_ISDIGIT
-#define PUCHI_ISDIGIT isdigit
+#define PUCHI_ISDIGIT puchi_isdigit
+#endif
+#ifndef PUCHI_ISXDIGIT
+#define PUCHI_ISXDIGIT puchi_isxdigit
 #endif
 #ifndef PUCHI_ISSPACE
-#define PUCHI_ISSPACE isspace
+#define PUCHI_ISSPACE puchi_isspace
 #endif
 #ifndef PUCHI_TOLOWER
-#define PUCHI_TOLOWER tolower
+#define PUCHI_TOLOWER puchi_tolower
 #endif
 #ifndef PUCHI_TOUPPER
-#define PUCHI_TOUPPER toupper
+#define PUCHI_TOUPPER puchi_toupper
 #endif
+#ifndef PUCHI_LABS
+#define PUCHI_LABS labs
+#endif
+/* Core libm: GC heap growth and the numeric reader need these in every mode. */
 #ifndef PUCHI_POW
 #define PUCHI_POW pow
 #endif
@@ -145,27 +158,6 @@ extern "C" {
 #endif
 #ifndef PUCHI_LOG
 #define PUCHI_LOG log
-#endif
-#ifndef PUCHI_SIN
-#define PUCHI_SIN sin
-#endif
-#ifndef PUCHI_COS
-#define PUCHI_COS cos
-#endif
-#ifndef PUCHI_TAN
-#define PUCHI_TAN tan
-#endif
-#ifndef PUCHI_ATAN
-#define PUCHI_ATAN atan
-#endif
-#ifndef PUCHI_ATAN2
-#define PUCHI_ATAN2 atan2
-#endif
-#ifndef PUCHI_SINH
-#define PUCHI_SINH sinh
-#endif
-#ifndef PUCHI_COSH
-#define PUCHI_COSH cosh
 #endif
 #ifndef PUCHI_SQRT
 #define PUCHI_SQRT sqrt
@@ -200,12 +192,34 @@ extern "C" {
 #ifndef PUCHI_ROUND
 #define PUCHI_ROUND round
 #endif
-#ifndef PUCHI_LABS
-#define PUCHI_LABS labs
+#if !defined(PUCHI_INTEGER_ONLY)
+#ifndef PUCHI_SIN
+#define PUCHI_SIN sin
+#endif
+#ifndef PUCHI_COS
+#define PUCHI_COS cos
+#endif
+#ifndef PUCHI_TAN
+#define PUCHI_TAN tan
+#endif
+#ifndef PUCHI_ATAN
+#define PUCHI_ATAN atan
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#ifndef PUCHI_ATAN2
+#define PUCHI_ATAN2 atan2
+#endif
+#ifndef PUCHI_SINH
+#define PUCHI_SINH sinh
+#endif
+#ifndef PUCHI_COSH
+#define PUCHI_COSH cosh
 #endif
 #ifndef PUCHI_ACOS
 #define PUCHI_ACOS acos
 #endif
+#endif /* PUCHI_ENABLE_NUMERICAL_TOWER */
+#endif /* !PUCHI_INTEGER_ONLY */
 
 /* Portable case-insensitive compare (no _stricmp / strcasecmp). */
 static inline int puchi_strcasecmp(const char *a, const char *b) {

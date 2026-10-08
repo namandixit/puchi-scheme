@@ -495,9 +495,7 @@ int main(int argc, char **argv) {
     sym = sexp_intern(ctx, "cond-expand", -1);
     tmp = sexp_env_cell(ctx, sexp_global(ctx, SEXP_G_META_ENV), sym, 0);
     if (tmp) {
-#if SEXP_USE_RENAME_BINDINGS
       sexp_env_rename(ctx, env, sym, tmp);
-#endif
       sexp_env_define(ctx, env, sym, sexp_cdr(tmp));
     }
     puchi_install_foreigns(ctx, env);

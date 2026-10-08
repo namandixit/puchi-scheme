@@ -1,17 +1,19 @@
 """Host-owned embed surface: feature flags and mechanical rewrites.
 
 Body forks (FILE* → stream_ops, diskless boot, etc.) live in puchi/patches/.
-This module keeps the ALWAYS_ZERO_STRIP set, libc → PUCHI_* rewrites, opcode
-stripping, and the port-aware load stub used after trim_init7.
+This module keeps the ALWAYS_ZERO / ALWAYS_ONE / numeric rewrite sets, libc →
+PUCHI_* rewrites, opcode stripping, and the port-aware load stub used after
+trim_init7.
 """
 from __future__ import annotations
 
 import re
 
 # ---------------------------------------------------------------------------
-# ALWAYS_ZERO_STRIP — must stay forced 0; strip_dead_backends deletes bodies.
-# Do not re-enable after upstream Chibi refresh.
+# Flag catalogs for strip_dead_backends. After the fold, no SEXP_USE_* remains.
 # ---------------------------------------------------------------------------
+
+# Always 0: delete the #if true arm (keep #else if any). Bodies may already be gone.
 ALWAYS_ZERO_STRIP = frozenset(
     {
         "SEXP_USE_GREEN_THREADS",
@@ -65,7 +67,67 @@ ALWAYS_ZERO_STRIP = frozenset(
         "SEXP_USE_STABLE_ABI",
         "SEXP_USE_GLOBAL_HEAP",
         "SEXP_USE_GLOBAL_SYMBOLS",
+        "SEXP_USE_NO_FEATURES",
+        "SEXP_USE_PACKED_STRINGS",
+        "SEXP_USE_ESCAPE_REQUIRES_TRAILING_SEMI_COLON",
+        "SEXP_USE_HUFF_SYMS",
+        "SEXP_USE_MINI_FLOAT_UNIFORM_VECTORS",
+        "SEXP_USE_INTTYPES",
+        "SEXP_USE_STATIC_LIBS_NO_INCLUDE",
     }
+)
+
+# Always 1: delete the #if / #else, keep the true arm.
+ALWAYS_ONE_STRIP = frozenset(
+    {
+        "SEXP_USE_MODULES",
+        "SEXP_USE_TYPE_DEFS",
+        "SEXP_USE_STRICT_TOPLEVEL_BINDINGS",
+        "SEXP_USE_RENAME_BINDINGS",
+        "SEXP_USE_SIMPLIFY",
+        "SEXP_USE_WARN_UNDEFS",
+        "SEXP_USE_FULL_SOURCE_INFO",
+        "SEXP_USE_UTF8_STRINGS",
+        "SEXP_USE_MUTABLE_STRINGS",
+        "SEXP_USE_DISJOINT_STRING_CURSORS",
+        "SEXP_USE_HASH_SYMS",
+        "SEXP_USE_FOLD_CASE_SYMS",
+        "SEXP_USE_EXTENDED_CHAR_NAMES",
+        "SEXP_USE_READER_LABELS",
+        "SEXP_USE_ESCAPE_NEWLINE",
+        "SEXP_USE_OBJECT_BRACE_LITERALS",
+        "SEXP_USE_TYPE_PRINTERS",
+        "SEXP_USE_UNIFORM_VECTOR_LITERALS",
+        "SEXP_USE_BYTEVECTOR_LITERALS",
+        "SEXP_USE_PATCH_NON_DECIMAL_NUMERIC_FORMATS",
+        "SEXP_USE_EXTENDED_FCALL",
+        "SEXP_USE_SELF_PARAMETER",
+        "SEXP_USE_LONG_PROCEDURE_ARGS",
+        "SEXP_USE_CHECK_STACK",
+        "SEXP_USE_GROW_STACK",
+        "SEXP_USE_WEAK_REFERENCES",
+        "SEXP_USE_FINALIZERS",
+        "SEXP_USE_ALIGNED_BYTECODE",
+        "SEXP_USE_CUSTOM_LONG_LONGS",
+        # Under PUCHI_TEST the table is always the empty NULL sentinel (no clibs.c).
+        "SEXP_USE_STATIC_LIBS_EMPTY",
+    }
+)
+
+# Numeric / harness: rewrite bare identifier in #if to this text (const=None).
+SEXP_USE_REWRITE = {
+    "SEXP_USE_FLONUMS": "!defined(PUCHI_INTEGER_ONLY)",
+    "SEXP_USE_MATH": "!defined(PUCHI_INTEGER_ONLY)",
+    "SEXP_USE_INFINITIES": "!defined(PUCHI_INTEGER_ONLY)",
+    "SEXP_USE_IEEE_EQV": "!defined(PUCHI_INTEGER_ONLY)",
+    "SEXP_USE_BIGNUMS": "defined(PUCHI_ENABLE_NUMERICAL_TOWER)",
+    "SEXP_USE_RATIOS": "defined(PUCHI_ENABLE_NUMERICAL_TOWER)",
+    "SEXP_USE_COMPLEX": "defined(PUCHI_ENABLE_NUMERICAL_TOWER)",
+    "SEXP_USE_STATIC_LIBS": "defined(PUCHI_TEST)",
+}
+
+ALL_SEXP_USE_NAMES = (
+    ALWAYS_ZERO_STRIP | ALWAYS_ONE_STRIP | frozenset(SEXP_USE_REWRITE)
 )
 
 # Longer names first so rewrite does not partially match.
@@ -82,7 +144,6 @@ LIBC_REWRITES = [
     ("strncpy", "PUCHI_STRNCPY"),
     ("strchr", "PUCHI_STRCHR"),
     ("snprintf", "PUCHI_SNPRINTF"),
-    ("sprintf", "PUCHI_SPRINTF"),
     ("sscanf", "PUCHI_SSCANF"),
     ("isalpha", "PUCHI_ISALPHA"),
     ("isxdigit", "PUCHI_ISXDIGIT"),
@@ -233,6 +294,14 @@ def brand_puchi_features(src: str) -> str:
         src,
         flags=re.MULTILINE,
     )
+    # Drop mini-float feature when that flag is gone.
+    src = re.sub(
+        r"#if SEXP_USE_MINI_FLOAT_UNIFORM_VECTORS\n"
+        r'\s*"mini-float",\n'
+        r"#endif\n",
+        "",
+        src,
+    )
     return src
 
 
@@ -244,9 +313,10 @@ def fold_always_zero_type_slots(src: str) -> str:
     )
     src = re.sub(
         r"3\+\(SEXP_USE_STABLE_ABI\|\|SEXP_USE_RENAME_BINDINGS\)",
-        "3+(SEXP_USE_RENAME_BINDINGS)",
+        "4",
         src,
     )
+    src = src.replace("3+(SEXP_USE_RENAME_BINDINGS)", "4")
     src = re.sub(
         r"12\+\(SEXP_USE_STABLE_ABI\|\|SEXP_USE_DL\)",
         "12",

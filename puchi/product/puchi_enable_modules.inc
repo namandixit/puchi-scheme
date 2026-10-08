@@ -32,7 +32,7 @@ static sexp puchi_module_find_file_f(sexp ctx, sexp self, sexp_sint_t n, sexp fi
   fname = sexp_string_data(file);
   if (puchi_g_module_ops.exists(puchi_g_module_ops.userdata, fname))
     return sexp_c_string(ctx, fname, -1);
-#if SEXP_USE_STATIC_LIBS
+#if defined(PUCHI_TEST)
   if (sexp_find_static_library(fname))
     return sexp_c_string(ctx, fname, -1);
 #endif
@@ -43,7 +43,7 @@ static sexp puchi_module_find_file_f(sexp ctx, sexp self, sexp_sint_t n, sexp fi
       continue;
     if (puchi_g_module_ops.exists(puchi_g_module_ops.userdata, path))
       return sexp_c_string(ctx, path, -1);
-#if SEXP_USE_STATIC_LIBS
+#if defined(PUCHI_TEST)
     if (sexp_find_static_library(path))
       return sexp_c_string(ctx, path, -1);
 #endif
@@ -113,11 +113,9 @@ static void puchi_module_install_foreigns(sexp ctx, sexp env) {
   sexp_define_foreign(ctx, env, "open-binary-input-file", 1, puchi_module_open_input_f);
   sexp_define_foreign_opt(ctx, env, "load", 2, puchi_module_load_f, SEXP_FALSE);
   sexp_define_foreign_opt(ctx, env, "%load", 2, puchi_module_load_f, SEXP_FALSE);
-#if SEXP_USE_MODULES
   sexp_define_foreign_opt(ctx, env, "current-module-path", 1, sexp_current_module_path_op, SEXP_FALSE);
   sexp_define_foreign(ctx, env, "load-module-file", 2, sexp_load_module_file_op);
   sexp_define_foreign(ctx, env, "add-module-directory", 2, sexp_add_module_directory_op);
-#endif
 }
 
 static sexp puchi_module_restore_library_cond_expand(sexp ctx, sexp env) {

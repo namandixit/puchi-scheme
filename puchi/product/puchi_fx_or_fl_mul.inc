@@ -1,4 +1,4 @@
-#if SEXP_USE_FLONUMS && !SEXP_USE_BIGNUMS
+#if !defined(PUCHI_INTEGER_ONLY) && !defined(PUCHI_ENABLE_NUMERICAL_TOWER)
 /* Exact #e mantissa * 10^e without sexp_mul (no bignum.c). */
 static sexp puchi_fx_or_fl_mul(sexp ctx, sexp a, sexp b) {
   if (sexp_fixnump(a) && sexp_fixnump(b)) {

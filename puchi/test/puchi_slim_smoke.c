@@ -57,11 +57,11 @@ int main(void) {
   res = sexp_load_default_libs(ctx);
   if (sexp_exceptionp(res)) return fail("load_default_libs");
 
-#if !SEXP_USE_FLONUMS
-  return fail("FLONUMS should be on");
+#if defined(PUCHI_INTEGER_ONLY)
+  return fail("default config should not be INTEGER_ONLY");
 #endif
-#if SEXP_USE_BIGNUMS
-  return fail("BIGNUMS should be off by default");
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+  return fail("default config should not enable the tower");
 #endif
 
   nfail += expect_fix(ctx, "(+ 40 2)", 42);

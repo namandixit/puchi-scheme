@@ -11,8 +11,14 @@ import re
 import sys
 from pathlib import Path
 
+from puchi_fold_sexp_use import (
+    assert_no_sexp_use,
+    fix_sexp_use_c_rvalues,
+    scrub_sexp_use_comments,
+    scrub_sexp_use_defines,
+    strip_dead_backends,
+)
 from puchi_host_embed import (
-    ALWAYS_ZERO_STRIP,
     brand_puchi_features,
     fold_always_zero_type_slots,
     patch_opcodes,
@@ -23,6 +29,7 @@ from puchi_host_embed import (
 from puchi_strip_gunk import (
     assert_no_os_residue,
     assert_no_project_includes,
+    scrub_amalgamation_residue,
     scrub_shipped_always_zero_defines,
     trim_init7_dead_arms,
 )
@@ -94,8 +101,9 @@ def trim_meta7(src: str) -> str:
     if old_chibi not in out:
         raise SystemExit("trim_meta7: (chibi) make-module arm not found")
     out = out.replace(old_chibi, new_chibi, 1)
+    out = trim_init7_dead_arms(out)
     return (
-        ";; trimmed for puchi amalgamation - include-shared via STATIC_LIBS; "
+        ";; trimmed for puchi amalgamation - include-shared via PUCHI_TEST; "
         "(chibi) skips disk init-7\n" + out
     )
 
@@ -320,10 +328,10 @@ def scrub_features_h(text: str) -> str:
     if start < 0 or end < 0:
         raise SystemExit("scrub_features_h: comment catalog markers not found")
     catalog = (
-        "/* Numeric and OS features are selected by the PUCHI_* macros at the\n"
-        " * top of this file. Chibi's 'uncomment to #define SEXP_USE_*' notes\n"
-        " * are omitted here; they do not configure puchi.\n"
-        " * Heap-size knobs below are still live #ifndef defaults.\n"
+        "/* Numeric modes are selected by PUCHI_* macros before including\n"
+        " * puchi.h. Chibi's uncomment-to-enable feature notes are omitted;\n"
+        " * they do not configure puchi. Heap-size knobs below are still live\n"
+        " * #ifndef defaults.\n"
         " */\n\n"
     )
     text = text[:start] + catalog + text[end:]
@@ -421,11 +429,8 @@ def scrub_features_h(text: str) -> str:
         "#endif\n"
         "#endif\n"
     )
-    cll_new = (
-        "#ifndef SEXP_USE_CUSTOM_LONG_LONGS\n"
-        "#define SEXP_USE_CUSTOM_LONG_LONGS 1\n"
-        "#endif\n"
-    )
+    # Fold deletes the macro; keep only a comment so the workdir scrub succeeds.
+    cll_new = "/* puchi: always portable {hi,lo} 128-bit limb pair */\n"
     if cll_old not in text:
         raise SystemExit("scrub_features_h: CUSTOM_LONG_LONGS block not found")
     text = text.replace(cll_old, cll_new, 1)
@@ -795,7 +800,7 @@ def scrub_bignum_h(text: str) -> str:
         "#endif\n"
     )
     new = (
-        "/* puchi: always portable 128-bit limb pair (SEXP_USE_CUSTOM_LONG_LONGS) */\n"
+        "/* puchi: always portable 128-bit limb pair */\n"
         "typedef struct\n"
         "{\n"
         "  uint64_t hi;\n"
@@ -942,466 +947,6 @@ def trim_init7(src: str) -> str:
     return trim_init7_dead_arms(trim_init7_load_port(out))
 
 
-# Deleted from the amalgamation. Value 0, and defined() is true, so
-# `#if SEXP_USE_DL` goes away. With STABLE_ABI also ALWAYS_ZERO,
-# `#if SEXP_USE_STABLE_ABI || SEXP_USE_DL` is deleted entirely.
-# PLAN9 is never defined. STATIC_LIBS is NOT stripped â€” gated by PUCHI_TEST.
-_DEAD_ZERO = set(ALWAYS_ZERO_STRIP) | {"SEXP_USE_BOEHM", "SEXP_USE_GREEN_THREADS", "SEXP_USE_DL"}
-_DEAD_UNDEF = {"PLAN9"}
-
-
-def _strip_pp_comments(expr: str) -> str:
-    out = []
-    i = 0
-    while i < len(expr):
-        if expr.startswith("/*", i):
-            j = expr.find("*/", i + 2)
-            i = len(expr) if j < 0 else j + 2
-            out.append(" ")
-        elif expr.startswith("//", i):
-            break
-        else:
-            out.append(expr[i])
-            i += 1
-    return "".join(out)
-
-
-def _pp_tokens(expr: str) -> list[str]:
-    s = _strip_pp_comments(expr)
-    i = 0
-    toks: list[str] = []
-    while i < len(s):
-        if s[i].isspace():
-            i += 1
-            continue
-        for op in ("&&", "||", "==", "!=" , "<=", ">="):
-            if s.startswith(op, i):
-                toks.append(op)
-                i += 2
-                break
-        else:
-            if s[i] in "!()&|+-*/%<>^~?:":
-                toks.append(s[i])
-                i += 1
-            elif s[i].isdigit():
-                m = re.match(r"0[xX][0-9A-Fa-f]+[uUlL]*|\d+[uUlL]*", s[i:])
-                assert m
-                toks.append(m.group())
-                i += len(m.group())
-            elif s[i].isalpha() or s[i] == "_":
-                m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", s[i:])
-                assert m
-                toks.append(m.group())
-                i += len(m.group())
-            else:
-                raise SystemExit(f"preprocessor token: {s[i:]!r}")
-    return toks
-
-
-class _Pv:
-    """Preprocessor value: a constant, or an expression we could not fold."""
-
-    def __init__(self, const: int | None, text: str):
-        self.const = const
-        self.text = text
-
-    def render(self) -> str:
-        if self.const is not None:
-            return str(self.const)
-        return self.text
-
-
-def _pp_eval(expr: str) -> _Pv:
-    toks = _pp_tokens(expr)
-    pos = 0
-
-    def peek() -> str | None:
-        return toks[pos] if pos < len(toks) else None
-
-    def eat(expected: str | None = None) -> str:
-        nonlocal pos
-        if pos >= len(toks):
-            raise SystemExit(f"truncated preprocessor expr: {expr!r}")
-        tok = toks[pos]
-        pos += 1
-        if expected is not None and tok != expected:
-            raise SystemExit(f"expected {expected} in {expr!r}")
-        return tok
-
-    def wrap(v: _Pv) -> str:
-        if v.const is not None:
-            return str(v.const)
-        t = v.text
-        if re.fullmatch(
-            r"[A-Za-z_][A-Za-z0-9_]*|defined\([^)]*\)|0[xX][0-9A-Fa-f]+[uUlL]*|\d+[uUlL]*",
-            t,
-        ):
-            return t
-        return f"({t})"
-
-    def spell(v: _Pv) -> str:
-        if v.const is None:
-            return wrap(v)
-        if re.fullmatch(r"0[xX][0-9A-Fa-f]+[uUlL]*|\d+[uUlL]*", v.text or ""):
-            return v.text
-        return str(v.const)
-
-    def ident_value(name: str) -> _Pv:
-        if name in _DEAD_ZERO or name in _DEAD_UNDEF:
-            return _Pv(0, "0")
-        return _Pv(None, name)
-
-    def primary() -> _Pv:
-        tok = eat()
-        if tok == "(":
-            v = or_expr()
-            eat(")")
-            return v
-        if tok == "defined":
-            if peek() == "(":
-                eat("(")
-                name = eat()
-                eat(")")
-            else:
-                name = eat()
-            if name in _DEAD_ZERO:
-                return _Pv(1, "1")
-            if name in _DEAD_UNDEF:
-                return _Pv(0, "0")
-            return _Pv(None, f"defined({name})")
-        if re.fullmatch(r"0[xX][0-9A-Fa-f]+[uUlL]*|\d+[uUlL]*", tok):
-            return _Pv(int(re.sub(r"[uUlL]+$", "", tok), 0), tok)
-        return ident_value(tok)
-
-    def unary() -> _Pv:
-        if peek() == "!":
-            eat("!")
-            v = unary()
-            if v.const is not None:
-                return _Pv(int(not v.const), "")
-            return _Pv(None, "!" + wrap(v))
-        if peek() == "~":
-            eat("~")
-            v = unary()
-            if v.const is not None:
-                return _Pv(~v.const, "")
-            return _Pv(None, "~" + wrap(v))
-        return primary()
-
-    def cmp_expr() -> _Pv:
-        v = unary()
-        while peek() in ("==", "!=", "<", ">", "<=", ">="):
-            op = eat()
-            r = unary()
-            if v.const is not None and r.const is not None:
-                n = {
-                    "==": v.const == r.const,
-                    "!=": v.const != r.const,
-                    "<": v.const < r.const,
-                    ">": v.const > r.const,
-                    "<=": v.const <= r.const,
-                    ">=": v.const >= r.const,
-                }[op]
-                v = _Pv(int(n), "")
-            else:
-                v = _Pv(None, f"{spell(v)} {op} {spell(r)}")
-        return v
-
-    def and_expr() -> _Pv:
-        v = cmp_expr()
-        while peek() == "&&":
-            eat("&&")
-            r = cmp_expr()
-            if v.const == 0 or r.const == 0:
-                v = _Pv(0, "")
-            elif v.const == 1:
-                v = r
-            elif r.const == 1:
-                pass
-            elif v.const is not None and r.const is not None:
-                v = _Pv(int(v.const and r.const), "")
-            else:
-                v = _Pv(None, f"{spell(v)} && {spell(r)}")
-        return v
-
-    def or_expr() -> _Pv:
-        v = and_expr()
-        while peek() == "||":
-            eat("||")
-            r = and_expr()
-            if v.const == 1 or r.const == 1:
-                v = _Pv(1, "")
-            elif v.const == 0:
-                v = r
-            elif r.const == 0:
-                pass
-            elif v.const is not None and r.const is not None:
-                v = _Pv(int(v.const or r.const), "")
-            else:
-                v = _Pv(None, f"{spell(v)} || {spell(r)}")
-        return v
-
-    v = or_expr()
-    if pos != len(toks):
-        # Arithmetic and other operators we do not fold. Keep the original.
-        return _Pv(None, " ".join(toks))
-    return v
-
-
-def _directive(line: str) -> tuple[str, str] | None:
-    m = re.match(r"\s*#\s*(\w+)\s*(.*)", line.rstrip("\r\n"))
-    if not m:
-        return None
-    word = m.group(1)
-    rest = m.group(2).strip()
-    if word in ("if", "ifdef", "ifndef", "elif", "else", "endif"):
-        return word, rest
-    return None
-
-
-def _cond(word: str, rest: str) -> _Pv:
-    if word == "ifdef":
-        name = rest.split()[0]
-        if name in _DEAD_ZERO:
-            return _Pv(1, "1")
-        if name in _DEAD_UNDEF:
-            return _Pv(0, "0")
-        return _Pv(None, f"defined({name})")
-    if word == "ifndef":
-        name = rest.split()[0]
-        if name in _DEAD_ZERO:
-            return _Pv(0, "0")
-        if name in _DEAD_UNDEF:
-            return _Pv(1, "1")
-        return _Pv(None, f"!defined({name})")
-    return _pp_eval(rest)
-
-
-def _self_test_dead_backends() -> None:
-    samples = {
-        "SEXP_USE_DL": 0,
-        "defined(PLAN9)": 0,
-        "!defined(PLAN9)": 1,
-        "SEXP_USE_STABLE_ABI || SEXP_USE_DL": 0,  # both ALWAYS_ZERO_STRIP
-        "SEXP_USE_BOEHM || SEXP_USE_MALLOC": 0,  # both ALWAYS_ZERO_STRIP
-        "!SEXP_USE_BOEHM && !SEXP_USE_MALLOC": 1,
-        "defined(PLAN9) || !SEXP_USE_FLONUMS": None,
-        "! defined(_GNU_SOURCE) && ! defined(_WIN32) && ! defined(PLAN9)": None,
-    }
-    got = {k: _pp_eval(k) for k in samples}
-    assert got["SEXP_USE_DL"].const == 0
-    assert got["defined(PLAN9)"].const == 0
-    assert got["!defined(PLAN9)"].const == 1
-    assert got["SEXP_USE_STABLE_ABI || SEXP_USE_DL"].const == 0
-    assert got["SEXP_USE_BOEHM || SEXP_USE_MALLOC"].const == 0
-    assert got["!SEXP_USE_BOEHM && !SEXP_USE_MALLOC"].const == 1
-    assert got["defined(PLAN9) || !SEXP_USE_FLONUMS"].render() == "!SEXP_USE_FLONUMS"
-    assert _pp_eval("! (SEXP_USE_FLONUMS || SEXP_USE_BIGNUMS)").render() == "!(SEXP_USE_FLONUMS || SEXP_USE_BIGNUMS)"
-    assert _pp_eval("UINT_MAX == 4294967295U").render() == "UINT_MAX == 4294967295U"
-    assert _pp_eval("ULONG_MAX == 4294967295UL").render() == "ULONG_MAX == 4294967295UL"
-    assert _pp_eval("1U == 1").const == 1
-    assert "PLAN9" not in got["! defined(_GNU_SOURCE) && ! defined(_WIN32) && ! defined(PLAN9)"].render()
-
-    src = (
-        "#ifndef PLAN9\n"
-        "keep\n"
-        "#else\n"
-        "drop\n"
-        "#endif\n"
-        "#ifdef PLAN9\n"
-        "drop2\n"
-        "#endif\n"
-        "#if SEXP_USE_DL\n"
-        "drop3\n"
-        "#else\n"
-        "keep3\n"
-        "#endif\n"
-        "#if SEXP_USE_STABLE_ABI || SEXP_USE_DL\n"
-        "enum\n"
-        "#endif\n"
-        "#define SEXP_USE_DL 0\n"
-    )
-    out = strip_dead_backends(src, _tested=True)
-    assert "drop" not in out and "drop2" not in out and "drop3" not in out
-    assert "keep" in out and "keep3" in out
-    assert "enum" not in out
-    assert "#define SEXP_USE_DL 0" in out
-    assert "SEXP_USE_STABLE_ABI" not in out or "#define SEXP_USE_STABLE_ABI" in out
-
-    # NATIVE_X86 is ALWAYS_ZERO_STRIP â€” the whole branch (including any
-    # Boehm re-enable) is deleted from the amalgamation.
-    native = (
-        "#define SEXP_USE_BOEHM 0\n"
-        "#if SEXP_USE_NATIVE_X86\n"
-        "#undef SEXP_USE_BOEHM\n"
-        "#define SEXP_USE_BOEHM 1\n"
-        "#define SEXP_USE_FLONUMS 0\n"
-        "#endif\n"
-        "after\n"
-    )
-    native_out = strip_dead_backends(native, _tested=True)
-    assert "#define SEXP_USE_BOEHM 0" in native_out
-    assert "#define SEXP_USE_BOEHM 1" not in native_out
-    assert "#undef SEXP_USE_BOEHM" not in native_out
-    assert "SEXP_USE_NATIVE_X86" not in native_out
-    assert "after" in native_out
-
-
-def _reenables_dead_backend(line: str) -> bool:
-    """NATIVE_X86 turns Boehm back on. The collector is not in the amalgamation."""
-    s = "".join(line.split())
-    return s in ("#undefSEXP_USE_BOEHM", "#defineSEXP_USE_BOEHM1")
-
-
-def strip_dead_backends(src: str, _tested: bool = False) -> str:
-    """Drop Plan 9, Boehm, green-thread, and dlopen branches.
-
-    Other #if conditions are kept, with those four facts folded in
-    (`SEXP_USE_DL || SEXP_USE_STATIC_LIBS` becomes `SEXP_USE_STATIC_LIBS`).
-    """
-    if not _tested:
-        _self_test_dead_backends()
-
-    raw = src.splitlines(keepends=True)
-    lines: list[str] = []
-    buf = ""
-    for line in raw:
-        if buf:
-            buf += line
-            if not buf.rstrip("\r\n").endswith("\\"):
-                lines.append(buf)
-                buf = ""
-        elif line.lstrip().startswith("#") and line.rstrip("\r\n").endswith("\\"):
-            buf = line
-        else:
-            lines.append(line)
-    if buf:
-        lines.append(buf)
-
-    out: list[str] = []
-    # kind: 'const' (condition folded, directives omitted) or 'live'
-    stack: list[dict] = []
-    in_comment = False
-
-    def parent_emit() -> bool:
-        return all(fr["emit"] and fr["arm"] for fr in stack) if stack else True
-
-    def comment_state(line: str, inside: bool) -> bool:
-        i = 0
-        while i < len(line):
-            if inside:
-                j = line.find("*/", i)
-                if j < 0:
-                    return True
-                i = j + 2
-                inside = False
-            else:
-                slash = line.find("//", i)
-                block = line.find("/*", i)
-                if slash >= 0 and (block < 0 or slash < block):
-                    return False
-                if block < 0:
-                    return False
-                i = block + 2
-                inside = True
-        return inside
-
-    for line in lines:
-        body = line
-        is_dir = False
-        if not in_comment:
-            stripped = body.lstrip()
-            if stripped.startswith("#"):
-                is_dir = _directive(body) is not None
-        if not is_dir:
-            if parent_emit() and not _reenables_dead_backend(line):
-                out.append(line)
-            in_comment = comment_state(line, in_comment)
-            continue
-
-        word, rest = _directive(body) or ("", "")
-        nl = "\n" if body.endswith("\n") else ""
-
-        if word in ("if", "ifdef", "ifndef"):
-            emitting = parent_emit()
-            val = _cond(word, rest) if emitting else _Pv(0, "")
-            if not emitting or val.const == 0:
-                stack.append({"kind": "const", "emit": False, "taken": False, "arm": False})
-            elif val.const == 1:
-                stack.append({"kind": "const", "emit": True, "taken": True, "arm": True})
-            else:
-                if emitting:
-                    out.append(f"#if {val.render()}{nl}")
-                stack.append({"kind": "live", "emit": True, "taken": False, "arm": True})
-            continue
-
-        if word == "elif":
-            fr = stack[-1]
-            if not parent_emit() and fr is stack[-1]:
-                # parent already dark: stay dark
-                if not all(f["emit"] or f is fr for f in stack[:-1]):
-                    fr["emit"] = False
-                    fr["arm"] = False
-                    continue
-            outer = all(f["emit"] for f in stack[:-1]) if len(stack) > 1 else True
-            val = _cond("if", rest)
-            if fr["kind"] == "const":
-                if fr["taken"] or not outer:
-                    fr["emit"] = False
-                    fr["arm"] = False
-                elif val.const == 1:
-                    fr["emit"] = True
-                    fr["taken"] = True
-                    fr["arm"] = True
-                elif val.const == 0:
-                    fr["emit"] = False
-                    fr["arm"] = False
-                else:
-                    fr["kind"] = "live"
-                    fr["emit"] = True
-                    fr["arm"] = True
-                    out.append(f"#if {val.render()}{nl}")
-            else:
-                if val.const == 0:
-                    fr["arm"] = False
-                elif val.const == 1:
-                    out.append(f"#else{nl}")
-                    fr["arm"] = True
-                    fr["taken"] = True
-                else:
-                    out.append(f"#elif {val.render()}{nl}")
-                    fr["arm"] = True
-            continue
-
-        if word == "else":
-            fr = stack[-1]
-            outer = all(f["emit"] for f in stack[:-1]) if len(stack) > 1 else True
-            if fr["kind"] == "const":
-                if fr["taken"] or not outer:
-                    fr["emit"] = False
-                else:
-                    fr["emit"] = True
-                    fr["taken"] = True
-                fr["arm"] = fr["emit"]
-            else:
-                if outer:
-                    out.append(f"#else{nl}")
-                fr["arm"] = True
-            continue
-
-        if word == "endif":
-            fr = stack.pop()
-            outer = parent_emit()
-            if fr["kind"] == "live" and outer:
-                out.append(f"#endif{nl}")
-            continue
-
-        if parent_emit():
-            out.append(line)
-
-    if stack:
-        raise SystemExit("strip-dead-backends: unmatched #if")
-    return "".join(out)
 
 
 def main() -> None:
@@ -1508,9 +1053,14 @@ def main() -> None:
     elif args.cmd == "post-strip-puchi":
         path = Path(args.path)
         text = normalize_newlines(path.read_text(encoding="utf-8"))
+        text = fix_sexp_use_c_rvalues(text)
+        text = scrub_sexp_use_defines(text)
+        text = scrub_sexp_use_comments(text)
         text = scrub_shipped_always_zero_defines(text)
+        text = scrub_amalgamation_residue(text)
         assert_no_project_includes(text)
         assert_no_os_residue(text)
+        assert_no_sexp_use(text)
         write_text_lf(path, text)
 
 
