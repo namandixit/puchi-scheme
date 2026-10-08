@@ -3,11 +3,8 @@
 #ifndef PUCHI_HARNESS_CHIBI_EVAL_H
 #define PUCHI_HARNESS_CHIBI_EVAL_H
 
-#ifndef SEXP_USE_STATIC_LIBS
-#define SEXP_USE_STATIC_LIBS 1
-#endif
-#ifndef SEXP_USE_STATIC_LIBS_EMPTY
-#define SEXP_USE_STATIC_LIBS_EMPTY 1
+#ifndef PUCHI_TEST
+#define PUCHI_TEST 1
 #endif
 
 #include "../../../puchi.h"

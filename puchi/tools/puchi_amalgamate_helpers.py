@@ -1,11 +1,40 @@
 #!/usr/bin/env python3
-"""Helpers for amalgamate.sh — embed Scheme as C strings and trim init-7."""
+"""Helpers for amalgamate.sh — embed Scheme as C strings and trim init-7.
+
+Host-owned embed contract (see puchi_host_embed.py + amalgamate.sh banner):
+CPU/memory only in core; host supplies alloc/diagnose/fatal and stream_ops;
+ALWAYS_ZERO_STRIP flags are forced 0 and deleted by strip-dead-backends;
+STATIC_LIBS only under PUCHI_TEST; libc only via PUCHI_* wrappers.
+"""
 from __future__ import annotations
 
 import argparse
 import re
 import sys
 from pathlib import Path
+
+from puchi_host_embed import (
+    ALWAYS_ZERO_STRIP,
+    features_force_extra,
+    patch_eval_c_host,
+    patch_eval_h_host,
+    patch_opcodes,
+    patch_sexp_c_host,
+    patch_sexp_h_host,
+    rewrite_libc_calls,
+    trim_init7_load_port,
+)
+from puchi_strip_gunk import (
+    assert_no_project_includes,
+    scrub_dead_feature_knobs,
+    scrub_eval_c_disk_boot,
+    scrub_eval_h_gunk,
+    scrub_portable_poll_stubs,
+    scrub_sexp_c_gunk,
+    scrub_sexp_h_gunk,
+    scrub_shipped_always_zero_defines,
+    trim_init7_dead_arms,
+)
 
 
 def c_escape(s: str) -> str:
@@ -29,82 +58,66 @@ def c_escape(s: str) -> str:
     return "".join(out)
 
 
-def embed_c_string(name: str, text: str, wrap: int = 72) -> str:
-    """Emit a static const char name[] = "..."; broken into lines."""
-    escaped = c_escape(text)
+def normalize_newlines(text: str) -> str:
+    """Collapse CRLF/CR to LF so Windows rewrites do not invent blank lines."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def write_text_lf(path: Path, text: str) -> None:
+    """Write UTF-8 text with LF newlines (avoid Path.write_text CRLF on Windows)."""
+    path.write_bytes(normalize_newlines(text).encode("utf-8"))
+
+
+def embed_c_string(name: str, text: str) -> str:
+    """Emit a static const char name[] = "..."; one C string per source line.
+
+    Each substring is a single line of the embedded text (including its
+    trailing newline and leading indentation) so the C form stays readable.
+    """
+    text = normalize_newlines(text)
     lines = [f"static const char {name}[] ="]
-    i = 0
-    n = len(escaped)
-    while i < n:
-        chunk = []
-        length = 0
-        while i < n and length < wrap:
-            if escaped[i] == "\\" and i + 1 < n:
-                # keep escape sequence together
-                if escaped[i + 1] == "x" and i + 3 < n:
-                    piece = escaped[i : i + 4]
-                    i += 4
-                else:
-                    piece = escaped[i : i + 2]
-                    i += 2
-            else:
-                piece = escaped[i]
-                i += 1
-            chunk.append(piece)
-            length += len(piece)
-        lines.append('  "' + "".join(chunk) + '"')
+    parts = text.splitlines(keepends=True)
+    if not parts:
+        lines.append('  ""')
+    else:
+        for part in parts:
+            lines.append('  "' + c_escape(part) + '"')
     lines.append(";")
     return "\n".join(lines) + "\n"
 
 
 def trim_init7(src: str) -> str:
     """Remove file/load helpers and stub (library) in cond-expand."""
-    # Replace call-with-*-file and with-*-file definitions with stubs that error.
-    replacements = [
-        (
-            r"\(define \(call-with-input-file file proc\)\n"
-            r"  \(let\* \(\(in \(open-input-file file\)\)\n"
-            r"         \(res \(proc in\)\)\)\n"
-            r"    \(close-input-port in\)\n"
-            r"    res\)\)\n",
-            "(define (call-with-input-file file proc)\n"
-            "  (error \"call-with-input-file: not available in puchi core\" file))\n",
-        ),
-        (
-            r"\(define \(call-with-output-file file proc\)\n"
-            r"  \(let\* \(\(out \(open-output-file file\)\)\n"
-            r"         \(res \(proc out\)\)\)\n"
-            r"    \(close-output-port out\)\n"
-            r"    res\)\)\n",
-            "(define (call-with-output-file file proc)\n"
-            "  (error \"call-with-output-file: not available in puchi core\" file))\n",
-        ),
-        (
-            r"\(define \(with-input-from-file file thunk\)\n"
-            r"  \(let \(\(old-in \(current-input-port\)\)\n"
-            r"        \(tmp-in \(open-input-file file\)\)\)\n"
-            r"    \(dynamic-wind\n"
-            r"      \(lambda \(\) \(current-input-port tmp-in\)\)\n"
-            r"      \(lambda \(\) \(let \(\(res \(thunk\)\)\) \(close-input-port tmp-in\) res\)\)\n"
-            r"      \(lambda \(\) \(current-input-port old-in\)\)\)\)\)\n",
-            "(define (with-input-from-file file thunk)\n"
-            "  (error \"with-input-from-file: not available in puchi core\" file))\n",
-        ),
-        (
-            r"\(define \(with-output-to-file file thunk\)\n"
-            r"  \(let \(\(old-out \(current-output-port\)\)\n"
-            r"        \(tmp-out \(open-output-file file\)\)\)\n"
-            r"    \(dynamic-wind\n"
-            r"      \(lambda \(\) \(current-output-port tmp-out\)\)\n"
-            r"      \(lambda \(\) \(let \(\(res \(thunk\)\)\) \(close-output-port tmp-out\) res\)\)\n"
-            r"      \(lambda \(\) \(current-output-port old-out\)\)\)\)\)\n",
-            "(define (with-output-to-file file thunk)\n"
-            "  (error \"with-output-to-file: not available in puchi core\" file))\n",
-        ),
+    # Delete call-with-*-file / with-*-file (no error stubs).
+    deletions = [
+        r"\(define \(call-with-input-file file proc\)\n"
+        r"  \(let\* \(\(in \(open-input-file file\)\)\n"
+        r"         \(res \(proc in\)\)\)\n"
+        r"    \(close-input-port in\)\n"
+        r"    res\)\)\n",
+        r"\(define \(call-with-output-file file proc\)\n"
+        r"  \(let\* \(\(out \(open-output-file file\)\)\n"
+        r"         \(res \(proc out\)\)\)\n"
+        r"    \(close-output-port out\)\n"
+        r"    res\)\)\n",
+        r"\(define \(with-input-from-file file thunk\)\n"
+        r"  \(let \(\(old-in \(current-input-port\)\)\n"
+        r"        \(tmp-in \(open-input-file file\)\)\)\n"
+        r"    \(dynamic-wind\n"
+        r"      \(lambda \(\) \(current-input-port tmp-in\)\)\n"
+        r"      \(lambda \(\) \(let \(\(res \(thunk\)\)\) \(close-input-port tmp-in\) res\)\)\n"
+        r"      \(lambda \(\) \(current-input-port old-in\)\)\)\)\)\n",
+        r"\(define \(with-output-to-file file thunk\)\n"
+        r"  \(let \(\(old-out \(current-output-port\)\)\n"
+        r"        \(tmp-out \(open-output-file file\)\)\)\n"
+        r"    \(dynamic-wind\n"
+        r"      \(lambda \(\) \(current-output-port tmp-out\)\)\n"
+        r"      \(lambda \(\) \(let \(\(res \(thunk\)\)\) \(close-output-port tmp-out\) res\)\)\n"
+        r"      \(lambda \(\) \(current-output-port old-out\)\)\)\)\)\n",
     ]
     out = src
-    for pat, repl in replacements:
-        out2, n = re.subn(pat, repl, out, count=1, flags=re.MULTILINE)
+    for pat in deletions:
+        out2, n = re.subn(pat, "", out, count=1, flags=re.MULTILINE)
         if n == 0:
             print(f"warning: trim_init7 pattern not matched:\n{pat[:60]}...", file=sys.stderr)
         out = out2
@@ -140,9 +153,73 @@ def trim_init7(src: str) -> str:
         else:
             print("warning: (library) cond-expand clause not found", file=sys.stderr)
 
-    return (
+    out = (
         ";; trimmed for puchi amalgamation - file/load/library stubs\n" + out
     )
+    return trim_init7_dead_arms(trim_init7_load_port(out))
+
+
+def patch_features_host(features_h: str) -> str:
+    """Collapse DLL export nest; delete ABI fingerprint; PUCHI_TEST residue only."""
+    # SEXP_API always extern (puchi is never a shared library).
+    features_h = re.sub(
+        r"#ifdef _WIN32\n"
+        r"#ifdef SEXP_STATIC_LIBRARY\n"
+        r"#define SEXP_API\s+extern\n"
+        r"#else\n"
+        r"#ifdef BUILDING_DLL\n"
+        r"#define SEXP_API\s+__declspec\(dllexport\)\n"
+        r"#else\n"
+        r"#define SEXP_API\s+__declspec\(dllimport\)\n"
+        r"#endif\n"
+        r"#endif\n"
+        r"#else\n"
+        r"#define SEXP_API\s+extern\n"
+        r"#endif\n",
+        "#define SEXP_API    extern\n",
+        features_h,
+        count=1,
+    )
+    # Delete feature ABI fingerprint cascade; harness-only helpers under PUCHI_TEST.
+    abi_repl = (
+        "/* puchi: no shared-lib / image ABI fingerprint. Harness clibs only. */\n"
+        "#if defined(PUCHI_TEST)\n"
+        "typedef char sexp_abi_identifier_t[8];\n"
+        '#define SEXP_ABI_IDENTIFIER "--------"\n'
+        "#define sexp_version_compatible(ctx, subver, genver) 1\n"
+        "#define sexp_abi_compatible(ctx, subabi, genabi) 1\n"
+        "#endif\n"
+    )
+    features_h = re.sub(
+        r"/[*]{10,}/\n"
+        r"/[*] Feature signature\..*?"
+        r"#define sexp_abi_compatible\(ctx, subabi, genabi\).*?\n",
+        abi_repl,
+        features_h,
+        count=1,
+        flags=re.DOTALL,
+    )
+    if "Feature signature" in features_h or "SEXP_ABI_GC" in features_h:
+        raise SystemExit("ABI fingerprint block not patched in features.h")
+    if "BUILDING_DLL" in features_h or "dllimport" in features_h:
+        raise SystemExit("BUILDING_DLL nest still present in features.h")
+    if "sexp_abi_identifier_t" not in features_h:
+        raise SystemExit("PUCHI_TEST ABI residue missing from features.h")
+    # Trim Win32 CRT shims that duplicate PUCHI_STRCASECMP / PUCHI_SNPRINTF.
+    features_h = features_h.replace("#define strcasecmp _stricmp\n", "/* puchi: use PUCHI_STRCASECMP */\n")
+    features_h = features_h.replace("#define strncasecmp _strnicmp\n", "/* puchi: use PUCHI_STRNCASECMP */\n")
+    features_h = features_h.replace(
+        "#define snprintf(buf, len, fmt, val) sprintf(buf, fmt, val)\n",
+        "/* puchi: use PUCHI_SNPRINTF */\n",
+    )
+    features_h = features_h.replace("#define strcasecmp lstrcmpi\n", "/* puchi: use PUCHI_STRCASECMP */\n")
+    features_h = features_h.replace(
+        "#define strncasecmp(s1, s2, n) lstrcmpi(s1, s2)\n",
+        "/* puchi: use PUCHI_STRNCASECMP */\n",
+    )
+    features_h = features_h.replace("#define strcasecmp cistrcmp\n", "/* puchi: use PUCHI_STRCASECMP */\n")
+    features_h = features_h.replace("#define strncasecmp cistrncmp\n", "/* puchi: use PUCHI_STRNCASECMP */\n")
+    return features_h
 
 
 def strip_features_manual(features_h: str) -> str:
@@ -169,7 +246,25 @@ def strip_features_manual(features_h: str) -> str:
         " * Heap-size knobs below are still live #ifndef defaults.\n"
         " */\n\n"
     )
-    return head + note + features_h[idx:]
+    body = features_h[idx:]
+    # Socket shutdown constants — no sockets in puchi core.
+    body = re.sub(
+        r"#elif defined\(_WIN32\)\n"
+        r"#define SHUT_RD 0 /\* SD_RECEIVE \*/\n"
+        r"#define SHUT_WR 1 /\* SD_SEND \*/\n"
+        r"#define SHUT_RDWR 2 /\* SD_BOTH \*/\n",
+        "#elif defined(_WIN32)\n",
+        body,
+    )
+    body = re.sub(
+        r"#ifndef SHUT_RD\n#define SHUT_RD 0\n#endif\n"
+        r"#ifndef SHUT_WR\n#define SHUT_WR 1\n#endif\n"
+        r"#ifndef SHUT_RDWR\n#define SHUT_RDWR 2\n#endif\n",
+        "",
+        body,
+    )
+    body = scrub_dead_feature_knobs(body)
+    return patch_features_host(head + note + body)
 
 
 def replace_platform_block(sexp_h: str) -> str:
@@ -191,36 +286,18 @@ def replace_platform_block(sexp_h: str) -> str:
     if end < 0:
         raise SystemExit("ctype.h marker not found")
 
+    # Banner owns all system #includes; this block is macros only.
     portable = r'''
 /* ---- puchi: portable host surface (no OS backends) ---- */
-#include <stddef.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <ctype.h>
-#include <errno.h>
-#include <math.h>
-#include <float.h>
-#include <limits.h>
-#include <stdint.h>
+#define sexp_isalpha(x) (PUCHI_ISALPHA(x))
+#define sexp_isxdigit(x) (PUCHI_ISXDIGIT(x))
+#define sexp_isdigit(x) (PUCHI_ISDIGIT(x))
+#define sexp_tolower(x) (PUCHI_TOLOWER(x))
+#define sexp_toupper(x) (PUCHI_TOUPPER(x))
 
-typedef intptr_t SOCKET_TYPE;
-
-#define sexp_isalpha(x) (isalpha(x))
-#define sexp_isxdigit(x) (isxdigit(x))
-#define sexp_isdigit(x) (isdigit(x))
-#define sexp_tolower(x) (tolower(x))
-#define sexp_toupper(x) (toupper(x))
-
-#define SEXP_USE_POLL_PORT 0
-#define sexp_poll_input(ctx, port) ((void)(ctx), (void)(port), 0)
-#define sexp_poll_output(ctx, port) ((void)(ctx), (void)(port), 0)
-
-#if SEXP_USE_GC_FILE_DESCRIPTORS
-#define sexp_out_of_file_descriptors() (errno == EMFILE)
-#else
-#define sexp_out_of_file_descriptors() (0)
+/* Harness fileno sock field (production has no fileno type). */
+#if defined(PUCHI_TEST)
+#define SOCKET_TYPE sexp_sint_t
 #endif
 
 #ifdef __GNUC__
@@ -230,36 +307,26 @@ typedef intptr_t SOCKET_TYPE;
 #endif
 
 '''
-    # Skip ctype.h include since we already included it
+    # Skip ctype.h include since banner already has it
     after_ctype = sexp_h.find("\n", end) + 1
     return sexp_h[:after_install] + portable + sexp_h[after_ctype:]
 
 
 def stub_file_ops_in_eval(eval_c: str) -> str:
-    """Replace fopen/stat/dlopen implementations with puchi stubs."""
-    # open input file
-    eval_c = re.sub(
-        r"sexp sexp_open_input_file_op \(sexp ctx, sexp self, sexp_sint_t n, sexp path\) \{.*?\n\}",
-        "sexp sexp_open_input_file_op (sexp ctx, sexp self, sexp_sint_t n, sexp path) {\n"
-        "  sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, path);\n"
-        "  return sexp_file_exception(ctx, self,\n"
-        '    "open-input-file: not available in puchi core (host may redefine)", path);\n'
-        "}",
-        eval_c,
-        count=1,
-        flags=re.DOTALL,
-    )
-    eval_c = re.sub(
-        r"sexp sexp_open_output_file_op \(sexp ctx, sexp self, sexp_sint_t n, sexp path\) \{.*?\n\}",
-        "sexp sexp_open_output_file_op (sexp ctx, sexp self, sexp_sint_t n, sexp path) {\n"
-        "  sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, path);\n"
-        "  return sexp_file_exception(ctx, self,\n"
-        '    "open-output-file: not available in puchi core (host may redefine)", path);\n'
-        "}",
-        eval_c,
-        count=1,
-        flags=re.DOTALL,
-    )
+    """Delete OS file-open bodies; host/harness install foreigns when needed."""
+    for name in (
+        "sexp_open_input_file_op",
+        "sexp_open_output_file_op",
+        "sexp_open_binary_input_file",
+        "sexp_open_binary_output_file",
+    ):
+        eval_c = re.sub(
+            rf"sexp {name} \(sexp ctx, sexp self, sexp_sint_t n, sexp path\) \{{.*?\n\}}\n+",
+            "",
+            eval_c,
+            count=1,
+            flags=re.DOTALL,
+        )
 
     # find_module_file_raw — return NULL always (no stat)
     eval_c = re.sub(
@@ -284,7 +351,8 @@ def stub_file_ops_in_eval(eval_c: str) -> str:
     )
 
     eval_c = eval_c.replace("if (strictp) exit(1);", "if (strictp) abort();")
-
+    eval_c = patch_eval_c_host(eval_c)
+    eval_c = scrub_eval_c_disk_boot(eval_c)
     return eval_c
 
 
@@ -323,7 +391,11 @@ def patch_sexp_c(sexp_c: str) -> str:
     # Avoid POSIX close/dlclose when finalizing — no-op if we never create those
     sexp_c = sexp_c.replace(
         "close(sexp_fileno_fd(fileno));",
-        "/* puchi: no close() */ (void)fileno;",
+        "#if defined(PUCHI_TEST)\n"
+        "    close(sexp_fileno_fd(fileno));\n"
+        "#else\n"
+        "    (void)fileno;\n"
+        "#endif",
     )
     sexp_c = re.sub(
         r"#ifdef _WIN32\n\s*FreeLibrary.*?#else\n\s*dlclose\(sexp_dl_handle\(dl\)\);\n#endif",
@@ -337,26 +409,54 @@ def patch_sexp_c(sexp_c: str) -> str:
         "/* puchi: no fclose; stream ports unsupported */ (void)port;",
     )
     # fread/fwrite in buffered ports — leave; only hit for FILE* streams
+    # Drop socket shutdown arms entirely (no sockets in puchi; fileno path stays).
+    sexp_c = re.sub(
+        r"      if \(sexp_port_shutdownp\(port\)\) \{\n"
+        r"        /\* shutdown the socket if requested \*/\n"
+        r"        if \(sexp_iportp\(port\)\)\n"
+        r"          shutdown\(sexp_port_sock\(port\), sexp_oportp\(port\) \? SHUT_RDWR : SHUT_RD\);\n"
+        r"        if \(sexp_oportp\(port\)\)\n"
+        r"          shutdown\(sexp_port_sock\(port\), SHUT_WR\);\n"
+        r"      \}\n",
+        "",
+        sexp_c,
+        count=1,
+    )
+    # Fallback if comments differ / already stubbed
+    sexp_c = re.sub(
+        r"      if \(sexp_port_shutdownp\(port\)\) \{\n"
+        r"        /\* shutdown the socket if requested \*/\n"
+        r"        if \(sexp_iportp\(port\)\)\n"
+        r"          /\* puchi: no sockets \*/ \(void\)port;\n"
+        r"        if \(sexp_oportp\(port\)\)\n"
+        r"          /\* puchi: no sockets \*/ \(void\)port;\n"
+        r"      \}\n",
+        "",
+        sexp_c,
+        count=1,
+    )
     sexp_c = sexp_c.replace(
         "shutdown(sexp_port_sock(port), sexp_oportp(port) ? SHUT_RDWR : SHUT_RD);",
-        "/* puchi: no sockets */ (void)port;",
+        "((void)0)",
     )
     sexp_c = sexp_c.replace(
         "shutdown(sexp_port_sock(port), SHUT_WR);",
-        "/* puchi: no sockets */ (void)port;",
+        "((void)0)",
     )
     sexp_c = sexp_c.replace("free(sexp_cpointer_value(obj));", "SEXP_FREE(NULL, sexp_cpointer_value(obj));")
     sexp_c = re.sub(r"\bfree\(", "SEXP_FREE(NULL, ", sexp_c)
     # Fix double-wrap if any SEXP_FREE(NULL, SEXP_FREE
     sexp_c = sexp_c.replace("SEXP_FREE(NULL, SEXP_FREE(NULL, ", "SEXP_FREE(NULL, ")
     sexp_c = re.sub(r"sexp_malloc\(", "SEXP_MALLOC(NULL, ", sexp_c)
+    sexp_c = patch_sexp_c_host(sexp_c)
     return sexp_c
 
 
 # Deleted from the amalgamation. Value 0, and defined() is true, so
-# `#if SEXP_USE_DL` goes away while `#if SEXP_USE_STABLE_ABI || SEXP_USE_DL`
-# becomes `#if SEXP_USE_STABLE_ABI`. PLAN9 is never defined.
-_DEAD_ZERO = {"SEXP_USE_BOEHM", "SEXP_USE_GREEN_THREADS", "SEXP_USE_DL"}
+# `#if SEXP_USE_DL` goes away. With STABLE_ABI also ALWAYS_ZERO,
+# `#if SEXP_USE_STABLE_ABI || SEXP_USE_DL` is deleted entirely.
+# PLAN9 is never defined. STATIC_LIBS is NOT stripped — gated by PUCHI_TEST.
+_DEAD_ZERO = set(ALWAYS_ZERO_STRIP) | {"SEXP_USE_BOEHM", "SEXP_USE_GREEN_THREADS", "SEXP_USE_DL"}
 _DEAD_UNDEF = {"PLAN9"}
 
 
@@ -592,9 +692,9 @@ def _self_test_dead_backends() -> None:
         "SEXP_USE_DL": 0,
         "defined(PLAN9)": 0,
         "!defined(PLAN9)": 1,
-        "SEXP_USE_STABLE_ABI || SEXP_USE_DL": None,
-        "SEXP_USE_BOEHM || SEXP_USE_MALLOC": None,
-        "!SEXP_USE_BOEHM && !SEXP_USE_MALLOC": None,
+        "SEXP_USE_STABLE_ABI || SEXP_USE_DL": 0,  # both ALWAYS_ZERO_STRIP
+        "SEXP_USE_BOEHM || SEXP_USE_MALLOC": 0,  # both ALWAYS_ZERO_STRIP
+        "!SEXP_USE_BOEHM && !SEXP_USE_MALLOC": 1,
         "defined(PLAN9) || !SEXP_USE_FLONUMS": None,
         "! defined(_GNU_SOURCE) && ! defined(_WIN32) && ! defined(PLAN9)": None,
     }
@@ -602,10 +702,9 @@ def _self_test_dead_backends() -> None:
     assert got["SEXP_USE_DL"].const == 0
     assert got["defined(PLAN9)"].const == 0
     assert got["!defined(PLAN9)"].const == 1
-    assert got["SEXP_USE_STABLE_ABI || SEXP_USE_DL"].const is None
-    assert "SEXP_USE_DL" not in got["SEXP_USE_STABLE_ABI || SEXP_USE_DL"].render()
-    assert got["SEXP_USE_BOEHM || SEXP_USE_MALLOC"].render() == "SEXP_USE_MALLOC"
-    assert "BOEHM" not in got["!SEXP_USE_BOEHM && !SEXP_USE_MALLOC"].render()
+    assert got["SEXP_USE_STABLE_ABI || SEXP_USE_DL"].const == 0
+    assert got["SEXP_USE_BOEHM || SEXP_USE_MALLOC"].const == 0
+    assert got["!SEXP_USE_BOEHM && !SEXP_USE_MALLOC"].const == 1
     assert got["defined(PLAN9) || !SEXP_USE_FLONUMS"].render() == "!SEXP_USE_FLONUMS"
     assert _pp_eval("! (SEXP_USE_FLONUMS || SEXP_USE_BIGNUMS)").render() == "!(SEXP_USE_FLONUMS || SEXP_USE_BIGNUMS)"
     assert _pp_eval("UINT_MAX == 4294967295U").render() == "UINT_MAX == 4294967295U"
@@ -634,11 +733,13 @@ def _self_test_dead_backends() -> None:
     )
     out = strip_dead_backends(src, _tested=True)
     assert "drop" not in out and "drop2" not in out and "drop3" not in out
-    assert "keep" in out and "keep3" in out and "enum" in out
-    assert "SEXP_USE_DL" not in out.split("enum")[0]
+    assert "keep" in out and "keep3" in out
+    assert "enum" not in out
     assert "#define SEXP_USE_DL 0" in out
-    assert "#if SEXP_USE_STABLE_ABI" in out
+    assert "SEXP_USE_STABLE_ABI" not in out or "#define SEXP_USE_STABLE_ABI" in out
 
+    # NATIVE_X86 is ALWAYS_ZERO_STRIP — the whole branch (including any
+    # Boehm re-enable) is deleted from the amalgamation.
     native = (
         "#define SEXP_USE_BOEHM 0\n"
         "#if SEXP_USE_NATIVE_X86\n"
@@ -646,12 +747,14 @@ def _self_test_dead_backends() -> None:
         "#define SEXP_USE_BOEHM 1\n"
         "#define SEXP_USE_FLONUMS 0\n"
         "#endif\n"
+        "after\n"
     )
     native_out = strip_dead_backends(native, _tested=True)
     assert "#define SEXP_USE_BOEHM 0" in native_out
     assert "#define SEXP_USE_BOEHM 1" not in native_out
     assert "#undef SEXP_USE_BOEHM" not in native_out
-    assert "#define SEXP_USE_FLONUMS 0" in native_out
+    assert "SEXP_USE_NATIVE_X86" not in native_out
+    assert "after" in native_out
 
 
 def _reenables_dead_backend(line: str) -> bool:
@@ -847,31 +950,77 @@ def main() -> None:
     p.add_argument("input")
     p.add_argument("output")
 
+    p = sub.add_parser("patch-eval-h")
+    p.add_argument("input")
+    p.add_argument("output")
+
+    p = sub.add_parser("rewrite-libc")
+    p.add_argument("path")
+
+    p = sub.add_parser("patch-opcodes")
+    p.add_argument("path")
+
+    sub.add_parser("features-force-extra")
+
+    p = sub.add_parser("post-strip-puchi")
+    p.add_argument("path")
+
     args = ap.parse_args()
     if args.cmd == "trim-init":
         text = Path(args.input).read_text(encoding="utf-8")
-        Path(args.output).write_text(trim_init7(text), encoding="utf-8")
+        write_text_lf(Path(args.output), trim_init7(text))
     elif args.cmd == "embed":
         text = Path(args.input).read_text(encoding="utf-8")
-        Path(args.output).write_text(embed_c_string(args.name, text), encoding="utf-8")
+        write_text_lf(Path(args.output), embed_c_string(args.name, text))
     elif args.cmd == "strip-dead-backends":
         path = Path(args.path)
-        path.write_text(strip_dead_backends(path.read_text(encoding="utf-8")), encoding="utf-8")
+        # Git Bash `cat` on Windows may emit cp1252; normalize to utf-8.
+        raw = path.read_bytes()
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("cp1252")
+        write_text_lf(path, strip_dead_backends(normalize_newlines(text)))
     elif args.cmd == "strip-features":
         text = Path(args.input).read_text(encoding="utf-8")
-        Path(args.output).write_text(strip_features_manual(text), encoding="utf-8")
+        write_text_lf(Path(args.output), strip_features_manual(text))
     elif args.cmd == "patch-sexp-h":
         text = Path(args.input).read_text(encoding="utf-8")
-        Path(args.output).write_text(replace_platform_block(text), encoding="utf-8")
+        text = replace_platform_block(text)
+        text = patch_sexp_h_host(text)
+        text = scrub_sexp_h_gunk(text)
+        text = scrub_portable_poll_stubs(text)
+        write_text_lf(Path(args.output), text)
     elif args.cmd == "patch-eval-c":
         text = Path(args.input).read_text(encoding="utf-8")
-        Path(args.output).write_text(stub_file_ops_in_eval(text), encoding="utf-8")
+        write_text_lf(Path(args.output), stub_file_ops_in_eval(text))
     elif args.cmd == "patch-gc-c":
         text = Path(args.input).read_text(encoding="utf-8")
-        Path(args.output).write_text(patch_gc_c(text), encoding="utf-8")
+        write_text_lf(Path(args.output), patch_gc_c(text))
     elif args.cmd == "patch-sexp-c":
         text = Path(args.input).read_text(encoding="utf-8")
-        Path(args.output).write_text(patch_sexp_c(text), encoding="utf-8")
+        text = patch_sexp_c(text)
+        text = scrub_sexp_c_gunk(text)
+        write_text_lf(Path(args.output), text)
+    elif args.cmd == "patch-eval-h":
+        text = Path(args.input).read_text(encoding="utf-8")
+        text = patch_eval_h_host(text)
+        text = scrub_eval_h_gunk(text)
+        write_text_lf(Path(args.output), text)
+    elif args.cmd == "rewrite-libc":
+        path = Path(args.path)
+        write_text_lf(path, rewrite_libc_calls(path.read_text(encoding="utf-8")))
+    elif args.cmd == "patch-opcodes":
+        path = Path(args.path)
+        write_text_lf(path, patch_opcodes(path.read_text(encoding="utf-8")))
+    elif args.cmd == "features-force-extra":
+        sys.stdout.write(features_force_extra())
+    elif args.cmd == "post-strip-puchi":
+        path = Path(args.path)
+        text = normalize_newlines(path.read_text(encoding="utf-8"))
+        text = scrub_shipped_always_zero_defines(text)
+        assert_no_project_includes(text)
+        write_text_lf(path, text)
 
 
 if __name__ == "__main__":

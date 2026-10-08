@@ -8,8 +8,7 @@
  */
 /* Numeric mode comes from the compiler: (default) / PUCHI_INTEGER_ONLY /
  * PUCHI_ENABLE_NUMERICAL_TOWER — see build_puchi_tests.bat. */
-#define SEXP_USE_STATIC_LIBS 1
-#define SEXP_USE_STATIC_LIBS_EMPTY 1
+#define PUCHI_TEST 1
 #define PUCHI_IMPLEMENTATION
 #include "../puchi.h"
 
@@ -18,6 +17,71 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
+
+/* ---- host callbacks + FILE* stream adapters (harness-owned CRT) ---- */
+static void *puchi_host_alloc(void *ud, size_t n) {
+  (void)ud;
+  return malloc(n);
+}
+static void puchi_host_free(void *ud, void *p) {
+  (void)ud;
+  free(p);
+}
+static void puchi_host_diagnose(void *ud, int code, const char *msg) {
+  (void)ud;
+  fprintf(stderr, "[puchi diag %d] %s", code, msg ? msg : "");
+  if (msg && msg[0] && msg[strlen(msg) - 1] != '\n') fputc('\n', stderr);
+}
+static void puchi_host_fatal(void *ud, int code, const char *msg) {
+  puchi_host_diagnose(ud, code, msg);
+  exit(70);
+}
+
+static int puchi_file_read_char(void *ud) { return getc((FILE *)ud); }
+static int puchi_file_write_char(void *ud, int c) { return putc(c, (FILE *)ud); }
+static int puchi_file_unget_char(void *ud, int c) { return ungetc(c, (FILE *)ud); }
+static size_t puchi_file_read(void *ud, void *buf, size_t n) {
+  return fread(buf, 1, n, (FILE *)ud);
+}
+static size_t puchi_file_write(void *ud, const void *buf, size_t n) {
+  return fwrite(buf, 1, n, (FILE *)ud);
+}
+static int puchi_file_flush(void *ud) { return fflush((FILE *)ud); }
+static void puchi_file_close(void *ud) { (void)ud; /* no_close for stdio */ }
+static int puchi_file_eof(void *ud) { return feof((FILE *)ud); }
+static int puchi_file_error(void *ud) { return ferror((FILE *)ud); }
+static void puchi_file_clearerr(void *ud) { clearerr((FILE *)ud); }
+
+static const puchi_stream_ops puchi_file_ops = {
+  puchi_file_read_char,
+  puchi_file_write_char,
+  puchi_file_unget_char,
+  puchi_file_read,
+  puchi_file_write,
+  puchi_file_flush,
+  puchi_file_close,
+  puchi_file_eof,
+  puchi_file_error,
+  puchi_file_clearerr
+};
+
+static sexp puchi_make_stdio_port(sexp ctx, FILE *fp, int input) {
+  sexp p = input ? sexp_make_input_port(ctx, &puchi_file_ops, fp, SEXP_FALSE)
+                 : sexp_make_output_port(ctx, &puchi_file_ops, fp, SEXP_FALSE);
+  if (sexp_portp(p)) sexp_port_no_closep(p) = 1;
+  return p;
+}
+
+static void puchi_install_stdio_ports(sexp ctx, sexp env) {
+  sexp in = puchi_make_stdio_port(ctx, stdin, 1);
+  sexp out = puchi_make_stdio_port(ctx, stdout, 0);
+  sexp err = puchi_make_stdio_port(ctx, stderr, 0);
+  sexp_set_standard_ports(ctx, env, in, out, err);
+}
+
+static const puchi_host puchi_test_host = {
+  NULL, puchi_host_alloc, puchi_host_free, puchi_host_diagnose, puchi_host_fatal
+};
 
 #ifdef _WIN32
 #include <io.h>
@@ -256,6 +320,10 @@ static void puchi_install_foreigns(sexp ctx, sexp env) {
   sexp_define_foreign(ctx, env, "file-exists?", 1, puchi_file_exists_f);
   sexp_define_foreign(ctx, env, "delete-file", 1, puchi_delete_file_f);
   sexp_define_foreign(ctx, env, "find-module-file", 1, puchi_find_module_file_f);
+  /* Module-path registry: core no longer registers these opcodes. */
+  sexp_define_foreign_opt(ctx, env, "current-module-path", 1, sexp_current_module_path_op, SEXP_FALSE);
+  sexp_define_foreign(ctx, env, "load-module-file", 2, sexp_load_module_file_op);
+  sexp_define_foreign(ctx, env, "add-module-directory", 2, sexp_add_module_directory_op);
   sexp_define_foreign_opt(ctx, env, "load", 2, puchi_load_f, SEXP_FALSE);
   sexp_define_foreign_opt(ctx, env, "%load", 2, puchi_load_f, SEXP_FALSE);
 }
@@ -382,7 +450,7 @@ int main(int argc, char **argv) {
 
   if (argc < 2) usage();
 
-  ctx = sexp_create_context(0, 0);
+  ctx = sexp_create_context(0, 0, &puchi_test_host);
   if (!ctx || sexp_exceptionp(ctx)) {
     fprintf(stderr, "sexp_create_context failed\n");
     return 1;
@@ -425,7 +493,7 @@ int main(int argc, char **argv) {
   meta = puchi_boot_meta(ctx, env);
   (void)meta;
 
-  sexp_load_standard_ports(ctx, env, stdin, stdout, stderr, 0);
+  puchi_install_stdio_ports(ctx, env);
 
   if (x_module) {
     /* Like chibi-scheme -xMODULE: run script in that module's env. */
@@ -452,7 +520,7 @@ int main(int argc, char **argv) {
       sexp outp = sexp_env_ref(ctx, env, sexp_global(ctx, SEXP_G_CUR_OUT_SYMBOL), SEXP_FALSE);
       if (sexp_opcodep(outp)) outp = sexp_parameter_ref(ctx, outp);
       if (!sexp_oportp(outp))
-        sexp_load_standard_ports(ctx, env, stdin, stdout, stderr, 0);
+        puchi_install_stdio_ports(ctx, env);
     }
   } else {
     /* Fresh script env with import + cond-expand from meta */

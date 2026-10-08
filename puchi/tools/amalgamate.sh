@@ -32,7 +32,9 @@ echo "[puchi] preparing sources..."
 
 # --- synthetic install.h ---
 cat > "$WORKDIR/install.h" <<'EOF'
+#if defined(PUCHI_TEST)
 #define sexp_so_extension ".so"
+#endif
 #define sexp_default_module_path ""
 #define sexp_platform "puchi"
 #define sexp_architecture "portable"
@@ -51,39 +53,9 @@ cat > "$WORKDIR/puchi_features_force.h" <<'EOF'
 #if defined(PUCHI_INTEGER_ONLY) && defined(PUCHI_ENABLE_NUMERICAL_TOWER)
 #error "PUCHI_INTEGER_ONLY and PUCHI_ENABLE_NUMERICAL_TOWER are mutually exclusive"
 #endif
-#ifndef SEXP_STATIC_LIBRARY
-#define SEXP_STATIC_LIBRARY 1
-#endif
-/* Always off, and the implementations are deleted by strip-dead-backends.
- * Do not turn these back on in puchi.h; the code is not in the amalgamation.
+/* OS/debug backends are deleted by strip-dead-backends (ALWAYS_ZERO_STRIP
+ * in puchi_host_embed.py). Do not re-enable them; the code is gone.
  * Plan 9 is never defined, so those branches are removed the same way. */
-#define SEXP_USE_GREEN_THREADS 0
-#define SEXP_USE_DL 0
-#define SEXP_USE_BOEHM 0
-#ifndef SEXP_USE_IMAGE_LOADING
-#define SEXP_USE_IMAGE_LOADING 0
-#endif
-#ifndef SEXP_USE_MMAP_GC
-#define SEXP_USE_MMAP_GC 0
-#endif
-#ifndef SEXP_USE_GC_FILE_DESCRIPTORS
-#define SEXP_USE_GC_FILE_DESCRIPTORS 0
-#endif
-#ifndef SEXP_USE_STRING_STREAMS
-#define SEXP_USE_STRING_STREAMS 0
-#endif
-#ifndef SEXP_USE_NTP_GETTIME
-#define SEXP_USE_NTP_GETTIME 0
-#endif
-#ifndef SEXP_USE_STATIC_LIBS
-#define SEXP_USE_STATIC_LIBS 0
-#endif
-#ifndef SEXP_USE_STATIC_LIBS_EMPTY
-#define SEXP_USE_STATIC_LIBS_EMPTY 0
-#endif
-#ifndef SEXP_USE_TIME_GC
-#define SEXP_USE_TIME_GC 0
-#endif
 #ifndef SEXP_USE_MODULES
 #define SEXP_USE_MODULES 1
 #endif
@@ -138,6 +110,8 @@ cat > "$WORKDIR/puchi_features_force.h" <<'EOF'
 #endif
 #endif
 EOF
+# Append ALWAYS_ZERO_STRIP + PUCHI_TEST static-libs gate (documented in puchi_host_embed.py)
+"$PYTHON" "$HELPERS" features-force-extra >> "$WORKDIR/puchi_features_force.h"
 
 # --- patch headers/sources ---
 "$PYTHON" "$HELPERS" patch-sexp-h "$CHIBI/include/chibi/sexp.h" "$WORKDIR/sexp.h"
@@ -146,19 +120,30 @@ EOF
 "$PYTHON" "$HELPERS" patch-sexp-c "$CHIBI/sexp.c" "$WORKDIR/sexp.c"
 
 cp "$CHIBI/opcodes.c" "$WORKDIR/opcodes.c"
+"$PYTHON" "$HELPERS" patch-opcodes "$WORKDIR/opcodes.c"
 cp "$CHIBI/vm.c" "$WORKDIR/vm.c"
 cp "$CHIBI/simplify.c" "$WORKDIR/simplify.c"
 cp "$CHIBI/include/chibi/features.h" "$WORKDIR/features.h"
 "$PYTHON" "$HELPERS" strip-features "$WORKDIR/features.h" "$WORKDIR/features.h"
 cp "$CHIBI/include/chibi/eval.h" "$WORKDIR/eval.h"
+"$PYTHON" "$HELPERS" patch-eval-h "$WORKDIR/eval.h" "$WORKDIR/eval.h"
+
+# Libc only through PUCHI_* wrappers (defaults in banner)
+for f in sexp.c eval.c gc.c vm.c opcodes.c simplify.c bignum.c sexp.h; do
+  if [ -f "$WORKDIR/$f" ]; then
+    "$PYTHON" "$HELPERS" rewrite-libc "$WORKDIR/$f"
+  fi
+done
 cp "$CHIBI/include/chibi/bignum.h" "$WORKDIR/bignum.h"
-cp "$CHIBI/include/chibi/gc_heap.h" "$WORKDIR/gc_heap.h"
+# gc_heap.h intentionally omitted (image packing — empty / unused in puchi)
 cp "$CHIBI/include/chibi/sexp-huff.h" "$WORKDIR/sexp-huff.h"
 cp "$CHIBI/include/chibi/sexp-unhuff.h" "$WORKDIR/sexp-unhuff.h"
 cp "$CHIBI/include/chibi/sexp-hufftabs.h" "$WORKDIR/sexp-hufftabs.h"
 cp "$CHIBI/include/chibi/sexp-hufftabdefs.h" "$WORKDIR/sexp-hufftabdefs.h"
 cp "$CHIBI/include/chibi/sexp-hufftabs.c" "$WORKDIR/sexp-hufftabs.c"
 cp "$CHIBI/bignum.c" "$WORKDIR/bignum.c"
+# bignum.c is copied after the earlier rewrite-libc pass
+"$PYTHON" "$HELPERS" rewrite-libc "$WORKDIR/bignum.c"
 
 sed_inplace() {
   local file="$1"; shift
@@ -200,6 +185,8 @@ for pat in (
     '#include "chibi/eval.h"',
 ):
     bignum_h = bignum_h.replace(pat, "/* amalgamated */")
+# Banner already has stdint.h (CUSTOM_LONG_LONGS needs the types, not a second include).
+bignum_h = bignum_h.replace("#include <stdint.h>\n", "/* puchi: stdint.h in banner */\n")
 old = '#include "chibi/bignum.h"\n'
 if old not in sexp_h:
     raise SystemExit("chibi/bignum.h include not found in sexp.h")
@@ -217,7 +204,7 @@ sexp_h = sexp_h.replace(
 print("injected bignum.h into sexp.h")
 PY
 
-for f in sexp.h eval.h bignum.h gc_heap.h features.h gc.c sexp.c eval.c \
+for f in sexp.h eval.h bignum.h features.h gc.c sexp.c eval.c \
          opcodes.c vm.c simplify.c bignum.c; do
   sed_inplace "$WORKDIR/$f" \
     -e 's|#include "chibi/features.h"|/* amalgamated features.h */|' \
@@ -225,9 +212,43 @@ for f in sexp.h eval.h bignum.h gc_heap.h features.h gc.c sexp.c eval.c \
     -e 's|#include "chibi/sexp.h"|/* amalgamated sexp.h */|' \
     -e 's|#include "chibi/eval.h"|/* amalgamated eval.h */|' \
     -e 's|#include "chibi/bignum.h"|/* amalgamated bignum.h */|' \
-    -e 's|#include "chibi/gc_heap.h"|/* amalgamated gc_heap.h */|' \
+    -e 's|#include "chibi/gc_heap.h"|/* puchi: no gc_heap.h */|' \
     -e 's|#include "chibi/sexp-hufftabdefs.h"|/* amalgamated sexp-hufftabdefs.h */|'
 done
+
+# Inline opt/fcall.c and opt/opcode_names.h (true single-header)
+"$PYTHON" - "$WORKDIR" "$CHIBI" <<'PY'
+import sys
+from pathlib import Path
+wd, chibi = Path(sys.argv[1]), Path(sys.argv[2])
+vm = (wd / "vm.c").read_text(encoding="utf-8")
+fcall = (chibi / "opt" / "fcall.c").read_text(encoding="utf-8")
+old = '#include "opt/fcall.c"\n'
+if old not in vm:
+    raise SystemExit("opt/fcall.c include not found in vm.c")
+vm = vm.replace(
+    old,
+    "/* ---- opt/fcall.c (amalgamated) ---- */\n" + fcall + "\n",
+    1,
+)
+vm = vm.replace('#include "opt/x86.c"\n', "/* puchi: no native x86 backend */\n")
+(wd / "vm.c").write_text(vm, encoding="utf-8")
+ev = (wd / "eval.c").read_text(encoding="utf-8")
+names = (chibi / "opt" / "opcode_names.h").read_text(encoding="utf-8")
+old_n = '#include "opt/opcode_names.h"\n'
+if old_n not in ev:
+    raise SystemExit("opt/opcode_names.h include not found in eval.c")
+ev = ev.replace(
+    old_n,
+    "#if SEXP_USE_STATIC_LIBS\n"
+    "/* ---- opt/opcode_names.h (amalgamated; harness STATIC_LIBS) ---- */\n"
+    + names
+    + "#endif\n",
+    1,
+)
+(wd / "eval.c").write_text(ev, encoding="utf-8")
+print("inlined opt/fcall.c and opt/opcode_names.h")
+PY
 
 sed_inplace "$WORKDIR/bignum.c" \
   -e 's/\bdigit_value\b/puchi_bignum_digit_value/g' \
@@ -259,93 +280,7 @@ echo "[puchi] embedding trimmed init-7.scm..."
 
 echo "[puchi] writing puchi.h..."
 {
-  cat <<'EOF'
-/* puchi.h - amalgamated portable Chibi Scheme kernel
- *
- * Generated by puchi/tools/amalgamate.sh. Do not edit this file.
- * Change the scripts and re-run. The block below is the supported API.
- * Everything after "resolved feature flags" is upstream Chibi, pasted so
- * this header can compile alone. Configure it only with the macros here.
- *
- * ----------------------------------------------------------------------
- * How to use
- * ----------------------------------------------------------------------
- * In exactly one .c file:
- *
- *   #define PUCHI_IMPLEMENTATION
- *   #include "puchi.h"
- *
- * Other files include "puchi.h" with no PUCHI_IMPLEMENTATION.
- * Set any option macros before the include.
- *
- *   sexp ctx = sexp_create_context(0, 0);   // heap size, heap max (0 = default)
- *   sexp_load_default_libs(ctx);            // embedded R7RS-ish init, no disk
- *   sexp res = sexp_eval_string(ctx, "(+ 1 2)", -1, NULL);
- *   sexp_delete_context(ctx);
- *
- * sexp_eval_string reads one form. len -1 means strlen. Pass NULL for env
- * to use the context environment. Check sexp_exceptionp on the result.
- *
- * ----------------------------------------------------------------------
- * Numeric modes (pick one; set before include)
- * ----------------------------------------------------------------------
- *   (none)
- *       Fixnums and IEEE flonums (boxed double). Fixnum overflow wraps.
- *       No bignums, ratios, or complex numbers.
- *
- *   #define PUCHI_ENABLE_NUMERICAL_TOWER
- *       Also bignums, exact ratios, and complex. Fixnum overflow promotes
- *       to a bignum. Implies flonums.
- *
- *   #define PUCHI_INTEGER_ONLY
- *       Fixnums only. No flonums and no tower. Float literals will not read.
- *
- * PUCHI_INTEGER_ONLY and PUCHI_ENABLE_NUMERICAL_TOWER together are an error.
- * Do not set SEXP_USE_FLONUMS / SEXP_USE_BIGNUMS / SEXP_USE_RATIOS /
- * SEXP_USE_COMPLEX yourself. Those names appear later as the resolved
- * flags. They are not a menu.
- *
- * ----------------------------------------------------------------------
- * What this core does not do
- * ----------------------------------------------------------------------
- * No OS file I/O, no dlopen, no module search on disk, no green threads,
- * no sockets. open-input-file, load, and call-with-*-file from the
- * embedded init raise an error. A host that needs files or modules
- * supplies them (see puchi/test/puchi_harness.c).
- *
- * ----------------------------------------------------------------------
- * Allocator (optional, before include)
- * ----------------------------------------------------------------------
- *   #define SEXP_MALLOC(ctx, size) my_alloc(ctx, size)
- *   #define SEXP_FREE(ctx, ptr)    my_free(ctx, ptr)
- *
- * Default is malloc / free. The ctx argument may be NULL.
- *
- * License: BSD-style (upstream COPYING / Alex Shinn).
- */
-#ifndef PUCHI_H
-#define PUCHI_H
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/* ---- allocator hooks (CRT malloc/free by default) ---- */
-#ifndef SEXP_MALLOC
-#define SEXP_MALLOC(ctx, size) ((void)(ctx), malloc(size))
-#endif
-#ifndef SEXP_FREE
-#define SEXP_FREE(ctx, ptr) ((void)(ctx), free(ptr))
-#endif
-
-#ifndef sexp_malloc
-#define sexp_malloc(sz) SEXP_MALLOC(NULL, (sz))
-#endif
-#ifndef sexp_free
-#define sexp_free(p) SEXP_FREE(NULL, (p))
-#endif
-
-EOF
+  cat "$TOOLS/puchi_banner.h.in"
 
   echo "/* ==== puchi feature forces ==== */"
   cat "$WORKDIR/puchi_features_force.h"
@@ -361,9 +296,6 @@ EOF
 
   echo "/* ==== eval.h ==== */"
   cat "$WORKDIR/eval.h"
-
-  echo "/* ==== gc_heap.h ==== */"
-  cat "$WORKDIR/gc_heap.h"
 
   cat <<'EOF'
 
@@ -383,7 +315,7 @@ SEXP_API sexp sexp_exact_sqrt(sexp ctx, sexp self, sexp_sint_t n, sexp z);
 #endif
 
 /* ---- puchi high-level API ---- */
-SEXP_API sexp sexp_create_context(sexp_uint_t heap_size, sexp_uint_t heap_max_size);
+SEXP_API sexp sexp_create_context(sexp_uint_t heap_size, sexp_uint_t heap_max_size, const puchi_host *host);
 SEXP_API sexp sexp_delete_context(sexp ctx);
 SEXP_API sexp sexp_load_default_libs(sexp ctx);
 
@@ -398,6 +330,9 @@ SEXP_API sexp sexp_load_default_libs(sexp ctx);
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Forward decl — defined after embedded init-7; used by load_standard_env. */
+static sexp puchi_load_init7_into_env(sexp ctx, sexp env);
 
 EOF
 
@@ -548,7 +483,46 @@ EOF
 
   cat <<'EOF'
 
-sexp sexp_create_context(sexp_uint_t heap_size, sexp_uint_t heap_max_size) {
+static sexp puchi_load_init7_into_env(sexp ctx, sexp env) {
+  sexp res;
+  sexp_gc_var4(ctx2, x, in, s);
+  if (!ctx || sexp_exceptionp(ctx)) return ctx;
+  if (!env) env = sexp_context_env(ctx);
+  {
+    sexp sym;
+    sym = sexp_intern(ctx, "*features*", -1);
+    sexp_env_define(ctx, env, sym, sexp_global(ctx, SEXP_G_FEATURES));
+  }
+  sexp_gc_preserve4(ctx, ctx2, x, in, s);
+  res = SEXP_VOID;
+  s = sexp_c_string(ctx, puchi_init7_scm, -1);
+  in = sexp_open_input_string(ctx, s);
+  if (sexp_exceptionp(in)) {
+    sexp_gc_release4(ctx);
+    return in;
+  }
+  ctx2 = sexp_make_eval_context(ctx, NULL, env, 0, 0);
+  sexp_context_parent(ctx2) = ctx;
+  sexp_context_tailp(ctx2) = 0;
+  while ((x = sexp_read(ctx2, in)) != (sexp)SEXP_EOF) {
+    res = sexp_exceptionp(x) ? x : sexp_eval(ctx2, x, env);
+    if (sexp_exceptionp(res)) {
+      sexp_gc_release4(ctx);
+      return res;
+    }
+  }
+  sexp_close_port(ctx, in);
+  sexp_gc_release4(ctx);
+  {
+    sexp sym = sexp_intern(ctx, "current-exception-handler", -1);
+    sexp_global(ctx, SEXP_G_ERR_HANDLER) = sexp_env_ref(ctx, env, sym, SEXP_FALSE);
+  }
+  sexp_set_parameter(ctx, env, sexp_global(ctx, SEXP_G_INTERACTION_ENV_SYMBOL), env);
+  return env;
+}
+
+sexp sexp_create_context(sexp_uint_t heap_size, sexp_uint_t heap_max_size, const puchi_host *host) {
+  puchi_host_init(host);
   sexp_scheme_init();
   return sexp_make_eval_context(NULL, NULL, NULL, heap_size, heap_max_size);
 }
@@ -558,45 +532,8 @@ sexp sexp_delete_context(sexp ctx) {
 }
 
 sexp sexp_load_default_libs(sexp ctx) {
-  sexp env, res;
-  sexp_gc_var5(ctx2, x, in, s, unused);
   if (!ctx || sexp_exceptionp(ctx)) return ctx;
-  env = sexp_context_env(ctx);
-  {
-    sexp sym, tmp;
-    sym = sexp_intern(ctx, "*shared-object-extension*", -1);
-    tmp = sexp_c_string(ctx, sexp_so_extension, -1);
-    sexp_env_define(ctx, env, sym, tmp);
-    sym = sexp_intern(ctx, "*features*", -1);
-    sexp_env_define(ctx, env, sym, sexp_global(ctx, SEXP_G_FEATURES));
-  }
-  sexp_gc_preserve5(ctx, ctx2, x, in, s, unused);
-  (void)unused;
-  res = SEXP_VOID;
-  s = sexp_c_string(ctx, puchi_init7_scm, -1);
-  in = sexp_open_input_string(ctx, s);
-  if (sexp_exceptionp(in)) {
-    sexp_gc_release5(ctx);
-    return in;
-  }
-  ctx2 = sexp_make_eval_context(ctx, NULL, env, 0, 0);
-  sexp_context_parent(ctx2) = ctx;
-  sexp_context_tailp(ctx2) = 0;
-  while ((x = sexp_read(ctx2, in)) != (sexp)SEXP_EOF) {
-    res = sexp_exceptionp(x) ? x : sexp_eval(ctx2, x, env);
-    if (sexp_exceptionp(res)) {
-      sexp_gc_release5(ctx);
-      return res;
-    }
-  }
-  sexp_close_port(ctx, in);
-  sexp_gc_release5(ctx);
-  {
-    sexp sym = sexp_intern(ctx, "current-exception-handler", -1);
-    sexp_global(ctx, SEXP_G_ERR_HANDLER) = sexp_env_ref(ctx, env, sym, SEXP_FALSE);
-  }
-  sexp_set_parameter(ctx, env, sexp_global(ctx, SEXP_G_INTERACTION_ENV_SYMBOL), env);
-  return env;
+  return puchi_load_init7_into_env(ctx, sexp_context_env(ctx));
 }
 
 #ifdef __cplusplus
@@ -611,6 +548,9 @@ EOF
 
 echo "[puchi] stripping Plan 9 / Boehm / green threads / dlopen..."
 "$PYTHON" "$HELPERS" strip-dead-backends "$OUT_PUCHI"
+
+echo "[puchi] post-strip scrub + single-header assert..."
+"$PYTHON" "$HELPERS" post-strip-puchi "$OUT_PUCHI"
 
 echo "[puchi] done."
 wc -c -l "$OUT_PUCHI" | sed 's|^|  |'

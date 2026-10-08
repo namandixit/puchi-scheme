@@ -71,8 +71,9 @@ echo unknown compiler tag: %TAG%
 exit /b 1
 
 :run_msvc
-set CF=/nologo /W1 /O2 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_DEPRECATE /I.
-set HF=/Ipuchi /I%TEST%\harness-include
+REM No /I. — puchi.h must be a true single-header (tests use #include "../puchi.h").
+set CF=/nologo /W1 /O2 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_DEPRECATE
+set HF=/I%TEST%\harness-include
 
 echo === [%TAG%][integer] C suite ===
 cl %CF% /Fo%OUT%\ /Fe:%OUT%\%TAG%_integer_smoke.exe %TEST%\puchi_integer_smoke.c
@@ -102,8 +103,9 @@ if errorlevel 1 exit /b 1
 goto :run_scheme
 
 :run_clang
-set CF=-O2 -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE -I. -Wno-everything
-set HF=-Ipuchi -I%TEST%\harness-include
+REM No -I. — puchi.h must be a true single-header (tests use #include "../puchi.h").
+set CF=-O2 -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE -Wno-everything
+set HF=-I%TEST%\harness-include
 
 echo === [%TAG%][integer] C suite ===
 clang %CF% -o "%OUT%\%TAG%_integer_smoke.exe" %TEST%\puchi_integer_smoke.c

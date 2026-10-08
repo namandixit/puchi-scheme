@@ -6,7 +6,7 @@
 
 int main(void) {
   sexp ctx, res;
-  ctx = sexp_create_context(0, 0);
+  ctx = sexp_create_context(0, 0, NULL);
   if (!ctx || sexp_exceptionp(ctx)) {
     fprintf(stderr, "create_context failed\n");
     return 1;

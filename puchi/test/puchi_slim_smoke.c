@@ -40,7 +40,7 @@ static int expect_true(sexp ctx, const char *expr) {
 }
 
 int main(void) {
-  sexp ctx = sexp_create_context(0, 0);
+  sexp ctx = sexp_create_context(0, 0, NULL);
   sexp res;
   int nfail = 0;
 
