@@ -4,13 +4,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include "puchi_test_diagnostics.h"
 #define PUCHI_IMPLEMENTATION
 #include "../puchi.h"
+
+PUCHI_DIAG_HARNESS_PEDANTIC_OFF
 
 static void *smoke_alloc(void *ud, size_t n) { (void)ud; return malloc(n); }
 static void smoke_free(void *ud, void *p) { (void)ud; free(p); }
 static void smoke_diag(void *ud, int c, const char *m) { (void)ud; (void)c; (void)m; }
-static void smoke_fatal(void *ud, int c, const char *m) {
+static PUCHI_NORETURN void smoke_fatal(void *ud, int c, const char *m) {
   (void)ud; fprintf(stderr, "fatal %d: %s\n", c, m ? m : ""); exit(70);
 }
 static const puchi_host smoke_host = { NULL, smoke_alloc, smoke_free, smoke_diag, smoke_fatal };
@@ -21,8 +24,9 @@ static int fail(const char *msg) {
 }
 
 static int expect_fix(sexp ctx, const char *expr, long want) {
-  sexp res = sexp_eval_string(ctx, expr, -1, NULL);
-  if (sexp_exceptionp(res) || !sexp_fixnump(res) || sexp_unbox_fixnum(res) != want) {
+  sexp res = sexp_eval_string(ctx, expr, (sexp_sint_t)-1, NULL);
+  if (sexp_exceptionp(res) || !sexp_fixnump(res) ||
+      (long)sexp_unbox_fixnum(res) != want) {
     fprintf(stderr, "FAIL fixnum %s\n", expr);
     return 1;
   }
@@ -30,7 +34,7 @@ static int expect_fix(sexp ctx, const char *expr, long want) {
 }
 
 static int expect_flo(sexp ctx, const char *expr, double want) {
-  sexp res = sexp_eval_string(ctx, expr, -1, NULL);
+  sexp res = sexp_eval_string(ctx, expr, (sexp_sint_t)-1, NULL);
   if (sexp_exceptionp(res) || !sexp_flonump(res) ||
       fabs(sexp_flonum_value(res) - want) > 1e-9) {
     fprintf(stderr, "FAIL flonum %s\n", expr);
@@ -40,7 +44,7 @@ static int expect_flo(sexp ctx, const char *expr, double want) {
 }
 
 static int expect_true(sexp ctx, const char *expr) {
-  sexp res = sexp_eval_string(ctx, expr, -1, NULL);
+  sexp res = sexp_eval_string(ctx, expr, (sexp_sint_t)-1, NULL);
   if (sexp_exceptionp(res) || res == SEXP_FALSE) {
     fprintf(stderr, "FAIL true %s\n", expr);
     return 1;
@@ -49,7 +53,7 @@ static int expect_true(sexp ctx, const char *expr) {
 }
 
 int main(void) {
-  sexp ctx = sexp_create_context(0, 0, &smoke_host);
+  sexp ctx = sexp_create_context((size_t)0, (size_t)0, &smoke_host);
   sexp res;
   int nfail = 0;
 

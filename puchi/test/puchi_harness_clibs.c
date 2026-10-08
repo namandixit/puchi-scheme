@@ -15,7 +15,11 @@
 #include <direct.h>
 #endif
 
+#include "puchi_test_diagnostics.h"
 #include "../puchi.h"
+
+/* Only the wrapper lines in this TU; lib stub bodies are out of scope. */
+PUCHI_DIAG_HARNESS_PEDANTIC_OFF
 
 #define sexp_init_library sexp_init_lib_srfi_98
 #include "../../lib/srfi/98/env.c"
@@ -57,6 +61,11 @@
 #include "../../lib/chibi/io/io.c"
 #undef sexp_init_library
 #undef sexp_port_stream
+/* Later stubs use stream_ops; restore puchi's meaning of sexp_port_stream.
+ * May be unused if a stub never mentions the macro (-Wunused-macros). */
+#if defined(__clang__)
+#pragma clang diagnostic ignored "-Wunused-macros"
+#endif
 #define sexp_port_stream(p) sexp_port_stream_ops(p)
 
 #define sexp_init_library sexp_init_lib_chibi_filesystem
@@ -67,6 +76,7 @@
 #include "../../lib/chibi/ast.c"
 #undef sexp_init_library
 
+extern struct sexp_library_entry_t puchi_harness_static_libraries[];
 struct sexp_library_entry_t puchi_harness_static_libraries[] = {
   { "lib/srfi/98/env", sexp_init_lib_srfi_98 },
   { "lib/srfi/69/hash", sexp_init_lib_srfi_69 },

@@ -5,11 +5,13 @@
 #ifndef PUCHI_THREADS_H
 #define PUCHI_THREADS_H
 
+#include "puchi_test_diagnostics.h"
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
-#include <windows.h>
+#include <Windows.h>
 #include <stdlib.h>
 
 typedef HANDLE puchi_thread;
@@ -57,7 +59,7 @@ static int puchi_thread_join(puchi_thread t, int *status) {
   return 0;
 }
 
-static void puchi_thread_exit(int status) {
+static PUCHI_NORETURN void puchi_thread_exit(int status) {
   ExitThread((DWORD)status);
 }
 
