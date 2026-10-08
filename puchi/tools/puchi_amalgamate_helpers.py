@@ -77,32 +77,26 @@ def embed_c_string(name: str, text: str) -> str:
 
 
 def trim_meta7(src: str) -> str:
-    """Stub include-shared arms for diskless / no-DL builds."""
+    """Keep include-shared → load-modules; don't re-include disk init-7 for (chibi).
+
+    Under PUCHI_TEST, find-module-file resolves *.so via sexp_static_libraries.
+    *chibi-env* is already a snapshot of interaction (embedded init-7); including
+    lib/init-7.scm from disk would reload the untrimmed stock file and break loads.
+    """
     out = normalize_newlines(src)
-    old_shared = (
-        "((include-shared)\n"
-        "              (load-modules (cdr x) *shared-object-extension* #f))"
-    )
-    new_shared = (
-        "((include-shared)\n"
-        '              (error "include-shared: not available in puchi" x))'
-    )
-    old_opt = (
-        "((include-shared-optionally)\n"
-        "              (load-modules (list (cadr x)) *shared-object-extension* #f\n"
-        '                            (lambda () (load-modules (cddr x) "" #f))))'
-    )
-    new_opt = (
-        "((include-shared-optionally)\n"
-        '              (load-modules (cddr x) "" #f))'
-    )
-    if old_shared not in out:
+    if "((include-shared)\n              (load-modules (cdr x) *shared-object-extension* #f))" not in out:
         raise SystemExit("trim_meta7: include-shared arm not found")
-    if old_opt not in out:
+    if "((include-shared-optionally)\n" not in out:
         raise SystemExit("trim_meta7: include-shared-optionally arm not found")
-    out = out.replace(old_shared, new_shared, 1)
-    out = out.replace(old_opt, new_opt, 1)
-    return ";; trimmed for puchi amalgamation - no include-shared / DLLs\n" + out
+    old_chibi = '(make-module #f *chibi-env* \'((include "init-7.scm")))'
+    new_chibi = "(make-module #f *chibi-env* '())"
+    if old_chibi not in out:
+        raise SystemExit("trim_meta7: (chibi) make-module arm not found")
+    out = out.replace(old_chibi, new_chibi, 1)
+    return (
+        ";; trimmed for puchi amalgamation - include-shared via STATIC_LIBS; "
+        "(chibi) skips disk init-7\n" + out
+    )
 
 
 def splice_sexp_to_double(bignum_c: str) -> str:

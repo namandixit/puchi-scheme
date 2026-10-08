@@ -23,6 +23,7 @@
  * ----------------------------------------------------------------------
  * In exactly one .c file:
  *
+ *   #include <stdio.h>   // before puchi.h if using default PUCHI_SNPRINTF/...
  *   #define PUCHI_IMPLEMENTATION
  *   #include "puchi.h"
  *
@@ -56,6 +57,8 @@ extern "C" {
 #include <string.h>
 #include <stdarg.h>
 #include <ctype.h>
+/* Host: include <stdio.h> before this header when using default
+ * PUCHI_SNPRINTF / SPRINTF / SSCANF (sexp.h stdio is scrubbed). */
 /* MSVC: must precede math.h so M_LN10 / M_PI exist (features.h is too late). */
 #if defined(_WIN32) && defined(_MSC_VER)
 #ifndef _USE_MATH_DEFINES
@@ -317,7 +320,9 @@ static void puchi_fatal(void *ctx, int code, const char *msg) {
 #endif
 
 /* ---- install.h replacements (amalgamate inlines these) ---- */
-#if defined(PUCHI_TEST)
+/* Always defined: meta-7 include-shared / STATIC_LIBS matching need it.
+ * Harness resolves *.so via sexp_static_libraries (no dlopen). */
+#ifndef sexp_so_extension
 #define sexp_so_extension ".so"
 #endif
 #define sexp_default_module_path ""

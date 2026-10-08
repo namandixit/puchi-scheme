@@ -23,6 +23,7 @@
  * ----------------------------------------------------------------------
  * In exactly one .c file:
  *
+ *   #include <stdio.h>   // before puchi.h if using default PUCHI_SNPRINTF/...
  *   #define PUCHI_IMPLEMENTATION
  *   #include "puchi.h"
  *
@@ -56,6 +57,8 @@ extern "C" {
 #include <string.h>
 #include <stdarg.h>
 #include <ctype.h>
+/* Host: include <stdio.h> before this header when using default
+ * PUCHI_SNPRINTF / SPRINTF / SSCANF (sexp.h stdio is scrubbed). */
 /* MSVC: must precede math.h so M_LN10 / M_PI exist (features.h is too late). */
 #if defined(_WIN32) && defined(_MSC_VER)
 #if !defined(_USE_MATH_DEFINES)
@@ -317,7 +320,9 @@ static void puchi_fatal(void *ctx, int code, const char *msg) {
 #endif
 
 /* ---- install.h replacements (amalgamate inlines these) ---- */
-#if defined(PUCHI_TEST)
+/* Always defined: meta-7 include-shared / STATIC_LIBS matching need it.
+ * Harness resolves *.so via sexp_static_libraries (no dlopen). */
+#if !defined(sexp_so_extension)
 #define sexp_so_extension ".so"
 #endif
 #define sexp_default_module_path ""
@@ -340,6 +345,10 @@ static void puchi_fatal(void *ctx, int code, const char *msg) {
 #endif
 
 #define SEXP_USE_MODULES 1
+
+/* x86 defaults this to 0 (CPU allows unaligned loads); force on so bytecode
+ * immediates are padded/aligned and UBSan alignment checks are meaningful. */
+#define SEXP_USE_ALIGNED_BYTECODE 1
 
 #if defined(PUCHI_INTEGER_ONLY)
 #define SEXP_USE_FLONUMS 0
@@ -4255,7 +4264,8 @@ static struct sexp_type_struct _sexp_type_specs[] = {
   {(sexp)"Seq", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, (sexp)sexp_write_simple_object, NULL, NULL, SEXP_SEQ, sexp_offsetof(seq, ls), 2, 2, 0, 0, sexp_sizeof(seq), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Lit", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, (sexp)sexp_write_simple_object, NULL, NULL, SEXP_LIT, sexp_offsetof(lit, value), 2, 2, 0, 0, sexp_sizeof(lit), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Stack", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_STACK, sexp_sizeof(stack), 0, 0, sexp_offsetof(stack, top), 1, sexp_sizeof(stack), offsetof(struct sexp_struct, value.stack.length), sizeof(sexp), 0, 0, 0, 0, 0, 0, NULL},
-  {(sexp)"Context", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_CONTEXT, sexp_offsetof(context, stack), 12, 12, 0, 0, sexp_sizeof(context), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
+  /* puchi: event/dl stripped — 11 GC slots (stock is 12+dl); must match context struct */
+  {(sexp)"Context", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_CONTEXT, sexp_offsetof(context, stack), 11, 11, 0, 0, sexp_sizeof(context), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Cpointer", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_CPOINTER, sexp_offsetof(cpointer, parent), 1, 0, 0, 0, sexp_sizeof(cpointer), sexp_offsetof(cpointer, length), 1, 0, 0, 0, 0, 0, 0, NULL},
 #if SEXP_USE_UNIFORM_VECTOR_LITERALS
   {(sexp)"Uniform-Vector", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, (sexp)sexp_write_uvector, NULL, (sexp)"sexp_finalize_uvector", SEXP_UNIFORM_VECTOR, sexp_offsetof(uvector, bytes), 1, 1, 0, 0, sexp_sizeof(uvector), 0, 0, 0, 0, 0, 0, 0, 0, sexp_finalize_uvector},
@@ -4436,7 +4446,11 @@ static const char* sexp_initial_features[] = {
   "ratios",
 #endif
   "r7rs",
+#if defined(_WIN32)
+  "windows",
+#endif
   "puchi-" sexp_version,
+  "chibi",
   "puchi",
   NULL,
 };
@@ -6591,13 +6605,17 @@ sexp sexp_read_number (sexp ctx, sexp in, int base, int exactp) {
     digit = digit_value(c);
     if ((digit < 0) || (digit >= base))
       break;
-    tmp = val * base + digit;
 #if SEXP_USE_BIGNUMS
-    if ((SEXP_MAX_FIXNUM / base < val) ||
-        (tmp < val) || (tmp > SEXP_MAX_FIXNUM)) {
+    /* Check before multiply - avoid signed overflow UB (UBSan). */
+    if (val > (SEXP_MAX_FIXNUM / base) ||
+        digit > (SEXP_MAX_FIXNUM - val * base)) {
       sexp_push_char(ctx, c, in);
       return sexp_read_bignum(ctx, in, val, (negativep ? -1 : 1), base);
     }
+    tmp = val * base + digit;
+#else
+    /* Fixnum-only / default: defined wrap via unsigned modular arithmetic. */
+    tmp = (sexp_sint_t)((sexp_uint_t)val * (sexp_uint_t)base + (sexp_uint_t)digit);
 #endif
     val = tmp;
   }
@@ -16119,7 +16137,7 @@ static const char puchi_init7_scm[] =
   "                    (atan1 (/ y x))))))))\n"
 ;
 static const char puchi_meta7_scm[] =
-  ";; trimmed for puchi amalgamation - no include-shared / DLLs\n"
+  ";; trimmed for puchi amalgamation - include-shared via STATIC_LIBS; (chibi) skips disk init-7\n"
   ";; meta.scm -- meta language for describing modules\n"
   ";; Copyright (c) 2009-2014 Alex Shinn.  All rights reserved.\n"
   ";; BSD-style license: http://synthcode.com/license.txt\n"
@@ -16342,9 +16360,10 @@ static const char puchi_meta7_scm[] =
   "             ((include-ci)\n"
   "              (load-modules (cdr x) \"\" #t))\n"
   "             ((include-shared)\n"
-  "              (error \"include-shared: not available in puchi\" x))\n"
+  "              (load-modules (cdr x) *shared-object-extension* #f))\n"
   "             ((include-shared-optionally)\n"
-  "              (load-modules (cddr x) \"\" #f))\n"
+  "              (load-modules (list (cadr x)) *shared-object-extension* #f\n"
+  "                            (lambda () (load-modules (cddr x) \"\" #f))))\n"
   "             ((body begin)\n"
   "              (for-each (lambda (expr) (eval expr env)) (cdr x)))\n"
   "             ((error)\n"
@@ -16586,7 +16605,7 @@ static const char puchi_meta7_scm[] =
   "(define *modules*\n"
   "  (list\n"
   "   (cons '(chibi)\n"
-  "         (make-module #f *chibi-env* '((include \"init-7.scm\"))))\n"
+  "         (make-module #f *chibi-env* '()))\n"
   "   (cons '(chibi primitive)\n"
   "         (make-module #f #f (lambda (env) (primitive-environment 7))))\n"
   "   (cons '(meta)\n"
@@ -16701,6 +16720,10 @@ static sexp puchi_module_find_file_f(sexp ctx, sexp self, sexp_sint_t n, sexp fi
   fname = sexp_string_data(file);
   if (puchi_g_module_ops.exists(puchi_g_module_ops.userdata, fname))
     return sexp_c_string(ctx, fname, -1);
+#if SEXP_USE_STATIC_LIBS
+  if (sexp_find_static_library(fname))
+    return sexp_c_string(ctx, fname, -1);
+#endif
   ls = sexp_global(ctx, SEXP_G_MODULE_PATH);
   for (; sexp_pairp(ls); ls = sexp_cdr(ls)) {
     if (!sexp_stringp(sexp_car(ls))) continue;
@@ -16708,6 +16731,10 @@ static sexp puchi_module_find_file_f(sexp ctx, sexp self, sexp_sint_t n, sexp fi
       continue;
     if (puchi_g_module_ops.exists(puchi_g_module_ops.userdata, path))
       return sexp_c_string(ctx, path, -1);
+#if SEXP_USE_STATIC_LIBS
+    if (sexp_find_static_library(path))
+      return sexp_c_string(ctx, path, -1);
+#endif
   }
   return SEXP_FALSE;
 }
@@ -16742,14 +16769,22 @@ static sexp puchi_module_load_f(sexp ctx, sexp self, sexp_sint_t n, sexp source,
   char *buf;
   size_t len = 0;
   sexp res;
+  const char *path;
+  size_t plen, so_len;
   if (!env) env = sexp_context_env(ctx);
   sexp_assert_type(ctx, sexp_envp, SEXP_ENV, env);
   if (sexp_iportp(source))
     return sexp_load_op(ctx, self, n, source, env);
+  sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, source);
+  path = sexp_string_data(source);
+  plen = PUCHI_STRLEN(path);
+  so_len = PUCHI_STRLEN(sexp_so_extension);
+  /* STATIC_LIBS: *.so names are not on disk — dispatch to sexp_load_op/binary. */
+  if (plen >= so_len && PUCHI_STRCMP(path + plen - so_len, sexp_so_extension) == 0)
+    return sexp_load_op(ctx, self, n, source, env);
   if (!puchi_g_module_ops_set || !puchi_g_module_ops.read || !puchi_g_module_ops.free_buf)
     return sexp_global(ctx, SEXP_G_OOM_ERROR);
-  sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, source);
-  buf = puchi_g_module_ops.read(puchi_g_module_ops.userdata, sexp_string_data(source), &len);
+  buf = puchi_g_module_ops.read(puchi_g_module_ops.userdata, path, &len);
   if (!buf)
     return sexp_file_exception(ctx, self, "couldn't open input file", source);
   res = puchi_module_eval_source(ctx, buf, len, env);
@@ -16833,6 +16868,15 @@ sexp sexp_enable_modules(sexp ctx, const puchi_module_ops *ops) {
     sexp_env_parent(meta) = env;
   }
   meta_gc = meta;
+
+  /* meta-7 include-shared uses *shared-object-extension*; harness STATIC_LIBS
+   * resolves those names without dlopen. Define before evaluating meta-7. */
+  {
+    sexp so = sexp_c_string(ctx, sexp_so_extension, -1);
+    sym = sexp_intern(ctx, "*shared-object-extension*", -1);
+    sexp_env_define(ctx, env, sym, so);
+    sexp_env_define(ctx, meta, sym, so);
+  }
 
   puchi_module_install_foreigns(ctx, env);
   puchi_module_install_foreigns(ctx, meta);

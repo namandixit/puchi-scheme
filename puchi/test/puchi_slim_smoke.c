@@ -1,10 +1,10 @@
 /* Default config: fixnums + IEEE flonums (no numerical tower).
  * Scheme libs on disk contain complex literals, so this is a C-side suite
  * against embedded init — same approach as integer-only. */
-#define PUCHI_IMPLEMENTATION
-#include "../puchi.h"
 #include <stdio.h>
 #include <math.h>
+#define PUCHI_IMPLEMENTATION
+#include "../puchi.h"
 
 static int fail(const char *msg) {
   fprintf(stderr, "FAIL: %s\n", msg);

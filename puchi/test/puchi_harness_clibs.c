@@ -6,6 +6,7 @@
 #define PUCHI_TEST 1
 #endif
 
+#include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -46,9 +47,17 @@
 #include "../../lib/chibi/win32/process-win32.c"
 #undef sexp_init_library
 
+/* chibi-ffi io.c still passes sexp_port_stream() to FILE* APIs
+ * (clearerr/fseek/ftell/fgets). Harness file ports store the FILE*
+ * in stream_udata; ops live in stream_ops. Restore the puchi macro
+ * after this include so later stubs keep the ops pointer. */
+#undef sexp_port_stream
+#define sexp_port_stream(p) ((FILE *)sexp_port_stream_udata(p))
 #define sexp_init_library sexp_init_lib_chibi_io
 #include "../../lib/chibi/io/io.c"
 #undef sexp_init_library
+#undef sexp_port_stream
+#define sexp_port_stream(p) sexp_port_stream_ops(p)
 
 #define sexp_init_library sexp_init_lib_chibi_filesystem
 #include "../../lib/chibi/filesystem.c"

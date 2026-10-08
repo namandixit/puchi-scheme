@@ -9,15 +9,21 @@
  */
 /* Numeric mode comes from the compiler: (default) / PUCHI_INTEGER_ONLY /
  * PUCHI_ENABLE_NUMERICAL_TOWER — see build_puchi_tests.bat. */
-#define PUCHI_TEST 1
-#define PUCHI_IMPLEMENTATION
-#include "../puchi.h"
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <io.h>
+#ifndef close
+#define close _close
+#endif
+#endif
+
+#define PUCHI_TEST 1
+#define PUCHI_IMPLEMENTATION
+#include "../puchi.h"
 
 /* ---- host callbacks + FILE* stream adapters (harness-owned CRT) ---- */
 static void *puchi_host_alloc(void *ud, size_t n) {

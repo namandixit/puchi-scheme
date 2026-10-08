@@ -204,9 +204,38 @@ def rewrite_host_allocators(src: str) -> str:
 
 
 def brand_puchi_features(src: str) -> str:
-    """Rename advertised feature strings chibi → puchi."""
+    """Advertise puchi-* features while keeping ``chibi`` for cond-expand.
+
+    Libraries under lib/ use ``(cond-expand (chibi ...) (else (import (scheme
+    base)) ...))``. Dropping the ``chibi`` feature makes those else-branches
+    import (scheme base) while it is still loading → cyclic module error.
+
+    Also keep a compile-time ``windows`` feature on Win32: amalgamate's
+    dead-backend strip tends to drop the stock ``#if defined(_WIN32)`` arm
+    from sexp_initial_features, which breaks ``(cond-expand ((not windows) ...))``.
+    """
     src = src.replace('"chibi-" sexp_version', '"puchi-" sexp_version')
-    src = re.sub(r'^(\s*)"chibi",\s*$', r'\1"puchi",', src, flags=re.MULTILINE)
+    # Keep "chibi" and add "puchi" alongside (do not replace).
+    src = re.sub(
+        r'^(\s*)"chibi",\s*$',
+        r'\1"chibi",\n\1"puchi",',
+        src,
+        flags=re.MULTILINE,
+    )
+    # Re-anchor windows feature next to r7rs so amalgamation cannot drop it.
+    src = re.sub(
+        r"#if defined\(_WIN32\)\n\s*\"windows\",\n#endif\n",
+        "",
+        src,
+    )
+    src = src.replace(
+        '  "r7rs",\n',
+        '  "r7rs",\n'
+        "#if defined(_WIN32)\n"
+        '  "windows",\n'
+        "#endif\n",
+        1,
+    )
     return src
 
 

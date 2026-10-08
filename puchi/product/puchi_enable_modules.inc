@@ -32,6 +32,10 @@ static sexp puchi_module_find_file_f(sexp ctx, sexp self, sexp_sint_t n, sexp fi
   fname = sexp_string_data(file);
   if (puchi_g_module_ops.exists(puchi_g_module_ops.userdata, fname))
     return sexp_c_string(ctx, fname, -1);
+#if SEXP_USE_STATIC_LIBS
+  if (sexp_find_static_library(fname))
+    return sexp_c_string(ctx, fname, -1);
+#endif
   ls = sexp_global(ctx, SEXP_G_MODULE_PATH);
   for (; sexp_pairp(ls); ls = sexp_cdr(ls)) {
     if (!sexp_stringp(sexp_car(ls))) continue;
@@ -39,6 +43,10 @@ static sexp puchi_module_find_file_f(sexp ctx, sexp self, sexp_sint_t n, sexp fi
       continue;
     if (puchi_g_module_ops.exists(puchi_g_module_ops.userdata, path))
       return sexp_c_string(ctx, path, -1);
+#if SEXP_USE_STATIC_LIBS
+    if (sexp_find_static_library(path))
+      return sexp_c_string(ctx, path, -1);
+#endif
   }
   return SEXP_FALSE;
 }
@@ -73,14 +81,22 @@ static sexp puchi_module_load_f(sexp ctx, sexp self, sexp_sint_t n, sexp source,
   char *buf;
   size_t len = 0;
   sexp res;
+  const char *path;
+  size_t plen, so_len;
   if (!env) env = sexp_context_env(ctx);
   sexp_assert_type(ctx, sexp_envp, SEXP_ENV, env);
   if (sexp_iportp(source))
     return sexp_load_op(ctx, self, n, source, env);
+  sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, source);
+  path = sexp_string_data(source);
+  plen = PUCHI_STRLEN(path);
+  so_len = PUCHI_STRLEN(sexp_so_extension);
+  /* STATIC_LIBS: *.so names are not on disk — dispatch to sexp_load_op/binary. */
+  if (plen >= so_len && PUCHI_STRCMP(path + plen - so_len, sexp_so_extension) == 0)
+    return sexp_load_op(ctx, self, n, source, env);
   if (!puchi_g_module_ops_set || !puchi_g_module_ops.read || !puchi_g_module_ops.free_buf)
     return sexp_global(ctx, SEXP_G_OOM_ERROR);
-  sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, source);
-  buf = puchi_g_module_ops.read(puchi_g_module_ops.userdata, sexp_string_data(source), &len);
+  buf = puchi_g_module_ops.read(puchi_g_module_ops.userdata, path, &len);
   if (!buf)
     return sexp_file_exception(ctx, self, "couldn't open input file", source);
   res = puchi_module_eval_source(ctx, buf, len, env);
@@ -164,6 +180,15 @@ sexp sexp_enable_modules(sexp ctx, const puchi_module_ops *ops) {
     sexp_env_parent(meta) = env;
   }
   meta_gc = meta;
+
+  /* meta-7 include-shared uses *shared-object-extension*; harness STATIC_LIBS
+   * resolves those names without dlopen. Define before evaluating meta-7. */
+  {
+    sexp so = sexp_c_string(ctx, sexp_so_extension, -1);
+    sym = sexp_intern(ctx, "*shared-object-extension*", -1);
+    sexp_env_define(ctx, env, sym, so);
+    sexp_env_define(ctx, meta, sym, so);
+  }
 
   puchi_module_install_foreigns(ctx, env);
   puchi_module_install_foreigns(ctx, meta);

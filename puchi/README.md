@@ -8,15 +8,23 @@ bash puchi/tools/amalgamate.sh
 
 Requires bash (Git Bash on Windows), `patch` or `git apply`, and Python 3.
 
-## ALWAYS RUN TESTS
+## Definition of done (mandatory)
 
-After any amalgamation or puchi change, **run the full suite — do not stop at link**.
+After **any** puchi change (patches, `product/`, tools, tests, feature forces, amalgamation inputs), a change is **not done** until:
 
 ```bat
 puchi\tools\build_puchi_tests.bat
 ```
 
-That script amalgamates, then for **both** MSVC (`cl`) and Clang:
+exits **0**. That script is the gate. It always:
+
+1. **Amalgamates** (`amalgamate.sh` → regenerates `puchi.h`)
+2. Runs the **full suite** under **MSVC** and **Clang** (all three numeric configs; binaries are **executed**, not only linked)
+3. Re-runs the **same suite** under **Clang ASan + UBSan** with `-fno-sanitize-recover=all` (any sanitizer hit fails the bat).
+
+Puchi keeps those checks honest on x86: `SEXP_USE_ALIGNED_BYTECODE` is forced on, and patch `005-sexp-c-safe-fixnum-read.diff` avoids signed overflow UB in `sexp_read_number`.
+
+Linking without running is not enough. `check_amalgamate.sh` only checks drift — it does **not** replace this bat.
 
 | Config | Macro | What runs |
 |--------|-------|-----------|
@@ -24,16 +32,17 @@ That script amalgamates, then for **both** MSVC (`cl`) and Clang:
 | Int + float (default) | *(none)* | `puchi_slim_smoke.c` (execute) |
 | Full tower | `PUCHI_ENABLE_NUMERICAL_TOWER` | `puchi_smoke.c` + Scheme harness (`r7rs` / `syntax` / `division` / `unicode`) |
 
-Linking without running is not enough. A change is not done until this bat exits 0.
+Sanitizer pass needs the Clang ASan runtime DLL on PATH (the bat adds `$(clang -print-resource-dir)/lib/windows` automatically).
 
 ## Layout
 
 | Path | Role |
 |------|------|
 | `product/` | Puchi-owned C (banner, feature forces, API, `#e` mul helper) — concatenated as-is |
-| `patches/` | Thin unified diffs: host stream_ops ports + diskless boot |
+| `patches/` | Thin unified diffs: host ports, diskless boot, safe fixnum read |
 | `tools/amalgamate.sh` | Orchestrator: copy → patch → mechanical rewrite → trim/embed → concat → strip |
 | `tools/puchi_*.py` | Mechanical helpers (features scrub, alloc rewrite, ABI-f splice, libc, strip) |
+| `tools/build_puchi_tests.bat` | **Mandatory verify**: amalgamate + MSVC + Clang + Clang ASan/UBSan (tag `asan`) |
 
 ## Numeric modes
 
@@ -64,6 +73,7 @@ bash puchi/tools/amalgamate.sh
 # Paths inside the diff must be workdir-relative (e.g. sexp.h), for patch -p0.
 
 bash puchi/tools/check_amalgamate.sh   # must exit 0; commit puchi.h + refreshed patches
+puchi\tools\build_puchi_tests.bat      # mandatory: suite + sanitizers must exit 0
 ```
 
 ## Drift check
@@ -72,4 +82,4 @@ bash puchi/tools/check_amalgamate.sh   # must exit 0; commit puchi.h + refreshed
 bash puchi/tools/check_amalgamate.sh
 ```
 
-Fails if any patch does not apply, or if regenerated `puchi.h` differs from git.
+Fails if any patch does not apply, or if regenerated `puchi.h` differs from git. Still run `build_puchi_tests.bat` before calling the change done.

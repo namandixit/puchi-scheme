@@ -32,6 +32,7 @@
 
 # Debug files
 *.dSYM/
+debug-*.log
 
 # Snow Meta files
 lib/.*.meta

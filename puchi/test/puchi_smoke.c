@@ -1,8 +1,8 @@
 /* Tower build: bignums + ratios + complex. */
+#include <stdio.h>
 #define PUCHI_ENABLE_NUMERICAL_TOWER
 #define PUCHI_IMPLEMENTATION
 #include "../puchi.h"
-#include <stdio.h>
 
 int main(void) {
   sexp ctx, res;

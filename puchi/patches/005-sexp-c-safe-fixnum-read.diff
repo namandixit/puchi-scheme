@@ -1,0 +1,23 @@
+--- sexp.c
++++ sexp.c
+@@ -2969,13 +2969,17 @@
+     digit = digit_value(c);
+     if ((digit < 0) || (digit >= base))
+       break;
+-    tmp = val * base + digit;
+ #if SEXP_USE_BIGNUMS
+-    if ((SEXP_MAX_FIXNUM / base < val) ||
+-        (tmp < val) || (tmp > SEXP_MAX_FIXNUM)) {
++    /* Check before multiply - avoid signed overflow UB (UBSan). */
++    if (val > (SEXP_MAX_FIXNUM / base) ||
++        digit > (SEXP_MAX_FIXNUM - val * base)) {
+       sexp_push_char(ctx, c, in);
+       return sexp_read_bignum(ctx, in, val, (negativep ? -1 : 1), base);
+     }
++    tmp = val * base + digit;
++#else
++    /* Fixnum-only / default: defined wrap via unsigned modular arithmetic. */
++    tmp = (sexp_sint_t)((sexp_uint_t)val * (sexp_uint_t)base + (sexp_uint_t)digit);
+ #endif
+     val = tmp;
+   }

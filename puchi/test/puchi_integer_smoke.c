@@ -1,11 +1,11 @@
 /* Integer-only: fixnums only. Scheme libs on disk often contain float
  * literals the reader rejects without flonums, so this is a C-side suite
  * against the embedded init (no module imports). */
+#include <stdio.h>
+#include <string.h>
 #define PUCHI_INTEGER_ONLY
 #define PUCHI_IMPLEMENTATION
 #include "../puchi.h"
-#include <stdio.h>
-#include <string.h>
 
 static int fail(const char *msg) {
   fprintf(stderr, "FAIL: %s\n", msg);
