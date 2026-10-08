@@ -2,13 +2,18 @@
 # amalgamate.sh - build puchi.h from upstream Chibi without modifying
 # upstream sources.
 #
+# Pipeline: copy → patches → mechanical rewrite → Scheme trim/embed →
+#           concat product + transformed sources → strip-dead-backends.
+#
 # Usage (from anywhere): bash puchi/tools/amalgamate.sh
-# Requires: bash, sed, awk, python3 (Git Bash on Windows is fine).
+# Requires: bash, sed, patch (or git apply), python3 (Git Bash on Windows is fine).
 set -euo pipefail
 
 TOOLS="$(cd "$(dirname "$0")" && pwd)"
 PUCHI="$(cd "$TOOLS/.." && pwd)"
 CHIBI="$(cd "$PUCHI/.." && pwd)"
+PRODUCT="$PUCHI/product"
+PATCHES="$PUCHI/patches"
 cd "$CHIBI"
 
 HELPERS="$TOOLS/puchi_amalgamate_helpers.py"
@@ -30,103 +35,62 @@ mkdir -p "$WORKDIR"
 
 echo "[puchi] preparing sources..."
 
-# --- synthetic install.h ---
-cat > "$WORKDIR/install.h" <<'EOF'
-#if defined(PUCHI_TEST)
-#define sexp_so_extension ".so"
-#endif
-#define sexp_default_module_path ""
-#define sexp_platform "puchi"
-#define sexp_architecture "portable"
-#define sexp_version "0.12.0"
-#define sexp_release_name "puchi"
-EOF
+# Product feature forces (puchi-owned; not from upstream)
+cp "$PRODUCT/puchi_features_force.h" "$WORKDIR/puchi_features_force.h"
 
-# --- feature force header (prepended before features.h) ---
-cat > "$WORKDIR/puchi_features_force.h" <<'EOF'
-/* Forced by amalgamate.sh. Set PUCHI_* macros before including puchi.h.
- *
- * Default:           fixnums + IEEE flonums (overflow wraps; no bignums).
- * PUCHI_INTEGER_ONLY: fixnums only (no floats, no tower).
- * PUCHI_ENABLE_NUMERICAL_TOWER: bignums + ratios + complex (implies flonums).
- */
-#if defined(PUCHI_INTEGER_ONLY) && defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-#error "PUCHI_INTEGER_ONLY and PUCHI_ENABLE_NUMERICAL_TOWER are mutually exclusive"
-#endif
-/* OS/debug backends are deleted by strip-dead-backends (ALWAYS_ZERO_STRIP
- * in puchi_host_embed.py). Do not re-enable them; the code is gone.
- * Plan 9 is never defined, so those branches are removed the same way. */
-#ifndef SEXP_USE_MODULES
-#define SEXP_USE_MODULES 1
-#endif
-#if defined(PUCHI_INTEGER_ONLY)
-#ifndef SEXP_USE_FLONUMS
-#define SEXP_USE_FLONUMS 0
-#endif
-#ifndef SEXP_USE_MATH
-#define SEXP_USE_MATH 0
-#endif
-#ifndef SEXP_USE_BIGNUMS
-#define SEXP_USE_BIGNUMS 0
-#endif
-#ifndef SEXP_USE_RATIOS
-#define SEXP_USE_RATIOS 0
-#endif
-#ifndef SEXP_USE_COMPLEX
-#define SEXP_USE_COMPLEX 0
-#endif
-#elif defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-#ifndef SEXP_USE_FLONUMS
-#define SEXP_USE_FLONUMS 1
-#endif
-#ifndef SEXP_USE_MATH
-#define SEXP_USE_MATH 1
-#endif
-#ifndef SEXP_USE_BIGNUMS
-#define SEXP_USE_BIGNUMS 1
-#endif
-#ifndef SEXP_USE_RATIOS
-#define SEXP_USE_RATIOS 1
-#endif
-#ifndef SEXP_USE_COMPLEX
-#define SEXP_USE_COMPLEX 1
-#endif
-#else
-/* Default: fast ints + floats */
-#ifndef SEXP_USE_FLONUMS
-#define SEXP_USE_FLONUMS 1
-#endif
-#ifndef SEXP_USE_MATH
-#define SEXP_USE_MATH 1
-#endif
-#ifndef SEXP_USE_BIGNUMS
-#define SEXP_USE_BIGNUMS 0
-#endif
-#ifndef SEXP_USE_RATIOS
-#define SEXP_USE_RATIOS 0
-#endif
-#ifndef SEXP_USE_COMPLEX
-#define SEXP_USE_COMPLEX 0
-#endif
-#endif
-EOF
-# Append ALWAYS_ZERO_STRIP + PUCHI_TEST static-libs gate (documented in puchi_host_embed.py)
-"$PYTHON" "$HELPERS" features-force-extra >> "$WORKDIR/puchi_features_force.h"
-
-# --- patch headers/sources ---
-"$PYTHON" "$HELPERS" patch-sexp-h "$CHIBI/include/chibi/sexp.h" "$WORKDIR/sexp.h"
-"$PYTHON" "$HELPERS" patch-eval-c "$CHIBI/eval.c" "$WORKDIR/eval.c"
-"$PYTHON" "$HELPERS" patch-gc-c "$CHIBI/gc.c" "$WORKDIR/gc.c"
-"$PYTHON" "$HELPERS" patch-sexp-c "$CHIBI/sexp.c" "$WORKDIR/sexp.c"
-
+# --- copy upstream headers/sources into workdir ---
+cp "$CHIBI/include/chibi/sexp.h" "$WORKDIR/sexp.h"
+cp "$CHIBI/eval.c" "$WORKDIR/eval.c"
+cp "$CHIBI/gc.c" "$WORKDIR/gc.c"
+cp "$CHIBI/sexp.c" "$WORKDIR/sexp.c"
 cp "$CHIBI/opcodes.c" "$WORKDIR/opcodes.c"
-"$PYTHON" "$HELPERS" patch-opcodes "$WORKDIR/opcodes.c"
 cp "$CHIBI/vm.c" "$WORKDIR/vm.c"
 cp "$CHIBI/simplify.c" "$WORKDIR/simplify.c"
 cp "$CHIBI/include/chibi/features.h" "$WORKDIR/features.h"
-"$PYTHON" "$HELPERS" strip-features "$WORKDIR/features.h" "$WORKDIR/features.h"
 cp "$CHIBI/include/chibi/eval.h" "$WORKDIR/eval.h"
-"$PYTHON" "$HELPERS" patch-eval-h "$WORKDIR/eval.h" "$WORKDIR/eval.h"
+cp "$CHIBI/include/chibi/bignum.h" "$WORKDIR/bignum.h"
+cp "$CHIBI/include/chibi/sexp-huff.h" "$WORKDIR/sexp-huff.h"
+cp "$CHIBI/include/chibi/sexp-unhuff.h" "$WORKDIR/sexp-unhuff.h"
+cp "$CHIBI/include/chibi/sexp-hufftabs.h" "$WORKDIR/sexp-hufftabs.h"
+cp "$CHIBI/include/chibi/sexp-hufftabdefs.h" "$WORKDIR/sexp-hufftabdefs.h"
+cp "$CHIBI/include/chibi/sexp-hufftabs.c" "$WORKDIR/sexp-hufftabs.c"
+cp "$CHIBI/bignum.c" "$WORKDIR/bignum.c"
+# gc_heap.h intentionally omitted (image packing — empty / unused in puchi)
+
+# --- apply unified diffs from puchi/patches/ (fail on reject) ---
+apply_patches() {
+  local n=0
+  shopt -s nullglob
+  local diffs=("$PATCHES"/*.diff)
+  shopt -u nullglob
+  if [ ${#diffs[@]} -eq 0 ]; then
+    echo "[puchi] no patches in $PATCHES (ok during bootstrap)"
+    return 0
+  fi
+  echo "[puchi] applying patches..."
+  for diff in "${diffs[@]}"; do
+    echo "  $(basename "$diff")"
+    if command -v patch >/dev/null 2>&1; then
+      patch -p0 -d "$WORKDIR" --batch --forward < "$diff"
+    elif command -v git >/dev/null 2>&1; then
+      git apply --unsafe-paths --directory="$WORKDIR" "$diff"
+    else
+      echo "error: need patch or git to apply $diff" >&2
+      exit 1
+    fi
+    n=$((n + 1))
+  done
+  echo "[puchi] applied $n patch(es)"
+}
+apply_patches
+
+# --- mechanical transforms (body forks live in puchi/patches/) ---
+echo "[puchi] mechanical rewrites..."
+"$PYTHON" "$HELPERS" scrub-features "$WORKDIR/features.h"
+"$PYTHON" "$HELPERS" scrub-gc "$WORKDIR/gc.c"
+"$PYTHON" "$HELPERS" patch-opcodes "$WORKDIR/opcodes.c"
+"$PYTHON" "$HELPERS" brand-sexp "$WORKDIR/sexp.c"
+# ABI-f splices for bignum.c / eval.c (sexp.h decl runs after bignum.h inject)
 
 # Libc only through PUCHI_* wrappers (defaults in banner)
 for f in sexp.c eval.c gc.c vm.c opcodes.c simplify.c bignum.c sexp.h; do
@@ -134,16 +98,13 @@ for f in sexp.c eval.c gc.c vm.c opcodes.c simplify.c bignum.c sexp.h; do
     "$PYTHON" "$HELPERS" rewrite-libc "$WORKDIR/$f"
   fi
 done
-cp "$CHIBI/include/chibi/bignum.h" "$WORKDIR/bignum.h"
-# gc_heap.h intentionally omitted (image packing — empty / unused in puchi)
-cp "$CHIBI/include/chibi/sexp-huff.h" "$WORKDIR/sexp-huff.h"
-cp "$CHIBI/include/chibi/sexp-unhuff.h" "$WORKDIR/sexp-unhuff.h"
-cp "$CHIBI/include/chibi/sexp-hufftabs.h" "$WORKDIR/sexp-hufftabs.h"
-cp "$CHIBI/include/chibi/sexp-hufftabdefs.h" "$WORKDIR/sexp-hufftabdefs.h"
-cp "$CHIBI/include/chibi/sexp-hufftabs.c" "$WORKDIR/sexp-hufftabs.c"
-cp "$CHIBI/bignum.c" "$WORKDIR/bignum.c"
-# bignum.c is copied after the earlier rewrite-libc pass
-"$PYTHON" "$HELPERS" rewrite-libc "$WORKDIR/bignum.c"
+
+# Host allocators (gc.c / sexp.c malloc→SEXP_MALLOC)
+for f in gc.c sexp.c eval.c; do
+  if [ -f "$WORKDIR/$f" ]; then
+    "$PYTHON" "$HELPERS" rewrite-alloc "$WORKDIR/$f"
+  fi
+done
 
 sed_inplace() {
   local file="$1"; shift
@@ -203,6 +164,12 @@ sexp_h = sexp_h.replace(
 (wd / "sexp.h").write_text(sexp_h, encoding="utf-8")
 print("injected bignum.h into sexp.h")
 PY
+
+# Re-gate sexp_to_double / exact-sqrt + flonum-only decl (after bignum.h inject)
+"$PYTHON" "$HELPERS" splice-abi-f "$WORKDIR"
+# Splice may insert fresh libc calls; rewrite again on touched files
+"$PYTHON" "$HELPERS" rewrite-libc "$WORKDIR/eval.c"
+"$PYTHON" "$HELPERS" rewrite-libc "$WORKDIR/bignum.c"
 
 for f in sexp.h eval.h bignum.h features.h gc.c sexp.c eval.c \
          opcodes.c vm.c simplify.c bignum.c; do
@@ -284,7 +251,7 @@ echo "[puchi] embedding trimmed meta-7.scm..."
 
 echo "[puchi] writing puchi.h..."
 {
-  cat "$TOOLS/puchi_banner.h.in"
+  cat "$PRODUCT/puchi_banner.h.in"
 
   echo "/* ==== puchi feature forces ==== */"
   cat "$WORKDIR/puchi_features_force.h"
@@ -292,57 +259,21 @@ echo "[puchi] writing puchi.h..."
   echo "/* ==== resolved feature flags (from features.h; manual omitted) ==== */"
   cat "$WORKDIR/features.h"
 
-  echo "/* ==== install.h ==== */"
-  cat "$WORKDIR/install.h"
-
   echo "/* ==== sexp.h (bignum.h inlined mid-file under SEXP_USE_BIGNUMS) ==== */"
   cat "$WORKDIR/sexp.h"
 
   echo "/* ==== eval.h ==== */"
   cat "$WORKDIR/eval.h"
 
-  cat <<'EOF'
-
-/* ---- decls when tower code is compiled out ---- */
-#if SEXP_USE_FLONUMS && !SEXP_USE_BIGNUMS
-SEXP_API double sexp_to_double(sexp ctx, sexp x);
-SEXP_API sexp sexp_add(sexp ctx, sexp a, sexp b);
-SEXP_API sexp sexp_sub(sexp ctx, sexp a, sexp b);
-SEXP_API sexp sexp_mul(sexp ctx, sexp a, sexp b);
-SEXP_API sexp sexp_div(sexp ctx, sexp a, sexp b);
-SEXP_API sexp sexp_quotient(sexp ctx, sexp a, sexp b);
-SEXP_API sexp sexp_remainder(sexp ctx, sexp a, sexp b);
-#endif
-#if !SEXP_USE_BIGNUMS
-SEXP_API sexp sexp_fixnum_to_bignum(sexp ctx, sexp a);
-SEXP_API sexp sexp_exact_sqrt(sexp ctx, sexp self, sexp_sint_t n, sexp z);
-#endif
-
-/* ---- puchi high-level API ---- */
-SEXP_API sexp sexp_create_context(sexp_uint_t heap_size, sexp_uint_t heap_max_size, const puchi_host *host);
-SEXP_API sexp sexp_delete_context(sexp ctx);
-SEXP_API sexp sexp_load_default_libs(sexp ctx);
-SEXP_API sexp sexp_enable_modules(sexp ctx, const puchi_module_ops *ops);
-
-#ifdef __cplusplus
-} /* extern "C" declarations */
-#endif
-
-/* ========================================================================== */
-#if defined(PUCHI_IMPLEMENTATION)
-/* ========================================================================== */
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/* Forward decl — defined after embedded init-7; used by load_standard_env. */
-static sexp puchi_load_init7_into_env(sexp ctx, sexp env);
-
-EOF
+  cat "$PRODUCT/puchi_api_decls.inc"
+  echo
 
   echo "/* ==== gc.c ==== */"
   cat "$WORKDIR/gc.c"
+
+  echo "/* ==== puchi #e mul (F∧¬B; before sexp.c call sites) ==== */"
+  cat "$PRODUCT/puchi_fx_or_fl_mul.inc"
+  echo
 
   echo "/* ==== sexp.c ==== */"
   cat "$WORKDIR/sexp.c"
@@ -362,201 +293,17 @@ EOF
   echo "/* ==== bignum.c (active only if PUCHI_ENABLE_NUMERICAL_TOWER / SEXP_USE_BIGNUMS) ==== */"
   cat "$WORKDIR/bignum.c"
 
-  cat <<'EOF'
-
-#if !SEXP_USE_BIGNUMS
-/* Slim arithmetic for builds without the numerical tower.
- *
- * Chibi implements sexp_add/sub/mul/div, sexp_to_double, and friends in
- * bignum.c, inside #if SEXP_USE_BIGNUMS. That file is still pasted below,
- * but the compiler skips it unless PUCHI_ENABLE_NUMERICAL_TOWER. Fixnum
- * and flonum code in sexp.c / eval.c / vm.c still calls those functions,
- * so a tower-off build needs these definitions or it fails to link
- * (typical missing symbols: sexp_mul, sexp_to_double, sexp_exact_sqrt,
- * sexp_fixnum_to_bignum).
- *
- * If a new upstream call fails to link only when the tower is off:
- *   1. See which .c the symbol is defined in (usually bignum.c).
- *   2. If the call is fixnum/flonum only, add a small stub here.
- *   3. If the call truly needs bignums, guard the call site with
- *      SEXP_USE_BIGNUMS in the amalgamation patch, or require the tower.
- * Do not copy bignum.c into the default build to silence the linker.
- * sexp_fixnum_to_bignum without the tower returns the fixnum unchanged
- * (overflow wraps). sexp_exact_sqrt uses flonum sqrt, or an integer loop
- * when PUCHI_INTEGER_ONLY.
- */
-#if SEXP_USE_FLONUMS
-double sexp_to_double(sexp ctx, sexp x) {
-  (void)ctx;
-  if (sexp_flonump(x)) return sexp_flonum_value(x);
-  if (sexp_fixnump(x)) return sexp_fixnum_to_double(x);
-  return 0.0;
-}
-static sexp puchi_num_type_error(sexp ctx, sexp x) {
-  return sexp_type_exception(ctx, NULL, SEXP_NUMBER, x);
-}
-sexp sexp_add(sexp ctx, sexp a, sexp b) {
-  if (sexp_fixnump(a) && sexp_fixnump(b)) return sexp_fx_add(a, b);
-  if (sexp_flonump(a) && sexp_flonump(b)) return sexp_fp_add(ctx, a, b);
-  if (sexp_flonump(a) && sexp_fixnump(b))
-    return sexp_make_flonum(ctx, sexp_flonum_value(a) + sexp_fixnum_to_double(b));
-  if (sexp_fixnump(a) && sexp_flonump(b))
-    return sexp_make_flonum(ctx, sexp_fixnum_to_double(a) + sexp_flonum_value(b));
-  return puchi_num_type_error(ctx, a);
-}
-sexp sexp_sub(sexp ctx, sexp a, sexp b) {
-  if (sexp_fixnump(a) && sexp_fixnump(b)) return sexp_fx_sub(a, b);
-  if (sexp_flonump(a) && sexp_flonump(b)) return sexp_fp_sub(ctx, a, b);
-  if (sexp_flonump(a) && sexp_fixnump(b))
-    return sexp_make_flonum(ctx, sexp_flonum_value(a) - sexp_fixnum_to_double(b));
-  if (sexp_fixnump(a) && sexp_flonump(b))
-    return sexp_make_flonum(ctx, a == SEXP_ZERO ? -sexp_flonum_value(b)
-                                                 : sexp_fixnum_to_double(a) - sexp_flonum_value(b));
-  return puchi_num_type_error(ctx, a);
-}
-sexp sexp_mul(sexp ctx, sexp a, sexp b) {
-  if (sexp_fixnump(a) && sexp_fixnump(b)) return sexp_fx_mul(a, b);
-  if (sexp_flonump(a) && sexp_flonump(b)) return sexp_fp_mul(ctx, a, b);
-  if (sexp_flonump(a) && sexp_fixnump(b))
-    return sexp_make_flonum(ctx, sexp_flonum_value(a) * sexp_fixnum_to_double(b));
-  if (sexp_fixnump(a) && sexp_flonump(b))
-    return a == SEXP_ZERO ? a
-                          : sexp_make_flonum(ctx, sexp_fixnum_to_double(a) * sexp_flonum_value(b));
-  return puchi_num_type_error(ctx, a);
-}
-sexp sexp_div(sexp ctx, sexp a, sexp b) {
-  if (sexp_fixnump(a) && sexp_fixnump(b)) {
-    if (b == SEXP_ZERO) return sexp_user_exception(ctx, NULL, "divide by zero", b);
-    return sexp_fp_div(ctx, sexp_fixnum_to_flonum(ctx, a), sexp_fixnum_to_flonum(ctx, b));
-  }
-  if (sexp_flonump(a) && sexp_flonump(b)) return sexp_fp_div(ctx, a, b);
-  if (sexp_flonump(a) && sexp_fixnump(b))
-    return sexp_make_flonum(ctx, sexp_flonum_value(a) / sexp_fixnum_to_double(b));
-  if (sexp_fixnump(a) && sexp_flonump(b))
-    return sexp_make_flonum(ctx, sexp_fixnum_to_double(a) / sexp_flonum_value(b));
-  return puchi_num_type_error(ctx, a);
-}
-sexp sexp_quotient(sexp ctx, sexp a, sexp b) {
-  if (sexp_fixnump(a) && sexp_fixnump(b)) {
-    if (b == SEXP_ZERO) return sexp_user_exception(ctx, NULL, "divide by zero", b);
-    return sexp_fx_div(a, b);
-  }
-  return puchi_num_type_error(ctx, a);
-}
-sexp sexp_remainder(sexp ctx, sexp a, sexp b) {
-  if (sexp_fixnump(a) && sexp_fixnump(b)) {
-    if (b == SEXP_ZERO) return sexp_user_exception(ctx, NULL, "divide by zero", b);
-    return sexp_fx_rem(a, b);
-  }
-  return puchi_num_type_error(ctx, a);
-}
-#endif /* SEXP_USE_FLONUMS */
-
-sexp sexp_fixnum_to_bignum(sexp ctx, sexp a) {
-  (void)ctx;
-  return a;
-}
-
-sexp sexp_exact_sqrt(sexp ctx, sexp self, sexp_sint_t n, sexp z) {
-#if SEXP_USE_FLONUMS && SEXP_USE_MATH
-  sexp res, rem, root;
-  res = sexp_inexact_sqrt(ctx, self, n, z);
-  if (sexp_exceptionp(res)) return res;
-  if (sexp_flonump(res))
-    root = sexp_make_fixnum((sexp_sint_t)trunc(sexp_flonum_value(res)));
-  else
-    root = res;
-  rem = sexp_mul(ctx, root, root);
-  rem = sexp_sub(ctx, z, rem);
-  return sexp_cons(ctx, root, rem);
-#else
-  sexp_sint_t v, r, rr;
-  (void)n;
-  if (!sexp_fixnump(z) || sexp_unbox_fixnum(z) < 0)
-    return sexp_type_exception(ctx, self, SEXP_FIXNUM, z);
-  v = sexp_unbox_fixnum(z);
-  r = 0;
-  while ((rr = (r + 1) * (r + 1)) > 0 && rr <= v) r++;
-  return sexp_cons(ctx, sexp_make_fixnum(r), sexp_make_fixnum(v - r * r));
-#endif
-}
-#endif /* !SEXP_USE_BIGNUMS */
-
-EOF
-
   cat "$WORKDIR/init7_embed.c"
   cat "$WORKDIR/meta7_embed.c"
 
-  cat <<'EOF'
+  echo
+  cat "$PRODUCT/puchi_api.inc"
+  echo
 
-static sexp puchi_load_init7_into_env(sexp ctx, sexp env) {
-  sexp res;
-  sexp_gc_var4(ctx2, x, in, s);
-  if (!ctx || sexp_exceptionp(ctx)) return ctx;
-  if (!env) env = sexp_context_env(ctx);
-  {
-    sexp sym;
-    sym = sexp_intern(ctx, "*features*", -1);
-    sexp_env_define(ctx, env, sym, sexp_global(ctx, SEXP_G_FEATURES));
-  }
-  sexp_gc_preserve4(ctx, ctx2, x, in, s);
-  res = SEXP_VOID;
-  s = sexp_c_string(ctx, puchi_init7_scm, -1);
-  in = sexp_open_input_string(ctx, s);
-  if (sexp_exceptionp(in)) {
-    sexp_gc_release4(ctx);
-    return in;
-  }
-  ctx2 = sexp_make_eval_context(ctx, NULL, env, 0, 0);
-  sexp_context_parent(ctx2) = ctx;
-  sexp_context_tailp(ctx2) = 0;
-  while ((x = sexp_read(ctx2, in)) != (sexp)SEXP_EOF) {
-    res = sexp_exceptionp(x) ? x : sexp_eval(ctx2, x, env);
-    if (sexp_exceptionp(res)) {
-      sexp_gc_release4(ctx);
-      return res;
-    }
-  }
-  sexp_close_port(ctx, in);
-  sexp_gc_release4(ctx);
-  {
-    sexp sym = sexp_intern(ctx, "current-exception-handler", -1);
-    sexp_global(ctx, SEXP_G_ERR_HANDLER) = sexp_env_ref(ctx, env, sym, SEXP_FALSE);
-  }
-  sexp_set_parameter(ctx, env, sexp_global(ctx, SEXP_G_INTERACTION_ENV_SYMBOL), env);
-  {
-    sexp sym = sexp_intern(ctx, "*puchi-default-libs*", -1);
-    sexp_env_define(ctx, env, sym, SEXP_TRUE);
-  }
-  return env;
-}
-
-sexp sexp_create_context(sexp_uint_t heap_size, sexp_uint_t heap_max_size, const puchi_host *host) {
-  puchi_host_init(host);
-  sexp_scheme_init();
-  return sexp_make_eval_context(NULL, NULL, NULL, heap_size, heap_max_size);
-}
-
-sexp sexp_delete_context(sexp ctx) {
-  return sexp_destroy_context(ctx);
-}
-
-sexp sexp_load_default_libs(sexp ctx) {
-  sexp env, sym;
-  if (!ctx || sexp_exceptionp(ctx)) return ctx;
-  env = sexp_context_env(ctx);
-  sym = sexp_intern(ctx, "*puchi-default-libs*", -1);
-  if (sexp_env_ref(ctx, env, sym, SEXP_FALSE) != SEXP_FALSE)
-    return env;
-  return puchi_load_init7_into_env(ctx, env);
-}
-
-EOF
-
-  cat "$TOOLS/puchi_enable_modules.inc"
+  cat "$PRODUCT/puchi_enable_modules.inc"
+  echo
 
   cat <<'EOF'
-
 #ifdef __cplusplus
 } /* extern "C" implementation */
 #endif

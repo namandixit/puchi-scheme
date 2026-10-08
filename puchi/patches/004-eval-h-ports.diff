@@ -1,0 +1,56 @@
+--- eval.h
++++ eval.h
+@@ -13,10 +13,7 @@
+ 
+ /************************* additional types ***************************/
+ 
+-#define sexp_init_file "init-"
+-#define sexp_init_file_suffix ".scm"
+-#define sexp_meta_file "meta-7.scm"
+-#define sexp_leap_seconds_file "leap.txt"
++/* puchi: no disk init/meta/leap file names in core */
+ 
+ enum sexp_core_form_names {
+   SEXP_CORE_DEFINE = 1,
+@@ -90,7 +87,10 @@
+ SEXP_API sexp sexp_make_primitive_env_op (sexp context, sexp self, sexp_sint_t n, sexp version);
+ SEXP_API sexp sexp_make_standard_env_op (sexp context, sexp self, sexp_sint_t n, sexp version);
+ SEXP_API void sexp_set_parameter (sexp ctx, sexp env, sexp name, sexp value);
+-SEXP_API sexp sexp_load_standard_ports (sexp context, sexp env, FILE* in, FILE* out, FILE* err, int no_close);
++SEXP_API sexp sexp_set_standard_ports (sexp context, sexp env, sexp in, sexp out, sexp err);
++/* legacy name: install already-built ports (not FILE*) */
++#define sexp_load_standard_ports(ctx, env, in, out, err, no_close) \
++  ((void)(no_close), sexp_set_standard_ports((ctx), (env), (in), (out), (err)))
+ SEXP_API sexp sexp_load_standard_env (sexp context, sexp env, sexp version);
+ SEXP_API char* sexp_find_module_file_raw (sexp ctx, const char *file);
+ SEXP_API sexp sexp_find_module_file (sexp ctx, const char *file);
+@@ -110,10 +110,6 @@
+ SEXP_API sexp sexp_make_synclo_op(sexp ctx, sexp self, sexp_sint_t n, sexp env, sexp fv, sexp expr);
+ SEXP_API sexp sexp_strip_synclos(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+ SEXP_API sexp sexp_syntactic_closure_expr_op(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+-SEXP_API sexp sexp_open_input_file_op(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+-SEXP_API sexp sexp_open_output_file_op(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+-SEXP_API sexp sexp_open_binary_input_file(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+-SEXP_API sexp sexp_open_binary_output_file(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+ SEXP_API sexp sexp_close_port_op(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+ SEXP_API sexp sexp_set_port_line_op (sexp ctx, sexp self, sexp_sint_t n, sexp port, sexp line);
+ SEXP_API sexp sexp_env_define (sexp ctx, sexp env, sexp sym, sexp val);
+@@ -239,7 +235,9 @@
+ SEXP_API sexp sexp_9p_respond (sexp ctx, sexp self, sexp_sint_t n, sexp req, sexp err);
+ SEXP_API sexp sexp_9p_responderror (sexp ctx, sexp self, sexp_sint_t n, sexp req);
+ #else
++#if defined(PUCHI_TEST)
+ SEXP_API sexp sexp_get_port_fileno (sexp ctx, sexp self, sexp_sint_t n, sexp port);
++#endif
+ SEXP_API sexp sexp_stream_portp_op (sexp ctx, sexp self, sexp_sint_t n, sexp port);
+ #endif
+ 
+@@ -263,8 +261,6 @@
+ #define sexp_identifierp(ctx, x) sexp_identifierp_op(ctx, NULL, 1, x)
+ #define sexp_identifier_to_symbol(ctx, x) sexp_syntactic_closure_expr_op(ctx, NULL, 1, x)
+ #define sexp_identifier_eq(ctx, a, b, c, d) sexp_identifier_eq_op(ctx, NULL, 4, a, b, c, d)
+-#define sexp_open_input_file(ctx, x) sexp_open_input_file_op(ctx, NULL, 1, x)
+-#define sexp_open_output_file(ctx, x) sexp_open_output_file_op(ctx, NULL, 1, x)
+ #define sexp_close_port(ctx, x) sexp_close_port_op(ctx, NULL, 1, x)
+ #define sexp_warn_undefs(ctx, from, to, res) sexp_warn_undefs_op(ctx, NULL, 3, from, to, res)
+ #define sexp_string_cmp(ctx, a, b, c) sexp_string_cmp_op(ctx, NULL, 3, a, b, c)

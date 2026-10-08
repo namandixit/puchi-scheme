@@ -1,0 +1,437 @@
+--- sexp.c
++++ sexp.c
+@@ -193,38 +193,40 @@
+ }
+ #endif
+ 
++#if defined(PUCHI_TEST)
+ sexp sexp_finalize_fileno (sexp ctx, sexp self, sexp_sint_t n, sexp fileno) {
+   if (sexp_fileno_openp(fileno) && !sexp_fileno_no_closep(fileno)) {
+     sexp_fileno_openp(fileno) = 0;
++    #if defined(PUCHI_TEST)
+     close(sexp_fileno_fd(fileno));
++#else
++    (void)fileno;
++#endif
+   }
+   return SEXP_VOID;
+ }
+ 
++#endif
+ sexp sexp_finalize_port (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
+   sexp res = SEXP_VOID;
+   if (sexp_port_openp(port)) {
+     sexp_port_openp(port) = 0;
+     if (sexp_oportp(port)) sexp_flush_forced(ctx, port);
+-#ifndef PLAN9
++#if defined(PUCHI_TEST)
+     if (sexp_filenop(sexp_port_fd(port))
+         && sexp_fileno_openp(sexp_port_fd(port))) {
+-      if (sexp_port_shutdownp(port)) {
+-        /* shutdown the socket if requested */
+-        if (sexp_iportp(port))
+-          shutdown(sexp_port_sock(port), sexp_oportp(port) ? SHUT_RDWR : SHUT_RD);
+-        if (sexp_oportp(port))
+-          shutdown(sexp_port_sock(port), SHUT_WR);
+-      }
+       if (!sexp_port_no_closep(port)) {
+         if (--sexp_fileno_count(sexp_port_fd(port)) == 0)
+           sexp_finalize_fileno(ctx, self, n, sexp_port_fd(port));
+       }
+     }
+ #endif
+-    if (sexp_port_stream(port) && ! sexp_port_no_closep(port))
+-      /* close the stream */
+-      fclose(sexp_port_stream(port));
++    if (sexp_port_stream_ops(port) && ! sexp_port_no_closep(port)) {
++      if (sexp_port_stream_ops(port)->close)
++        sexp_port_stream_ops(port)->close(sexp_port_stream_udata(port));
++      sexp_port_stream_ops(port) = NULL;
++      sexp_port_stream_udata(port) = NULL;
++    }
+     sexp_port_offset(port) = 0;
+     sexp_port_size(port) = 0;
+   }
+@@ -248,7 +250,7 @@
+ #if SEXP_USE_UNIFORM_VECTOR_LITERALS
+ sexp sexp_finalize_uvector (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
+   /* if (sexp_uvector_freep(obj)) */
+-  /*   free(sexp_uvector_data(obj)); */
++  /*   SEXP_FREE(NULL, sexp_uvector_data(obj)); */
+   return SEXP_VOID;
+ }
+ #endif
+@@ -266,7 +268,7 @@
+ #if SEXP_USE_PACKED_STRINGS
+   {(sexp)"String", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_STRING, 0, 0, 0, 0, 0, sexp_sizeof(string)+1, sexp_offsetof(string, length), 1, 0, 0, 0, 0, 0, 0, NULL},
+ #else
+-  {(sexp)"String", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_STRING, sexp_offsetof(string, bytes), 1, 1+SEXP_USE_STRING_INDEX_TABLE, 0, 0, sexp_sizeof(string), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
++  {(sexp)"String", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_STRING, sexp_offsetof(string, bytes), 1, 1, 0, 0, sexp_sizeof(string), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
+ #endif
+   {(sexp)"Vector", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_VECTOR, sexp_sizeof(vector), 0, 0, sexp_offsetof(vector, length), 1, sexp_sizeof(vector), sexp_offsetof(vector, length), sizeof(sexp), 0, 0, 0, 0, 0, 0, NULL},
+   {(sexp)"Flonum", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_FLONUM, 0, 0, 0, 0, 0, sexp_sizeof(flonum), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
+@@ -282,12 +284,14 @@
+ #endif
+   {(sexp)"Input-Port", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, SEXP_FINALIZE_PORTN, SEXP_IPORT, sexp_offsetof(port, name), 3, 3, 0, 0, sexp_sizeof(port), 0, 0, 0, 0, 0, 0, 0, 0, SEXP_FINALIZE_PORT},
+   {(sexp)"Output-Port", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, SEXP_FINALIZE_PORTN, SEXP_OPORT, sexp_offsetof(port, name), 3, 3, 0, 0, sexp_sizeof(port), 0, 0, 0, 0, 0, 0, 0, 0, SEXP_FINALIZE_PORT},
++#if defined(PUCHI_TEST)
+   {(sexp)"File-Descriptor", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, SEXP_FINALIZE_FILENON, SEXP_FILENO, 0, 0, 0, 0, 0, sexp_sizeof(fileno), 0, 0, 0, 0, 0, 0, 0, 0, SEXP_FINALIZE_FILENO},
++#endif
+   {(sexp)"Exception", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, (sexp)sexp_write_simple_object, NULL, NULL, SEXP_EXCEPTION, sexp_offsetof(exception, kind), 6, 6, 0, 0, sexp_sizeof(exception), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
+   {(sexp)"Procedure", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_PROCEDURE, sexp_offsetof(procedure, bc), 2, 2, 0, 0, sexp_sizeof(procedure), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
+   {(sexp)"Macro", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_MACRO, sexp_offsetof(macro, proc), 4, 4, 0, 0, sexp_sizeof(macro), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
+   {(sexp)"Sc", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, (sexp)sexp_write_simple_object, NULL, NULL, SEXP_SYNCLO, sexp_offsetof(synclo, env), 4, 4, 0, 0, sexp_sizeof(synclo), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
+-  {(sexp)"Environment", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_ENV, sexp_offsetof(env, parent), 3+(SEXP_USE_STABLE_ABI||SEXP_USE_RENAME_BINDINGS), 3+(SEXP_USE_STABLE_ABI||SEXP_USE_RENAME_BINDINGS), 0, 0, sexp_sizeof(env), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
++  {(sexp)"Environment", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_ENV, sexp_offsetof(env, parent), 3+(SEXP_USE_RENAME_BINDINGS), 3+(SEXP_USE_RENAME_BINDINGS), 0, 0, sexp_sizeof(env), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
+   {(sexp)"Bytecode", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_BYTECODE, sexp_offsetof(bytecode, name), 3, 3, 0, 0, sexp_sizeof(bytecode), offsetof(struct sexp_struct, value.bytecode.length), 1, 0, 0, 0, 0, 0, 0, NULL},
+   {(sexp)"Core-Form", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_CORE, sexp_offsetof(core, name), 1, 1, 0, 0, sexp_sizeof(core), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
+ #if SEXP_USE_STABLE_ABI || SEXP_USE_DL
+@@ -302,7 +306,7 @@
+   {(sexp)"Seq", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, (sexp)sexp_write_simple_object, NULL, NULL, SEXP_SEQ, sexp_offsetof(seq, ls), 2, 2, 0, 0, sexp_sizeof(seq), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
+   {(sexp)"Lit", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, (sexp)sexp_write_simple_object, NULL, NULL, SEXP_LIT, sexp_offsetof(lit, value), 2, 2, 0, 0, sexp_sizeof(lit), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
+   {(sexp)"Stack", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_STACK, sexp_sizeof(stack), 0, 0, sexp_offsetof(stack, top), 1, sexp_sizeof(stack), offsetof(struct sexp_struct, value.stack.length), sizeof(sexp), 0, 0, 0, 0, 0, 0, NULL},
+-  {(sexp)"Context", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_CONTEXT, sexp_offsetof(context, stack), 12+(SEXP_USE_STABLE_ABI||SEXP_USE_DL), 12+(SEXP_USE_STABLE_ABI||SEXP_USE_DL), 0, 0, sexp_sizeof(context), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
++  {(sexp)"Context", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_CONTEXT, sexp_offsetof(context, stack), 12, 12, 0, 0, sexp_sizeof(context), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
+   {(sexp)"Cpointer", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_CPOINTER, sexp_offsetof(cpointer, parent), 1, 0, 0, 0, sexp_sizeof(cpointer), sexp_offsetof(cpointer, length), 1, 0, 0, 0, 0, 0, 0, NULL},
+ #if SEXP_USE_STABLE_ABI || SEXP_USE_UNIFORM_VECTOR_LITERALS
+   {(sexp)"Uniform-Vector", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, (sexp)sexp_write_uvector, NULL, (sexp)"sexp_finalize_uvector", SEXP_UNIFORM_VECTOR, sexp_offsetof(uvector, bytes), 1, 1, 0, 0, sexp_sizeof(uvector), 0, 0, 0, 0, 0, 0, 0, 0, sexp_finalize_uvector},
+@@ -453,7 +457,7 @@
+ 
+ sexp sexp_finalize_c_type (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
+   if (sexp_cpointer_freep(obj))
+-    free(sexp_cpointer_value(obj));
++    SEXP_FREE(NULL, sexp_cpointer_value(obj));
+   return SEXP_VOID;
+ }
+ 
+@@ -470,57 +474,12 @@
+ #ifdef sexp_platform
+   sexp_platform,
+ #endif
+-#if SEXP_BSD
+-  "bsd",
+-#endif
+-#if SEXP_DARWIN
+-  "darwin",
+-#endif
+-#if SEXP_OPENBSD
+-  "openbsd",
+-#endif
+-#if SEXP_FREEBSD
+-  "freebsd",
+-#endif
+-#if SEXP_NETBSD
+-  "netbsd",
+-#endif
+-#if SEXP_DRAGONFLY
+-  "dragonfly",
+-#endif
+-#if defined(_WIN32)
+-  "windows",
+-#endif
+-#if SEXP_USE_DL
+-  "dynamic-loading",
+-#endif
+-#if SEXP_USE_BIDIRECTIONAL_PORTS
+-  "bidir-ports",
+-#endif
+ #if SEXP_USE_MODULES
+   "modules",
+ #endif
+-#if SEXP_USE_BOEHM
+-  "boehm-gc",
+-#endif
+ #if SEXP_USE_UTF8_STRINGS
+   "full-unicode",
+ #endif
+-#if SEXP_USE_STRING_INDEX_TABLE
+-  "string-index",
+-#endif
+-#if SEXP_USE_STRING_REF_CACHE
+-  "string-ref-cache",
+-#endif
+-#if SEXP_USE_GREEN_THREADS
+-  "threads",
+-#endif
+-#if SEXP_USE_NTP_GETTIME
+-  "ntp",
+-#endif
+-#if SEXP_USE_AUTO_FORCE
+-  "auto-force",
+-#endif
+ #if SEXP_USE_UNIFORM_VECTOR_LITERALS
+   "uvector",
+ #endif
+@@ -559,13 +537,12 @@
+ #endif
+ #if SEXP_USE_WEAK_REFERENCES
+   sexp_global(ctx, SEXP_G_WEAK_OBJECTS_PRESENT) = SEXP_FALSE;
+-  sexp_global(ctx, SEXP_G_FILE_DESCRIPTORS) = SEXP_FALSE;
+-  sexp_global(ctx, SEXP_G_NUM_FILE_DESCRIPTORS) = SEXP_ZERO;
+ #endif
+   sexp_global(ctx, SEXP_G_OOM_ERROR) = sexp_user_exception(ctx, SEXP_FALSE, "out of memory", SEXP_NULL);
+   sexp_global(ctx, SEXP_G_OOS_ERROR) = sexp_user_exception(ctx, SEXP_FALSE, "out of stack space", SEXP_NULL);
++#if defined(PUCHI_TEST)
+   sexp_global(ctx, SEXP_G_ABI_ERROR) = sexp_user_exception(ctx, SEXP_FALSE, "incompatible ABI", SEXP_NULL);
+-  sexp_global(ctx, SEXP_G_INTERRUPT_ERROR) = sexp_user_exception(ctx, SEXP_FALSE, "interrupt", SEXP_NULL);
++#endif
+   sexp_global(ctx, SEXP_G_QUOTE_SYMBOL) = sexp_intern(ctx, "quote", -1);
+   sexp_global(ctx, SEXP_G_QUASIQUOTE_SYMBOL) = sexp_intern(ctx, "quasiquote", -1);
+   sexp_global(ctx, SEXP_G_UNQUOTE_SYMBOL) = sexp_intern(ctx, "unquote", -1);
+@@ -686,11 +644,9 @@
+   sexp_context_alloc_usecs_sq(res) = 0;
+ #endif
+   sexp_context_tracep(res) = 0;
+-  sexp_context_timeoutp(res) = 0;
+   sexp_context_tailp(res) = 1;
+ #if SEXP_USE_GREEN_THREADS
+   sexp_context_errorp(res) = 0;
+-  sexp_context_event(res) = SEXP_FALSE;
+   sexp_context_refuel(res) = SEXP_DEFAULT_QUANTUM;
+ #endif
+ #if SEXP_USE_DL
+@@ -853,8 +809,9 @@
+     return sexp_print_exception_op(ctx, self, n, sexp_exception_irritants(exn), out);
+   }
+   sexp_gc_preserve2(ctx, ls, tmp);
+-  if (! sexp_oportp(out))
+-    out = tmp = sexp_make_output_port(ctx, stderr, SEXP_FALSE);
++  if (! sexp_oportp(out)) {
++    out = tmp = sexp_open_output_string(ctx);
++  }
+   sexp_write_string(ctx, "ERROR", out);
+   if (sexp_exceptionp(exn)) {
+     if (sexp_exception_procedure(exn)) {
+@@ -1666,22 +1623,16 @@
+   } else if (!sexp_port_openp(p)) {
+     return EOF;
+   } else if (sexp_port_stream(p)) {
+-    res = fread(sexp_port_buf(p) + BUF_START, 1, SEXP_PORT_BUFFER_SIZE - BUF_START, sexp_port_stream(p));
++    res = (sexp_port_stream_ops(p) && sexp_port_stream_ops(p)->read)
++      ? (int)sexp_port_stream_ops(p)->read(sexp_port_stream_udata(p), sexp_port_buf(p) + BUF_START, SEXP_PORT_BUFFER_SIZE - BUF_START)
++      : -1;
+     if (res >= 0) {
+       sexp_port_offset(p) = BUF_START;
+       sexp_port_size(p) = res + BUF_START;
+       res = ((sexp_port_offset(p) < sexp_port_size(p))
+              ? ((unsigned char*)sexp_port_buf(p))[sexp_port_offset(p)++] : EOF);
+     }
+-  } else if (sexp_filenop(sexp_port_fd(p))) {
+-    res = read(sexp_port_fileno(p), sexp_port_buf(p) + BUF_START, SEXP_PORT_BUFFER_SIZE - BUF_START);
+-    if (res >= 0) {
+-      sexp_port_offset(p) = BUF_START;
+-      sexp_port_size(p) = res + BUF_START;
+-      res = ((sexp_port_offset(p) < sexp_port_size(p))
+-             ? ((unsigned char*)sexp_port_buf(p))[sexp_port_offset(p)++] : EOF);
+-    }
+-  } else if (sexp_port_customp(p)) {
++    } else if (sexp_port_customp(p)) {
+     sexp_gc_preserve2(ctx, tmp, origbytes);
+     tmp = sexp_list2(ctx, sexp_make_fixnum(BUF_START), sexp_make_fixnum(SEXP_PORT_BUFFER_SIZE));
+     origbytes = sexp_port_binaryp(p) && !SEXP_USE_PACKED_STRINGS ? sexp_string_bytes(sexp_port_buffer(p)) : sexp_port_buffer(p);
+@@ -1746,24 +1697,11 @@
+     return -1;
+   off = sexp_port_offset(p);
+   if (sexp_port_stream(p)) {
+-    if (off > 0) fwrite(sexp_port_buf(p), 1, off, sexp_port_stream(p));
+-    res = fflush(sexp_port_stream(p));
+-  } else if (sexp_filenop(sexp_port_fd(p))) {
+-    if (off > 0)
+-      res = write(sexp_fileno_fd(sexp_port_fd(p)), sexp_port_buf(p), off);
+-    if (res < off) {
+-      if (res > 0) {
+-        memmove(sexp_port_buf(p), sexp_port_buf(p) + res, off - res);
+-        sexp_port_offset(p) = off - res;
+-        res = 0;
+-      } else {
+-        res = -1;
+-      }
+-    } else {
+-      sexp_port_offset(p) = 0;
+-      res = 0;
+-    }
+-  } else if (!sexp_port_openp(p)) {
++    if (off > 0 && sexp_port_stream_ops(p) && sexp_port_stream_ops(p)->write)
++      sexp_port_stream_ops(p)->write(sexp_port_stream_udata(p), sexp_port_buf(p), (size_t)off);
++    res = (sexp_port_stream_ops(p) && sexp_port_stream_ops(p)->flush)
++      ? sexp_port_stream_ops(p)->flush(sexp_port_stream_udata(p)) : 0;
++    } else if (!sexp_port_openp(p)) {
+     return -1;
+   } else if (sexp_port_offset(p) > 0) {
+     sexp_gc_preserve1(ctx, tmp);
+@@ -1791,7 +1729,7 @@
+ sexp sexp_open_input_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp str) {
+   sexp res;
+   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, str);
+-  res = sexp_make_input_port(ctx, NULL, SEXP_FALSE);
++  res = sexp_make_input_port(ctx, NULL, NULL, SEXP_FALSE);
+   if (sexp_exceptionp(res)) return res;
+   sexp_port_cookie(res) = str;
+   sexp_port_buf(res) = sexp_string_data(str);
+@@ -1804,7 +1742,7 @@
+ sexp sexp_open_output_string_op (sexp ctx, sexp self, sexp_sint_t n) {
+   sexp_gc_var1(res);
+   sexp_gc_preserve1(ctx, res);
+-  res = sexp_make_output_port(ctx, NULL, SEXP_FALSE);
++  res = sexp_make_output_port(ctx, NULL, NULL, SEXP_FALSE);
+   if (!sexp_exceptionp(res)) {
+     sexp_port_cookie(res) = sexp_cons(ctx, SEXP_FALSE, SEXP_NULL);
+     sexp_car(sexp_port_cookie(res)) =
+@@ -1850,6 +1788,7 @@
+   return res;
+ }
+ 
++#if defined(PUCHI_TEST)
+ sexp sexp_open_input_file_descriptor (sexp ctx, sexp self, sexp_sint_t n, sexp fileno, sexp shutdownp) {
+   sexp_gc_var2(res, str);
+   sexp_assert_type(ctx, sexp_filenop, SEXP_FILENO, fileno);
+@@ -1869,6 +1808,8 @@
+   return res;
+ }
+ 
++#endif
++#if defined(PUCHI_TEST)
+ sexp sexp_open_output_file_descriptor (sexp ctx, sexp self, sexp_sint_t n, sexp fileno, sexp shutdownp) {
+   sexp res = sexp_open_input_file_descriptor(ctx, self, n, fileno, shutdownp);
+   if (!sexp_exceptionp(res)) {
+@@ -1878,6 +1819,7 @@
+   return res;
+ }
+ 
++#endif
+ #if SEXP_USE_WEAK_REFERENCES
+ sexp sexp_make_ephemeron_op(sexp ctx, sexp self, sexp_sint_t n, sexp key, sexp value) {
+   sexp res = sexp_alloc_type(ctx, pair, SEXP_EPHEMERON);
+@@ -1950,10 +1892,10 @@
+   }
+   if (sexp_insert_fileno_ephemeron(ctx, sexp_global(ctx, SEXP_G_FILE_DESCRIPTORS), sexp_make_ephemeron(ctx, fileno, SEXP_FALSE)))
+     n++;
+-  sexp_global(ctx, SEXP_G_NUM_FILE_DESCRIPTORS) = sexp_make_fixnum(n);
+ }
+ #endif  /* SEXP_USE_UNIFY_FILENOS_BY_NUMBER */
+ 
++#if defined(PUCHI_TEST)
+ sexp sexp_make_fileno_op (sexp ctx, sexp self, sexp_sint_t n, sexp fd, sexp no_closep) {
+   sexp_gc_var1(res);
+   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, fd);
+@@ -1980,22 +1922,32 @@
+   return res;
+ }
+ 
+-sexp sexp_make_input_port (sexp ctx, FILE* in, sexp name) {
++#endif
++sexp sexp_make_input_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name) {
+   sexp p = sexp_alloc_type(ctx, port, SEXP_IPORT);
+   if (sexp_exceptionp(p)) return p;
+-  sexp_port_stream(p) = in;
++  sexp_port_stream_ops(p) = ops;
++  sexp_port_stream_udata(p) = udata;
+   sexp_port_name(p) = name;
+   sexp_port_line(p) = 1;
+   sexp_port_flags(p) = SEXP_PORT_UNKNOWN_FLAGS;
+   sexp_port_buf(p) = NULL;
++#if defined(PUCHI_TEST)
+   sexp_port_fd(p) = SEXP_FALSE;
++#endif
+   sexp_port_openp(p) = 1;
++#if defined(PUCHI_TEST)
+   sexp_port_bidirp(p) = 0;
++#endif
+   sexp_port_binaryp(p) = 1;
++#if defined(PUCHI_TEST)
+   sexp_port_shutdownp(p) = 0;
++#endif
+   sexp_port_no_closep(p) = 0;
+   sexp_port_sourcep(p) = 0;
++#if defined(PUCHI_TEST)
+   sexp_port_blockedp(p) = 0;
++#endif
+ #if SEXP_USE_FOLD_CASE_SYMS
+   sexp_port_fold_casep(p) = sexp_truep(sexp_global(ctx, SEXP_G_FOLD_CASE_P));
+ #endif
+@@ -2014,21 +1966,21 @@
+   return p;
+ }
+ 
+-sexp sexp_make_output_port (sexp ctx, FILE* out, sexp name) {
+-  sexp p = sexp_make_input_port(ctx, out, name);
++sexp sexp_make_output_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name) {
++  sexp p = sexp_make_input_port(ctx, ops, udata, name);
+   if (sexp_exceptionp(p)) return p;
+   sexp_pointer_tag(p) = SEXP_OPORT;
+   return p;
+ }
+ 
+-sexp sexp_make_non_null_input_port (sexp ctx, FILE* in, sexp name) {
+-  if (!in) return sexp_user_exception(ctx, SEXP_FALSE, "null input-port", name);
+-  return sexp_make_input_port(ctx, in, name);
+-}
+-
+-sexp sexp_make_non_null_output_port (sexp ctx, FILE* out, sexp name) {
+-  if (!out) return sexp_user_exception(ctx, SEXP_FALSE, "null output-port", name);
+-  return sexp_make_output_port(ctx, out, name);
++sexp sexp_make_non_null_input_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name) {
++  if (!ops) return sexp_user_exception(ctx, SEXP_FALSE, "null input-port", name);
++  return sexp_make_input_port(ctx, ops, udata, name);
++}
++
++sexp sexp_make_non_null_output_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name) {
++  if (!ops) return sexp_user_exception(ctx, SEXP_FALSE, "null output-port", name);
++  return sexp_make_output_port(ctx, ops, udata, name);
+ }
+ 
+ #if SEXP_USE_BIDIRECTIONAL_PORTS
+@@ -2080,10 +2032,10 @@
+       if (!forcep
+           && (((c = sexp_read_char(ctx, in)) == EOF)
+               && sexp_port_stream(in)
+-              && (sexp_port_stream(in) ? ferror(sexp_port_stream(in)) : 1)
++              && (sexp_port_stream(in) ? (sexp_port_stream_ops(in) && sexp_port_stream_ops(in)->error_p ? sexp_port_stream_ops(in)->error_p(sexp_port_stream_udata(in)) : 0) : 1)
+               && (errno == EAGAIN))) {
+         if (sexp_port_stream(in))
+-          clearerr(sexp_port_stream(in));
++          do { if (sexp_port_stream_ops(in) && sexp_port_stream_ops(in)->clear_error) sexp_port_stream_ops(in)->clear_error(sexp_port_stream_udata(in)); } while (0);
+         f = sexp_global(ctx, SEXP_G_THREADS_BLOCKER);
+         if (sexp_applicablep(f)) {
+           sexp_apply2(ctx, f, in, SEXP_FALSE);
+@@ -2146,10 +2098,14 @@
+   sexp_assert_type(ctx, sexp_iportp, SEXP_IPORT, in);
+   if (!sexp_port_openp(in))
+     return SEXP_FALSE;
+-  if (sexp_port_buf(in))
+-    if (sexp_port_offset(in) < sexp_port_size(in)
+-        || (!sexp_filenop(sexp_port_fd(in)) && !sexp_port_stream(in)))
++  if (sexp_port_buf(in)) {
++    if (sexp_port_offset(in) < sexp_port_size(in))
+       return SEXP_TRUE;
++#if defined(PUCHI_TEST)
++    if (!sexp_filenop(sexp_port_fd(in)) && !sexp_port_stream(in))
++      return SEXP_TRUE;
++#endif
++  }
+ #if SEXP_USE_GREEN_THREADS     /* maybe not just when threads are enabled */
+   if (sexp_filenop(sexp_port_fd(in)))
+     return sexp_make_boolean(sexp_fileno_ready_p(sexp_port_fileno(in)));
+@@ -2439,11 +2395,13 @@
+       sexp_write_char(ctx, ')', out);
+       break;
+ #endif
++#if defined(PUCHI_TEST)
+     case SEXP_FILENO:
+       sexp_write_string(ctx, "#<fileno ", out);
+       sexp_write(ctx, sexp_make_fixnum(sexp_fileno_fd(obj)), out);
+       sexp_write_char(ctx, '>', out);
+       break;
++#endif
+     case SEXP_SYNCLO:
+       sexp_write_string(ctx, "#<SC ", out);
+       sexp_write(ctx, sexp_make_fixnum(obj), out);
+@@ -2598,7 +2556,7 @@
+   res = sexp_flush_forced(ctx, out);
+   if (res == EOF) {
+ #if SEXP_USE_GREEN_THREADS
+-    if (sexp_port_stream(out) && ferror(sexp_port_stream(out)) && (errno == EAGAIN))
++    if (sexp_port_stream(out) && (sexp_port_stream_ops(out) && sexp_port_stream_ops(out)->error_p ? sexp_port_stream_ops(out)->error_p(sexp_port_stream_udata(out)) : 0) && (errno == EAGAIN))
+       return sexp_global(ctx, SEXP_G_IO_BLOCK_ERROR);
+ #endif
+     return SEXP_FALSE;

@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Helpers for amalgamate.sh — embed Scheme as C strings and trim init-7.
+"""Helpers for amalgamate.sh — embed Scheme, mechanical rewrites, strip dead backends.
 
-Host-owned embed contract (see puchi_host_embed.py + amalgamate.sh banner):
-CPU/memory only in core; host supplies alloc/diagnose/fatal and stream_ops;
-ALWAYS_ZERO_STRIP flags are forced 0 and deleted by strip-dead-backends;
-STATIC_LIBS only under PUCHI_TEST; libc only via PUCHI_* wrappers.
+Body forks live in puchi/patches/. Product API lives in puchi/product/.
+This module is mechanical only (no curated host/port forks).
 """
 from __future__ import annotations
 
@@ -15,23 +13,15 @@ from pathlib import Path
 
 from puchi_host_embed import (
     ALWAYS_ZERO_STRIP,
-    features_force_extra,
-    patch_eval_c_host,
-    patch_eval_h_host,
+    brand_puchi_features,
+    fold_always_zero_type_slots,
     patch_opcodes,
-    patch_sexp_c_host,
-    patch_sexp_h_host,
+    rewrite_host_allocators,
     rewrite_libc_calls,
     trim_init7_load_port,
 )
 from puchi_strip_gunk import (
     assert_no_project_includes,
-    scrub_dead_feature_knobs,
-    scrub_eval_c_disk_boot,
-    scrub_eval_h_gunk,
-    scrub_portable_poll_stubs,
-    scrub_sexp_c_gunk,
-    scrub_sexp_h_gunk,
     scrub_shipped_always_zero_defines,
     trim_init7_dead_arms,
 )
@@ -87,29 +77,423 @@ def embed_c_string(name: str, text: str) -> str:
 
 
 def trim_meta7(src: str) -> str:
-    """Stub include-shared arms so meta-7 never touches DLLs / .so files."""
+    """Stub include-shared arms for diskless / no-DL builds."""
     out = normalize_newlines(src)
-    replacements = [
-        (
-            "((include-shared)\n"
-            "              (load-modules (cdr x) *shared-object-extension* #f))",
-            "((include-shared)\n"
-            '              (error "include-shared: not available in puchi" x))',
-        ),
-        (
-            "((include-shared-optionally)\n"
-            "              (load-modules (list (cadr x)) *shared-object-extension* #f\n"
-            "                            (lambda () (load-modules (cddr x) \"\" #f))))",
-            "((include-shared-optionally)\n"
-            "              (load-modules (cddr x) \"\" #f))",
-        ),
-    ]
-    for old, new in replacements:
-        if old not in out:
-            print(f"warning: trim_meta7 pattern not matched:\n{old[:60]}...", file=sys.stderr)
-        else:
-            out = out.replace(old, new, 1)
+    old_shared = (
+        "((include-shared)\n"
+        "              (load-modules (cdr x) *shared-object-extension* #f))"
+    )
+    new_shared = (
+        "((include-shared)\n"
+        '              (error "include-shared: not available in puchi" x))'
+    )
+    old_opt = (
+        "((include-shared-optionally)\n"
+        "              (load-modules (list (cadr x)) *shared-object-extension* #f\n"
+        '                            (lambda () (load-modules (cddr x) "" #f))))'
+    )
+    new_opt = (
+        "((include-shared-optionally)\n"
+        '              (load-modules (cddr x) "" #f))'
+    )
+    if old_shared not in out:
+        raise SystemExit("trim_meta7: include-shared arm not found")
+    if old_opt not in out:
+        raise SystemExit("trim_meta7: include-shared-optionally arm not found")
+    out = out.replace(old_shared, new_shared, 1)
+    out = out.replace(old_opt, new_opt, 1)
     return ";; trimmed for puchi amalgamation - no include-shared / DLLs\n" + out
+
+
+def splice_sexp_to_double(bignum_c: str) -> str:
+    """Re-gate sexp_to_double so it builds under FLONUMS without BIGNUMS."""
+    text = normalize_newlines(bignum_c)
+    if "SEXP_USE_FLONUMS || SEXP_USE_BIGNUMS" in text and "sexp_to_double" in text:
+        return text
+    old = (
+        "double sexp_to_double (sexp ctx, sexp x) {\n"
+        "  if (sexp_flonump(x))\n"
+        "    return sexp_flonum_value(x);\n"
+        "  else if (sexp_fixnump(x))\n"
+        "    return sexp_fixnum_to_double(x);\n"
+        "  else if (sexp_bignump(x))\n"
+        "    return sexp_bignum_to_double(x);\n"
+        "#if SEXP_USE_RATIOS\n"
+        "  else if (sexp_ratiop(x))\n"
+        "    return sexp_ratio_to_double(ctx, x);\n"
+        "#endif\n"
+        "  else\n"
+        "    return 0.0;\n"
+        "}\n"
+    )
+    new = (
+        "#endif /* SEXP_USE_BIGNUMS — reopen after sexp_to_double */\n"
+        "\n"
+        "#if SEXP_USE_FLONUMS || SEXP_USE_BIGNUMS\n"
+        "double sexp_to_double (sexp ctx, sexp x) {\n"
+        "  if (sexp_flonump(x))\n"
+        "    return sexp_flonum_value(x);\n"
+        "  else if (sexp_fixnump(x))\n"
+        "    return sexp_fixnum_to_double(x);\n"
+        "#if SEXP_USE_BIGNUMS\n"
+        "  else if (sexp_bignump(x))\n"
+        "    return sexp_bignum_to_double(x);\n"
+        "#endif\n"
+        "#if SEXP_USE_RATIOS\n"
+        "  else if (sexp_ratiop(x))\n"
+        "    return sexp_ratio_to_double(ctx, x);\n"
+        "#endif\n"
+        "  else\n"
+        "    return 0.0;\n"
+        "}\n"
+        "#endif /* SEXP_USE_FLONUMS || SEXP_USE_BIGNUMS */\n"
+        "\n"
+        "#if SEXP_USE_BIGNUMS\n"
+    )
+    if old not in text:
+        raise SystemExit("splice_sexp_to_double: function body not found")
+    return text.replace(old, new, 1)
+
+
+def splice_exact_sqrt(eval_c: str) -> str:
+    """Provide flonum/fixnum exact-sqrt when the bignum body is compiled out."""
+    text = normalize_newlines(eval_c)
+    if "SEXP_USE_MATH && !SEXP_USE_BIGNUMS" in text:
+        return text
+    marker = (
+        "  sexp_gc_release2(ctx);\n"
+        "  return res;\n"
+        "}\n"
+        "#endif\n"
+        "\n"
+        "sexp sexp_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {"
+    )
+    insert = (
+        "  sexp_gc_release2(ctx);\n"
+        "  return res;\n"
+        "}\n"
+        "#endif\n"
+        "\n"
+        "#if SEXP_USE_MATH && !SEXP_USE_BIGNUMS\n"
+        "sexp sexp_exact_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {\n"
+        "  sexp_gc_var2(res, rem);\n"
+        "  sexp_gc_preserve2(ctx, res, rem);\n"
+        "#if SEXP_USE_FLONUMS\n"
+        "  res = sexp_inexact_sqrt(ctx, self, n, z);\n"
+        "  if (sexp_exceptionp(res)) {\n"
+        "    sexp_gc_release2(ctx);\n"
+        "    return res;\n"
+        "  }\n"
+        "  if (sexp_flonump(res))\n"
+        "    res = sexp_make_fixnum((sexp_sint_t)PUCHI_TRUNC(sexp_flonum_value(res)));\n"
+        "  rem = sexp_fx_mul(res, res);\n"
+        "  rem = sexp_fx_sub(z, rem);\n"
+        "  if (sexp_negativep(rem)) {\n"
+        "    res = sexp_fx_sub(res, SEXP_ONE);\n"
+        "    rem = sexp_fx_mul(res, res);\n"
+        "    rem = sexp_fx_sub(z, rem);\n"
+        "  }\n"
+        "  res = sexp_cons(ctx, res, rem);\n"
+        "#else\n"
+        "  sexp_sint_t v, r, rr;\n"
+        "  (void)n;\n"
+        "  if (!sexp_fixnump(z) || sexp_unbox_fixnum(z) < 0) {\n"
+        "    sexp_gc_release2(ctx);\n"
+        "    return sexp_type_exception(ctx, self, SEXP_FIXNUM, z);\n"
+        "  }\n"
+        "  v = sexp_unbox_fixnum(z);\n"
+        "  r = 0;\n"
+        "  while ((rr = (r + 1) * (r + 1)) > 0 && rr <= v) r++;\n"
+        "  res = sexp_cons(ctx, sexp_make_fixnum(r), sexp_make_fixnum(v - r * r));\n"
+        "#endif\n"
+        "  sexp_gc_release2(ctx);\n"
+        "  return res;\n"
+        "}\n"
+        "#endif\n"
+        "\n"
+        "sexp sexp_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {"
+    )
+    if marker not in text:
+        raise SystemExit("splice_exact_sqrt: marker after bignum exact_sqrt not found")
+    return text.replace(marker, insert, 1)
+
+
+def splice_to_double_decl(sexp_h: str) -> str:
+    """Declare sexp_to_double when flonums are on but bignum.h is not included.
+
+    bignum.h already declares sexp_to_double under #if SEXP_USE_BIGNUMS; that
+    decl is invisible in ABI-f builds, so we always add a flonum-only decl
+    outside the bignum gate (idempotent).
+    """
+    text = normalize_newlines(sexp_h)
+    gate = "#if SEXP_USE_FLONUMS && !SEXP_USE_BIGNUMS\nSEXP_API double sexp_to_double"
+    if gate in text:
+        return text
+    marker = "/***************************** predicates *****************************/"
+    decl = (
+        "#if SEXP_USE_FLONUMS && !SEXP_USE_BIGNUMS\n"
+        "SEXP_API double sexp_to_double (sexp ctx, sexp x);\n"
+        "#endif\n"
+        "\n"
+    )
+    if marker not in text:
+        raise SystemExit("splice_to_double_decl: predicates marker not found")
+    return text.replace(marker, decl + marker, 1)
+
+
+def splice_reader_mul(sexp_c: str) -> str:
+    """Gate #e reader muls: B→sexp_mul, F∧¬B→product puchi_fx_or_fl_mul, else macro."""
+    text = normalize_newlines(sexp_c)
+    if "puchi_fx_or_fl_mul" in text:
+        return text
+
+    old_complex = (
+        "        sexp_complex_real(den) = sexp_expt(ctx, SEXP_TEN, sexp_complex_real(den));\n"
+        "        sexp_complex_real(den) = sexp_mul(ctx, res, sexp_complex_real(den));\n"
+    )
+    new_complex = (
+        "        sexp_complex_real(den) = sexp_expt(ctx, SEXP_TEN, sexp_complex_real(den));\n"
+        "#if SEXP_USE_BIGNUMS\n"
+        "        sexp_complex_real(den) = sexp_mul(ctx, res, sexp_complex_real(den));\n"
+        "#elif SEXP_USE_FLONUMS\n"
+        "        sexp_complex_real(den) = puchi_fx_or_fl_mul(ctx, res, sexp_complex_real(den));\n"
+        "#else\n"
+        "        sexp_complex_real(den) = sexp_mul(ctx, res, sexp_complex_real(den));\n"
+        "#endif\n"
+    )
+    old_else = (
+        "        den = sexp_expt(ctx, SEXP_TEN, den);\n"
+        "        res = sexp_mul(ctx, res, den);\n"
+    )
+    new_else = (
+        "        den = sexp_expt(ctx, SEXP_TEN, den);\n"
+        "#if SEXP_USE_BIGNUMS\n"
+        "        res = sexp_mul(ctx, res, den);\n"
+        "#elif SEXP_USE_FLONUMS\n"
+        "        res = puchi_fx_or_fl_mul(ctx, res, den);\n"
+        "#else\n"
+        "        res = sexp_mul(ctx, res, den);\n"
+        "#endif\n"
+    )
+    if old_complex not in text:
+        raise SystemExit("splice_reader_mul: #e complex sexp_mul not found")
+    if old_else not in text:
+        raise SystemExit("splice_reader_mul: #e else sexp_mul not found")
+    text = text.replace(old_complex, new_complex, 1)
+    text = text.replace(old_else, new_else, 1)
+    return text
+
+
+def splice_min_fixnum_overflow(vm_c: str) -> str:
+    """MIN_FIXNUM/-1: raise when ¬B instead of calling sexp_fixnum_to_bignum."""
+    text = normalize_newlines(vm_c)
+    if 'sexp_raise("integer overflow"' in text:
+        return text
+    old = (
+        "      if (tmp1 == sexp_make_fixnum(SEXP_MIN_FIXNUM) && tmp2 == SEXP_NEG_ONE) {\n"
+        "        _ARG1 = sexp_fixnum_to_bignum(ctx, tmp1);\n"
+        "        sexp_negate_exact(_ARG1);\n"
+        "      } else {\n"
+        "        _ARG1 = sexp_fx_div(tmp1, tmp2);\n"
+        "      }\n"
+    )
+    new = (
+        "      if (tmp1 == sexp_make_fixnum(SEXP_MIN_FIXNUM) && tmp2 == SEXP_NEG_ONE) {\n"
+        "#if SEXP_USE_BIGNUMS\n"
+        "        _ARG1 = sexp_fixnum_to_bignum(ctx, tmp1);\n"
+        "        sexp_negate_exact(_ARG1);\n"
+        "#else\n"
+        '        sexp_raise("integer overflow", sexp_list2(ctx, tmp1, tmp2));\n'
+        "#endif\n"
+        "      } else {\n"
+        "        _ARG1 = sexp_fx_div(tmp1, tmp2);\n"
+        "      }\n"
+    )
+    if text.count(old) != 2:
+        raise SystemExit(
+            f"splice_min_fixnum_overflow: expected 2 MIN_FIXNUM/-1 arms, found {text.count(old)}"
+        )
+    return text.replace(old, new)
+
+
+def scrub_features_h(text: str) -> str:
+    """Mechanical host scrub of upstream features.h (replaces 005-features-host.diff)."""
+    text = normalize_newlines(text)
+
+    start = text.find("/* uncomment this to disable most features */")
+    end = text.find("/* the initial heap size in bytes */")
+    if start < 0 or end < 0:
+        raise SystemExit("scrub_features_h: comment catalog markers not found")
+    catalog = (
+        "/* Numeric and OS features are selected by the PUCHI_* macros at the\n"
+        " * top of this file. Chibi's 'uncomment to #define SEXP_USE_*' notes\n"
+        " * are omitted here; they do not configure puchi.\n"
+        " * Heap-size knobs below are still live #ifndef defaults.\n"
+        " */\n\n"
+    )
+    text = text[:start] + catalog + text[end:]
+
+    text = text.replace(
+        "/* the default number of opcodes to run each thread for */\n"
+        "#ifndef SEXP_DEFAULT_QUANTUM\n"
+        "#define SEXP_DEFAULT_QUANTUM 500\n"
+        "#endif\n\n",
+        "\n",
+    )
+    text = text.replace(
+        "/*         DEFAULTS - DO NOT MODIFY ANYTHING BELOW THIS LINE            */",
+        "/* puchi: defaults (dead OS backends stripped by amalgamate) */",
+    )
+
+    bsd_old = (
+        "#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__) || defined(__OpenBSD__)\n"
+        "#define SEXP_BSD 1\n"
+        "#else\n"
+        "#define SEXP_BSD 0\n"
+        "#if ! defined(_GNU_SOURCE) && ! defined(_WIN32) && ! defined(PLAN9)\n"
+        "#define _GNU_SOURCE\n"
+        "#endif\n"
+        "#endif\n"
+        "\n"
+        "/* Detect specific BSD */\n"
+        "#if SEXP_BSD\n"
+        "#if defined(__APPLE__)\n"
+        "#define SEXP_DARWIN 1\n"
+        "#define SEXP_FREEBSD 0\n"
+        "#define SEXP_NETBSD 0\n"
+        "#define SEXP_DRAGONFLY 0\n"
+        "#define SEXP_OPENBSD 0\n"
+        "#elif defined(__FreeBSD__)\n"
+        "#define SEXP_DARWIN 0\n"
+        "#define SEXP_FREEBSD 1\n"
+        "#define SEXP_NETBSD 0\n"
+        "#define SEXP_DRAGONFLY 0\n"
+        "#define SEXP_OPENBSD 0\n"
+        "#elif defined(__NetBSD__)\n"
+        "#define SEXP_DARWIN 0\n"
+        "#define SEXP_FREEBSD 0\n"
+        "#define SEXP_NETBSD 1\n"
+        "#define SEXP_DRAGONFLY 0\n"
+        "#define SEXP_OPENBSD 0\n"
+        "#elif defined(__DragonFly__)\n"
+        "#define SEXP_DARWIN 0\n"
+        "#define SEXP_FREEBSD 0\n"
+        "#define SEXP_NETBSD 0\n"
+        "#define SEXP_DRAGONFLY 1\n"
+        "#define SEXP_OPENBSD 0\n"
+        "#elif defined(__OpenBSD__)\n"
+        "#define SEXP_DARWIN 0\n"
+        "#define SEXP_FREEBSD 0\n"
+        "#define SEXP_NETBSD 0\n"
+        "#define SEXP_DRAGONFLY 0\n"
+        "#define SEXP_OPENBSD 1\n"
+        "#endif\n"
+        "#endif\n"
+    )
+    bsd_new = (
+        "/* puchi: no host-OS feature probe; platform is \"puchi\"/\"portable\" */\n"
+        "#define SEXP_BSD 0\n"
+        "#define SEXP_DARWIN 0\n"
+        "#define SEXP_FREEBSD 0\n"
+        "#define SEXP_NETBSD 0\n"
+        "#define SEXP_DRAGONFLY 0\n"
+        "#define SEXP_OPENBSD 0\n"
+    )
+    if bsd_old not in text:
+        raise SystemExit("scrub_features_h: BSD probe block not found")
+    text = text.replace(bsd_old, bsd_new, 1)
+
+    for block in (
+        "#ifndef sexp_default_user_module_path\n"
+        '#define sexp_default_user_module_path "./lib:."\n'
+        "#endif\n\n",
+        "#ifndef SEXP_ALLOC_HISTOGRAM_BUCKETS\n"
+        "#define SEXP_ALLOC_HISTOGRAM_BUCKETS 32\n"
+        "#endif\n\n"
+        "#ifndef SEXP_BACKTRACE_SIZE\n"
+        "#define SEXP_BACKTRACE_SIZE 3\n"
+        "#endif\n\n",
+        "#ifndef SEXP_STRING_INDEX_TABLE_CHUNK_SIZE\n"
+        "#define SEXP_STRING_INDEX_TABLE_CHUNK_SIZE 64\n"
+        "#endif\n\n",
+        "#ifndef SEXP_EPOCH_OFFSET\n"
+        "#if SEXP_USE_2010_EPOCH\n"
+        "#define SEXP_EPOCH_OFFSET 1262271600\n"
+        "#else\n"
+        "#define SEXP_EPOCH_OFFSET 0\n"
+        "#endif\n"
+        "#endif\n\n",
+        "#ifndef SEXP_POLL_SLEEP_TIME\n"
+        "#define SEXP_POLL_SLEEP_TIME 5000\n"
+        "#define SEXP_POLL_SLEEP_TIME_MS 5\n"
+        "#endif\n\n",
+    ):
+        if block in text:
+            text = text.replace(block, "\n", 1)
+
+    # PLAN9 / Win32 string macros → rely on PUCHI_* / rewrite_libc
+    text = text.replace("#define strcasecmp cistrcmp\n", "/* puchi: use PUCHI_STRCASECMP */\n")
+    text = text.replace("#define strncasecmp cistrncmp\n", "/* puchi: use PUCHI_STRNCASECMP */\n")
+    text = text.replace("#define SHUT_RD 0 /* SD_RECEIVE */\n", "")
+    text = text.replace("#define SHUT_WR 1 /* SD_SEND */\n", "")
+    text = text.replace("#define SHUT_RDWR 2 /* SD_BOTH */\n", "")
+    text = text.replace("#define strcasecmp _stricmp\n", "/* puchi: use PUCHI_STRCASECMP */\n")
+    text = text.replace("#define strncasecmp _strnicmp\n", "/* puchi: use PUCHI_STRNCASECMP */\n")
+    text = text.replace(
+        "#define snprintf(buf, len, fmt, val) sprintf(buf, fmt, val)\n",
+        "/* puchi: use PUCHI_SNPRINTF */\n",
+    )
+    text = text.replace("#define strcasecmp lstrcmpi\n", "/* puchi: use PUCHI_STRCASECMP */\n")
+    text = text.replace(
+        "#define strncasecmp(s1, s2, n) lstrcmpi(s1, s2)\n",
+        "/* puchi: use PUCHI_STRNCASECMP */\n",
+    )
+
+    api_old = (
+        "#ifdef _WIN32\n"
+        "#ifdef SEXP_STATIC_LIBRARY\n"
+        "#define SEXP_API    extern\n"
+        "#else\n"
+        "#ifdef BUILDING_DLL\n"
+        "#define SEXP_API    __declspec(dllexport)\n"
+        "#else\n"
+        "#define SEXP_API    __declspec(dllimport)\n"
+        "#endif\n"
+        "#endif\n"
+        "#else\n"
+        "#define SEXP_API    extern\n"
+        "#endif\n"
+    )
+    if api_old not in text:
+        raise SystemExit("scrub_features_h: SEXP_API block not found")
+    text = text.replace(api_old, "#define SEXP_API    extern\n", 1)
+
+    abi_start = text.find("/************************************************************************/\n"
+                          "/* Feature signature.")
+    if abi_start < 0:
+        raise SystemExit("scrub_features_h: ABI signature section not found")
+    abi_new = (
+        "\n"
+        "/* puchi: no shared-lib / image ABI fingerprint. Harness clibs only. */\n"
+        "#if defined(PUCHI_TEST)\n"
+        "typedef char sexp_abi_identifier_t[8];\n"
+        '#define SEXP_ABI_IDENTIFIER "--------"\n'
+        "#define sexp_version_compatible(ctx, subver, genver) 1\n"
+        "#define sexp_abi_compatible(ctx, subabi, genabi) 1\n"
+        "#endif\n"
+    )
+    text = text[:abi_start] + abi_new
+    return text
+
+
+def scrub_gc_host(gc_c: str) -> str:
+    """Disable CHIBI_MAX_ALLOC getenv; allocators handled by rewrite_host_allocators."""
+    text = normalize_newlines(gc_c)
+    old = '    max_alloc = getenv("CHIBI_MAX_ALLOC");'
+    new = "    max_alloc = NULL; /* puchi: no getenv heap cap */"
+    if old not in text:
+        raise SystemExit("scrub_gc_host: CHIBI_MAX_ALLOC getenv not found")
+    return text.replace(old, new, 1)
 
 
 def trim_init7(src: str) -> str:
@@ -145,25 +529,23 @@ def trim_init7(src: str) -> str:
     for pat in deletions:
         out2, n = re.subn(pat, "", out, count=1, flags=re.MULTILINE)
         if n == 0:
-            print(f"warning: trim_init7 pattern not matched:\n{pat[:60]}...", file=sys.stderr)
+            raise SystemExit(f"trim_init7 pattern not matched:\n{pat[:80]}...")
         out = out2
 
     # Replace (define (load ... entire definition with stub
     load_start = out.find("(define (load file . o)")
     if load_start < 0:
-        print("warning: load definition not matched for trim", file=sys.stderr)
-    else:
-        # End at the blank line / section after the closing parens of load
-        marker = "\n;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;\n;; promises"
-        load_end = out.find(marker, load_start)
-        if load_end < 0:
-            print("warning: load definition end marker not found", file=sys.stderr)
-        else:
-            stub = (
-                "(define (load file . o)\n"
-                "  (error \"load: not available in puchi core; host/harness may redefine\" file))\n"
-            )
-            out = out[:load_start] + stub + out[load_end:]
+        raise SystemExit("trim_init7: load definition not matched")
+    # End at the blank line / section after the closing parens of load
+    marker = "\n;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;\n;; promises"
+    load_end = out.find(marker, load_start)
+    if load_end < 0:
+        raise SystemExit("trim_init7: load definition end marker not found")
+    stub = (
+        "(define (load file . o)\n"
+        "  (error \"load: not available in puchi core; host/harness may redefine\" file))\n"
+    )
+    out = out[:load_start] + stub + out[load_end:]
 
     # Stub (library) feature in cond-expand:
     # ((library) (eval `(find-module ',(cadr x)) (%meta-env)))
@@ -177,437 +559,73 @@ def trim_init7(src: str) -> str:
             line_end = out.find("\n", idx)
             out = out[:line_start] + "             ((library) #f)\n" + out[line_end + 1 :]
         else:
-            print("warning: (library) cond-expand clause not found", file=sys.stderr)
+            raise SystemExit("trim_init7: (library) cond-expand clause not found")
 
-    out = bootstrap_fix_init7(out)
+    # Stock and/or use cond; bootstrap still needs if-style (er-macro + qq).
+    and_old = (
+        "(define-syntax and\n"
+        "  (er-macro-transformer\n"
+        "   (lambda (expr rename compare)\n"
+        "     (cond ((null? (cdr expr)))\n"
+        "           ((null? (cddr expr)) (cadr expr))\n"
+        "           (else (list (rename 'if) (cadr expr)\n"
+        "                       (cons (rename 'and) (cddr expr))\n"
+        "                       #f))))))\n"
+    )
+    and_new = (
+        "(define-syntax and\n"
+        "  (er-macro-transformer\n"
+        "   (lambda (expr rename compare)\n"
+        "     (if (null? (cdr expr))\n"
+        "         #t\n"
+        "         (if (null? (cddr expr))\n"
+        "             (cadr expr)\n"
+        "             (list (rename 'if) (cadr expr)\n"
+        "                   (cons (rename 'and) (cddr expr))\n"
+        "                   #f))))))\n"
+    )
+    or_old = (
+        "(define-syntax or\n"
+        "  (er-macro-transformer\n"
+        "   (lambda (expr rename compare)\n"
+        "     (cond ((null? (cdr expr)) #f)\n"
+        "           ((null? (cddr expr)) (cadr expr))\n"
+        "           (else\n"
+        "            (list (rename 'let) (list (list (rename 'tmp) (cadr expr)))\n"
+        "                  (list (rename 'if) (rename 'tmp)\n"
+        "                        (rename 'tmp)\n"
+        "                        (cons (rename 'or) (cddr expr)))))))))\n"
+    )
+    or_new = (
+        "(define-syntax or\n"
+        "  (er-macro-transformer\n"
+        "   (lambda (expr rename compare)\n"
+        "     (if (null? (cdr expr))\n"
+        "         #f\n"
+        "         (if (null? (cddr expr))\n"
+        "             (cadr expr)\n"
+        "             (list (rename 'let) (list (list (rename 'tmp) (cadr expr)))\n"
+        "                   (list (rename 'if) (rename 'tmp)\n"
+        "                         (rename 'tmp)\n"
+        "                         (cons (rename 'or) (cddr expr)))))))))\n"
+    )
+    if and_old not in out:
+        raise SystemExit("trim_init7: stock and form not found")
+    if or_old not in out:
+        raise SystemExit("trim_init7: stock or form not found")
+    out = out.replace(and_old, and_new, 1)
+    out = out.replace(or_old, or_new, 1)
+
     out = (
         ";; trimmed for puchi amalgamation - file/load/library stubs\n" + out
     )
     return trim_init7_dead_arms(trim_init7_load_port(out))
 
 
-def bootstrap_fix_init7(src: str) -> str:
-    """Rewrite early syntax expanders so bootstrap does not crash on Windows.
-
-    ``or``/``and`` using ``cond`` in expanders AV during compile — use ``if``.
-    ``make-renamer`` internal define + set! circular rename mutates badly on
-    first macro use — rewrite without internal define.
-    Insert list-based ``letrec`` before ``quasiquote`` so qq's internal define
-    can compile; drop the later quasiquote-based upstream ``letrec``.
-    """
-    out = src
-    renamer_old = """(define make-renamer
-  (lambda (mac-env)
-    (define rename
-      ((lambda (renames)
-         (lambda (identifier)
-           ((lambda (cell)
-              (if cell
-                  (cdr cell)
-                  ((lambda (name)
-                     (set! renames (cons (cons identifier name) renames))
-                     name)
-                   ((lambda (id)
-                      (syntactic-closure-set-rename! id rename)
-                      id)
-                    (close-syntax identifier mac-env)))))
-            (assq identifier renames))))
-       '()))
-    rename))"""
-    # Box the alist + self-ref so we need no internal define / set! of a local.
-    renamer_new = """(define make-renamer
-  (lambda (mac-env)
-    ((lambda (box)
-       ((lambda (rename)
-          (set-car! (cdr box) rename)
-          rename)
-        (lambda (identifier)
-          ((lambda (found)
-             (if found
-                 (cdr found)
-                 ((lambda (name)
-                    (set-car! box (cons (cons identifier name) (car box)))
-                    name)
-                  ((lambda (id)
-                     (syntactic-closure-set-rename! id (car (cdr box)))
-                     id)
-                   (close-syntax identifier mac-env)))))
-           (assq identifier (car box))))))
-     (cons '() (cons #f '())))))"""
-    or_old = """(define-syntax or
-  (er-macro-transformer
-   (lambda (expr rename compare)
-     (cond ((null? (cdr expr)) #f)
-           ((null? (cddr expr)) (cadr expr))
-           (else
-            (list (rename 'let) (list (list (rename 'tmp) (cadr expr)))
-                  (list (rename 'if) (rename 'tmp)
-                        (rename 'tmp)
-                        (cons (rename 'or) (cddr expr)))))))))"""
-    or_new = """(define-syntax or
-  (er-macro-transformer
-   (lambda (expr rename compare)
-     (if (null? (cdr expr))
-         #f
-         (if (null? (cddr expr))
-             (cadr expr)
-             (list (rename 'let) (list (list (rename 'tmp) (cadr expr)))
-                   (list (rename 'if) (rename 'tmp)
-                         (rename 'tmp)
-                         (cons (rename 'or) (cddr expr)))))))))"""
-    and_old = """(define-syntax and
-  (er-macro-transformer
-   (lambda (expr rename compare)
-     (cond ((null? (cdr expr)))
-           ((null? (cddr expr)) (cadr expr))
-           (else (list (rename 'if) (cadr expr)
-                       (cons (rename 'and) (cddr expr))
-                       #f))))))"""
-    and_new = """(define-syntax and
-  (er-macro-transformer
-   (lambda (expr rename compare)
-     (if (null? (cdr expr))
-         #t
-         (if (null? (cddr expr))
-             (cadr expr)
-             (list (rename 'if) (cadr expr)
-                   (cons (rename 'and) (cddr expr))
-                   #f))))))"""
-    letrec_boot = """(define-syntax letrec
-  (er-macro-transformer
-   (lambda (expr rename compare)
-     ((lambda (defs)
-        (list (cons (rename 'lambda) (cons '() (append defs (cddr expr))))))
-      (map (lambda (x) (cons (rename 'define) x)) (cadr expr))))))
-
-"""
-    for label, old, new in (
-        ("make-renamer", renamer_old, renamer_new),
-        ("or", or_old, or_new),
-        ("and", and_old, and_new),
-    ):
-        if old not in out:
-            print(f"warning: bootstrap_fix_init7 {label} pattern not matched", file=sys.stderr)
-        else:
-            out = out.replace(old, new, 1)
-
-    qq_mark = "(define-syntax quasiquote\n"
-    if qq_mark not in out:
-        print("warning: bootstrap_fix_init7 quasiquote marker not found", file=sys.stderr)
-    else:
-        out = out.replace(qq_mark, letrec_boot + qq_mark, 1)
-        letrec_up = """(define-syntax letrec
-  (er-macro-transformer
-   (lambda (expr rename compare)
-     ((lambda (defs)
-        `((,(rename 'lambda) () ,@defs ,@(cddr expr))))
-      (map (lambda (x) (cons (rename 'define) x)) (cadr expr))))))
-
-"""
-        if letrec_up in out:
-            out = out.replace(letrec_up, "", 1)
-        else:
-            print("warning: bootstrap_fix_init7 upstream letrec not removed", file=sys.stderr)
-    return out
-
-
-def patch_features_host(features_h: str) -> str:
-    """Collapse DLL export nest; delete ABI fingerprint; PUCHI_TEST residue only."""
-    # SEXP_API always extern (puchi is never a shared library).
-    features_h = re.sub(
-        r"#ifdef _WIN32\n"
-        r"#ifdef SEXP_STATIC_LIBRARY\n"
-        r"#define SEXP_API\s+extern\n"
-        r"#else\n"
-        r"#ifdef BUILDING_DLL\n"
-        r"#define SEXP_API\s+__declspec\(dllexport\)\n"
-        r"#else\n"
-        r"#define SEXP_API\s+__declspec\(dllimport\)\n"
-        r"#endif\n"
-        r"#endif\n"
-        r"#else\n"
-        r"#define SEXP_API\s+extern\n"
-        r"#endif\n",
-        "#define SEXP_API    extern\n",
-        features_h,
-        count=1,
-    )
-    # Delete feature ABI fingerprint cascade; harness-only helpers under PUCHI_TEST.
-    abi_repl = (
-        "/* puchi: no shared-lib / image ABI fingerprint. Harness clibs only. */\n"
-        "#if defined(PUCHI_TEST)\n"
-        "typedef char sexp_abi_identifier_t[8];\n"
-        '#define SEXP_ABI_IDENTIFIER "--------"\n'
-        "#define sexp_version_compatible(ctx, subver, genver) 1\n"
-        "#define sexp_abi_compatible(ctx, subabi, genabi) 1\n"
-        "#endif\n"
-    )
-    features_h = re.sub(
-        r"/[*]{10,}/\n"
-        r"/[*] Feature signature\..*?"
-        r"#define sexp_abi_compatible\(ctx, subabi, genabi\).*?\n",
-        abi_repl,
-        features_h,
-        count=1,
-        flags=re.DOTALL,
-    )
-    if "Feature signature" in features_h or "SEXP_ABI_GC" in features_h:
-        raise SystemExit("ABI fingerprint block not patched in features.h")
-    if "BUILDING_DLL" in features_h or "dllimport" in features_h:
-        raise SystemExit("BUILDING_DLL nest still present in features.h")
-    if "sexp_abi_identifier_t" not in features_h:
-        raise SystemExit("PUCHI_TEST ABI residue missing from features.h")
-    # Trim Win32 CRT shims that duplicate PUCHI_STRCASECMP / PUCHI_SNPRINTF.
-    features_h = features_h.replace("#define strcasecmp _stricmp\n", "/* puchi: use PUCHI_STRCASECMP */\n")
-    features_h = features_h.replace("#define strncasecmp _strnicmp\n", "/* puchi: use PUCHI_STRNCASECMP */\n")
-    features_h = features_h.replace(
-        "#define snprintf(buf, len, fmt, val) sprintf(buf, fmt, val)\n",
-        "/* puchi: use PUCHI_SNPRINTF */\n",
-    )
-    features_h = features_h.replace("#define strcasecmp lstrcmpi\n", "/* puchi: use PUCHI_STRCASECMP */\n")
-    features_h = features_h.replace(
-        "#define strncasecmp(s1, s2, n) lstrcmpi(s1, s2)\n",
-        "/* puchi: use PUCHI_STRNCASECMP */\n",
-    )
-    features_h = features_h.replace("#define strcasecmp cistrcmp\n", "/* puchi: use PUCHI_STRCASECMP */\n")
-    features_h = features_h.replace("#define strncasecmp cistrncmp\n", "/* puchi: use PUCHI_STRNCASECMP */\n")
-    return features_h
-
-
-def strip_features_manual(features_h: str) -> str:
-    """Drop Chibi's 'uncomment this #define' essay.
-
-    Those comments tell a Chibi builder to edit features.h. In puchi.h the
-    PUCHI_* block already set the flags, so the essay is wrong.
-    Keep the copyright and the real #ifndef/#define logic.
-    """
-    marker = "#ifndef SEXP_INITIAL_HEAP_SIZE"
-    idx = features_h.find(marker)
-    if idx < 0:
-        raise SystemExit("SEXP_INITIAL_HEAP_SIZE not found in features.h")
-    # Keep the leading copyright comment (through the first blank line).
-    blank = features_h.find("\n\n")
-    if blank < 0 or blank > idx:
-        head = ""
-    else:
-        head = features_h[: blank + 2]
-    note = (
-        "/* Numeric and OS features are selected by the PUCHI_* macros at the\n"
-        " * top of this file. Chibi's 'uncomment to #define SEXP_USE_*' notes\n"
-        " * are omitted here; they do not configure puchi.\n"
-        " * Heap-size knobs below are still live #ifndef defaults.\n"
-        " */\n\n"
-    )
-    body = features_h[idx:]
-    # Socket shutdown constants — no sockets in puchi core.
-    body = re.sub(
-        r"#elif defined\(_WIN32\)\n"
-        r"#define SHUT_RD 0 /\* SD_RECEIVE \*/\n"
-        r"#define SHUT_WR 1 /\* SD_SEND \*/\n"
-        r"#define SHUT_RDWR 2 /\* SD_BOTH \*/\n",
-        "#elif defined(_WIN32)\n",
-        body,
-    )
-    body = re.sub(
-        r"#ifndef SHUT_RD\n#define SHUT_RD 0\n#endif\n"
-        r"#ifndef SHUT_WR\n#define SHUT_WR 1\n#endif\n"
-        r"#ifndef SHUT_RDWR\n#define SHUT_RDWR 2\n#endif\n",
-        "",
-        body,
-    )
-    body = scrub_dead_feature_knobs(body)
-    return patch_features_host(head + note + body)
-
-
-def replace_platform_block(sexp_h: str) -> str:
-    """Replace OS-specific include block in sexp.h with portable includes."""
-    start = sexp_h.find('#include "chibi/features.h"')
-    if start < 0:
-        raise SystemExit("features.h include not found in sexp.h")
-    # Keep features + install includes; replace from SOCKET block through PLAN9 else includes
-    # We replace from after install.h through the PLAN9/else include block.
-    install = sexp_h.find('#include "chibi/install.h"')
-    if install < 0:
-        raise SystemExit("install.h include not found")
-    after_install = sexp_h.find("\n", install) + 1
-
-    # Find end of the big platform block: after `#endif` that closes PLAN9 (line ~115),
-    # before SEXP_USE_TRACK_ALLOC_BACKTRACE or #include <ctype.h>
-    marker = "#include <ctype.h>"
-    end = sexp_h.find(marker)
-    if end < 0:
-        raise SystemExit("ctype.h marker not found")
-
-    # Banner owns all system #includes; this block is macros only.
-    portable = r'''
-/* ---- puchi: portable host surface (no OS backends) ---- */
-#define sexp_isalpha(x) (PUCHI_ISALPHA(x))
-#define sexp_isxdigit(x) (PUCHI_ISXDIGIT(x))
-#define sexp_isdigit(x) (PUCHI_ISDIGIT(x))
-#define sexp_tolower(x) (PUCHI_TOLOWER(x))
-#define sexp_toupper(x) (PUCHI_TOUPPER(x))
-
-/* Harness fileno sock field (production has no fileno type). */
-#if defined(PUCHI_TEST)
-#define SOCKET_TYPE sexp_sint_t
-#endif
-
-#ifdef __GNUC__
-#define SEXP_NO_WARN_UNUSED __attribute__((unused))
-#else
-#define SEXP_NO_WARN_UNUSED
-#endif
-
-'''
-    # Skip ctype.h include since banner already has it
-    after_ctype = sexp_h.find("\n", end) + 1
-    return sexp_h[:after_install] + portable + sexp_h[after_ctype:]
-
-
-def stub_file_ops_in_eval(eval_c: str) -> str:
-    """Delete OS file-open bodies; host/harness install foreigns when needed."""
-    for name in (
-        "sexp_open_input_file_op",
-        "sexp_open_output_file_op",
-        "sexp_open_binary_input_file",
-        "sexp_open_binary_output_file",
-    ):
-        eval_c = re.sub(
-            rf"sexp {name} \(sexp ctx, sexp self, sexp_sint_t n, sexp path\) \{{.*?\n\}}\n+",
-            "",
-            eval_c,
-            count=1,
-            flags=re.DOTALL,
-        )
-
-    # find_module_file_raw — return NULL always (no stat)
-    eval_c = re.sub(
-        r"char\* sexp_find_module_file_raw \(sexp ctx, const char \*file\) \{.*?\n  return NULL;\n\}",
-        "char* sexp_find_module_file_raw (sexp ctx, const char *file) {\n"
-        "  (void)ctx; (void)file;\n"
-        "  return NULL;\n"
-        "}",
-        eval_c,
-        count=1,
-        flags=re.DOTALL,
-    )
-
-    # Module path getenv — ignore
-    eval_c = eval_c.replace(
-        "user_path = getenv(SEXP_MODULE_PATH_VAR);",
-        "user_path = NULL; /* puchi: no getenv */",
-    )
-    eval_c = eval_c.replace(
-        "no_sys_path = getenv(SEXP_NO_SYSTEM_PATH_VAR);",
-        "no_sys_path = (char*)\"1\"; /* puchi: never use system module path */",
-    )
-
-    eval_c = eval_c.replace("if (strictp) exit(1);", "if (strictp) abort();")
-    eval_c = patch_eval_c_host(eval_c)
-    eval_c = scrub_eval_c_disk_boot(eval_c)
-    return eval_c
-
-
-def patch_gc_c(gc_c: str) -> str:
-    gc_c = gc_c.replace("#include <sys/resource.h>", "/* puchi: no sys/resource.h */")
-    gc_c = gc_c.replace("#include <sys/mman.h>", "/* puchi: no sys/mman.h */")
-    # malloc/free wrappers
-    gc_c = re.sub(
-        r"#define sexp_malloc malloc\n#define sexp_free free",
-        "#ifndef sexp_malloc\n"
-        "#define sexp_malloc(sz) SEXP_MALLOC(NULL, (sz))\n"
-        "#endif\n"
-        "#ifndef sexp_free\n"
-        "#define sexp_free(p) SEXP_FREE(NULL, (p))\n"
-        "#endif",
-        gc_c,
-    )
-    # limited malloc path
-    gc_c = gc_c.replace("max_alloc = getenv(\"CHIBI_MAX_ALLOC\");", "max_alloc = NULL;")
-    gc_c = re.sub(
-        r"if \(\!\(res = malloc\(size\)\)\) return NULL;",
-        "if (!(res = SEXP_MALLOC(NULL, size))) return NULL;",
-        gc_c,
-    )
-    gc_c = gc_c.replace("void sexp_free(void* ptr) {\n  free(ptr);\n}",
-                        "void sexp_free(void* ptr) {\n  SEXP_FREE(NULL, ptr);\n}")
-    gc_c = gc_c.replace("free(heap);", "SEXP_FREE(NULL, heap);")
-    gc_c = gc_c.replace("*ptr = malloc(sizeof(**ptr));", "*ptr = SEXP_MALLOC(NULL, sizeof(**ptr));")
-    gc_c = gc_c.replace("free(old);", "SEXP_FREE(NULL, old);")
-    gc_c = gc_c.replace("free(debug_text);", "SEXP_FREE(NULL, debug_text);")
-    # fprintf debug stays — only used under DEBUG flags (off by default)
-    return gc_c
-
-
-def patch_sexp_c(sexp_c: str) -> str:
-    # Avoid POSIX close/dlclose when finalizing — no-op if we never create those
-    sexp_c = sexp_c.replace(
-        "close(sexp_fileno_fd(fileno));",
-        "#if defined(PUCHI_TEST)\n"
-        "    close(sexp_fileno_fd(fileno));\n"
-        "#else\n"
-        "    (void)fileno;\n"
-        "#endif",
-    )
-    sexp_c = re.sub(
-        r"#ifdef _WIN32\n\s*FreeLibrary.*?#else\n\s*dlclose\(sexp_dl_handle\(dl\)\);\n#endif",
-        "/* puchi: no dynamic libraries */ (void)dl;",
-        sexp_c,
-        count=1,
-        flags=re.DOTALL,
-    )
-    sexp_c = sexp_c.replace(
-        "fclose(sexp_port_stream(port));",
-        "/* puchi: no fclose; stream ports unsupported */ (void)port;",
-    )
-    # fread/fwrite in buffered ports — leave; only hit for FILE* streams
-    # Drop socket shutdown arms entirely (no sockets in puchi; fileno path stays).
-    sexp_c = re.sub(
-        r"      if \(sexp_port_shutdownp\(port\)\) \{\n"
-        r"        /\* shutdown the socket if requested \*/\n"
-        r"        if \(sexp_iportp\(port\)\)\n"
-        r"          shutdown\(sexp_port_sock\(port\), sexp_oportp\(port\) \? SHUT_RDWR : SHUT_RD\);\n"
-        r"        if \(sexp_oportp\(port\)\)\n"
-        r"          shutdown\(sexp_port_sock\(port\), SHUT_WR\);\n"
-        r"      \}\n",
-        "",
-        sexp_c,
-        count=1,
-    )
-    # Fallback if comments differ / already stubbed
-    sexp_c = re.sub(
-        r"      if \(sexp_port_shutdownp\(port\)\) \{\n"
-        r"        /\* shutdown the socket if requested \*/\n"
-        r"        if \(sexp_iportp\(port\)\)\n"
-        r"          /\* puchi: no sockets \*/ \(void\)port;\n"
-        r"        if \(sexp_oportp\(port\)\)\n"
-        r"          /\* puchi: no sockets \*/ \(void\)port;\n"
-        r"      \}\n",
-        "",
-        sexp_c,
-        count=1,
-    )
-    sexp_c = sexp_c.replace(
-        "shutdown(sexp_port_sock(port), sexp_oportp(port) ? SHUT_RDWR : SHUT_RD);",
-        "((void)0)",
-    )
-    sexp_c = sexp_c.replace(
-        "shutdown(sexp_port_sock(port), SHUT_WR);",
-        "((void)0)",
-    )
-    sexp_c = sexp_c.replace("free(sexp_cpointer_value(obj));", "SEXP_FREE(NULL, sexp_cpointer_value(obj));")
-    sexp_c = re.sub(r"\bfree\(", "SEXP_FREE(NULL, ", sexp_c)
-    # Fix double-wrap if any SEXP_FREE(NULL, SEXP_FREE
-    sexp_c = sexp_c.replace("SEXP_FREE(NULL, SEXP_FREE(NULL, ", "SEXP_FREE(NULL, ")
-    sexp_c = re.sub(r"sexp_malloc\(", "SEXP_MALLOC(NULL, ", sexp_c)
-    sexp_c = patch_sexp_c_host(sexp_c)
-    return sexp_c
-
-
 # Deleted from the amalgamation. Value 0, and defined() is true, so
 # `#if SEXP_USE_DL` goes away. With STABLE_ABI also ALWAYS_ZERO,
 # `#if SEXP_USE_STABLE_ABI || SEXP_USE_DL` is deleted entirely.
-# PLAN9 is never defined. STATIC_LIBS is NOT stripped — gated by PUCHI_TEST.
+# PLAN9 is never defined. STATIC_LIBS is NOT stripped â€” gated by PUCHI_TEST.
 _DEAD_ZERO = set(ALWAYS_ZERO_STRIP) | {"SEXP_USE_BOEHM", "SEXP_USE_GREEN_THREADS", "SEXP_USE_DL"}
 _DEAD_UNDEF = {"PLAN9"}
 
@@ -890,7 +908,7 @@ def _self_test_dead_backends() -> None:
     assert "#define SEXP_USE_DL 0" in out
     assert "SEXP_USE_STABLE_ABI" not in out or "#define SEXP_USE_STABLE_ABI" in out
 
-    # NATIVE_X86 is ALWAYS_ZERO_STRIP — the whole branch (including any
+    # NATIVE_X86 is ALWAYS_ZERO_STRIP â€” the whole branch (including any
     # Boehm re-enable) is deleted from the amalgamation.
     native = (
         "#define SEXP_USE_BOEHM 0\n"
@@ -1086,37 +1104,26 @@ def main() -> None:
     p = sub.add_parser("strip-dead-backends")
     p.add_argument("path")
 
-    p = sub.add_parser("strip-features")
-    p.add_argument("input")
-    p.add_argument("output")
-
-    p = sub.add_parser("patch-sexp-h")
-    p.add_argument("input")
-    p.add_argument("output")
-
-    p = sub.add_parser("patch-eval-c")
-    p.add_argument("input")
-    p.add_argument("output")
-
-    p = sub.add_parser("patch-gc-c")
-    p.add_argument("input")
-    p.add_argument("output")
-
-    p = sub.add_parser("patch-sexp-c")
-    p.add_argument("input")
-    p.add_argument("output")
-
-    p = sub.add_parser("patch-eval-h")
-    p.add_argument("input")
-    p.add_argument("output")
-
     p = sub.add_parser("rewrite-libc")
+    p.add_argument("path")
+
+    p = sub.add_parser("rewrite-alloc")
     p.add_argument("path")
 
     p = sub.add_parser("patch-opcodes")
     p.add_argument("path")
 
-    sub.add_parser("features-force-extra")
+    p = sub.add_parser("scrub-features")
+    p.add_argument("path")
+
+    p = sub.add_parser("scrub-gc")
+    p.add_argument("path")
+
+    p = sub.add_parser("splice-abi-f")
+    p.add_argument("workdir")
+
+    p = sub.add_parser("brand-sexp")
+    p.add_argument("path")
 
     p = sub.add_parser("post-strip-puchi")
     p.add_argument("path")
@@ -1133,47 +1140,39 @@ def main() -> None:
         write_text_lf(Path(args.output), embed_c_string(args.name, text))
     elif args.cmd == "strip-dead-backends":
         path = Path(args.path)
-        # Git Bash `cat` on Windows may emit cp1252; normalize to utf-8.
         raw = path.read_bytes()
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
             text = raw.decode("cp1252")
         write_text_lf(path, strip_dead_backends(normalize_newlines(text)))
-    elif args.cmd == "strip-features":
-        text = Path(args.input).read_text(encoding="utf-8")
-        write_text_lf(Path(args.output), strip_features_manual(text))
-    elif args.cmd == "patch-sexp-h":
-        text = Path(args.input).read_text(encoding="utf-8")
-        text = replace_platform_block(text)
-        text = patch_sexp_h_host(text)
-        text = scrub_sexp_h_gunk(text)
-        text = scrub_portable_poll_stubs(text)
-        write_text_lf(Path(args.output), text)
-    elif args.cmd == "patch-eval-c":
-        text = Path(args.input).read_text(encoding="utf-8")
-        write_text_lf(Path(args.output), stub_file_ops_in_eval(text))
-    elif args.cmd == "patch-gc-c":
-        text = Path(args.input).read_text(encoding="utf-8")
-        write_text_lf(Path(args.output), patch_gc_c(text))
-    elif args.cmd == "patch-sexp-c":
-        text = Path(args.input).read_text(encoding="utf-8")
-        text = patch_sexp_c(text)
-        text = scrub_sexp_c_gunk(text)
-        write_text_lf(Path(args.output), text)
-    elif args.cmd == "patch-eval-h":
-        text = Path(args.input).read_text(encoding="utf-8")
-        text = patch_eval_h_host(text)
-        text = scrub_eval_h_gunk(text)
-        write_text_lf(Path(args.output), text)
     elif args.cmd == "rewrite-libc":
         path = Path(args.path)
         write_text_lf(path, rewrite_libc_calls(path.read_text(encoding="utf-8")))
+    elif args.cmd == "rewrite-alloc":
+        path = Path(args.path)
+        write_text_lf(path, rewrite_host_allocators(path.read_text(encoding="utf-8")))
     elif args.cmd == "patch-opcodes":
         path = Path(args.path)
         write_text_lf(path, patch_opcodes(path.read_text(encoding="utf-8")))
-    elif args.cmd == "features-force-extra":
-        sys.stdout.write(features_force_extra())
+    elif args.cmd == "scrub-features":
+        path = Path(args.path)
+        write_text_lf(path, scrub_features_h(path.read_text(encoding="utf-8")))
+    elif args.cmd == "scrub-gc":
+        path = Path(args.path)
+        write_text_lf(path, scrub_gc_host(path.read_text(encoding="utf-8")))
+    elif args.cmd == "splice-abi-f":
+        wd = Path(args.workdir)
+        write_text_lf(wd / "bignum.c", splice_sexp_to_double((wd / "bignum.c").read_text(encoding="utf-8")))
+        write_text_lf(wd / "eval.c", splice_exact_sqrt((wd / "eval.c").read_text(encoding="utf-8")))
+        write_text_lf(wd / "sexp.h", splice_to_double_decl((wd / "sexp.h").read_text(encoding="utf-8")))
+        write_text_lf(wd / "sexp.c", splice_reader_mul((wd / "sexp.c").read_text(encoding="utf-8")))
+        write_text_lf(wd / "vm.c", splice_min_fixnum_overflow((wd / "vm.c").read_text(encoding="utf-8")))
+    elif args.cmd == "brand-sexp":
+        path = Path(args.path)
+        text = brand_puchi_features(path.read_text(encoding="utf-8"))
+        text = fold_always_zero_type_slots(text)
+        write_text_lf(path, text)
     elif args.cmd == "post-strip-puchi":
         path = Path(args.path)
         text = normalize_newlines(path.read_text(encoding="utf-8"))

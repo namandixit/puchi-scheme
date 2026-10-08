@@ -1,0 +1,345 @@
+--- eval.c
++++ eval.c
+@@ -38,9 +38,8 @@
+   int strictp = sexp_truep(sexp_global(ctx, SEXP_G_STRICT_P));
+   sexp_gc_preserve1(ctx, out);
+   out = sexp_current_error_port(ctx);
+-  if (sexp_not(out)) {          /* generate a throw-away port */
+-    out = sexp_make_output_port(ctx, stderr, SEXP_FALSE);
+-    sexp_port_no_closep(out) = 1;
++  if (sexp_not(out) || !sexp_oportp(out)) {
++    out = sexp_open_output_string(ctx);
+   }
+   if (sexp_oportp(out)) {
+     sexp_write_string(ctx, strictp ? "ERROR: " : "WARNING: ", out);
+@@ -50,9 +49,15 @@
+     }
+     sexp_write_char(ctx, '\n', out);
+     if (strictp) sexp_stack_trace(ctx, out);
++    {
++      sexp s = sexp_get_output_string(ctx, out);
++      if (sexp_stringp(s))
++        puchi_diagnose(ctx, strictp ? PUCHI_DIAG_EXCEPTION : PUCHI_DIAG_WARN,
++                       sexp_string_data(s));
++    }
+   }
+   sexp_gc_release1(ctx);
+-  if (strictp) exit(1);
++  if (strictp) puchi_fatal(ctx, PUCHI_FATAL_STRICT, msg);
+ }
+ 
+ sexp sexp_warn_undefs_op (sexp ctx, sexp self, sexp_sint_t n, sexp from, sexp to, sexp res) {
+@@ -407,17 +412,10 @@
+   if (! (sexp_symbolp(expr) || sexp_pairp(expr) || sexp_synclop(expr)))
+     return expr;
+   res = sexp_alloc_type(ctx, synclo, SEXP_SYNCLO);
+-  if (SEXP_USE_FLAT_SYNTACTIC_CLOSURES && sexp_synclop(expr)) {
+-    sexp_synclo_env(res) = sexp_synclo_env(expr);
+-    sexp_synclo_free_vars(res) = sexp_synclo_free_vars(expr);
+-    sexp_synclo_expr(res) = sexp_synclo_expr(expr);
+-    sexp_synclo_rename(res) = sexp_synclo_rename(expr);
+-  } else {
+-    sexp_synclo_env(res) = env;
+-    sexp_synclo_free_vars(res) = fv;
+-    sexp_synclo_expr(res) = expr;
+-    sexp_synclo_rename(res) = SEXP_FALSE;
+-  }
++  sexp_synclo_env(res) = env;
++  sexp_synclo_free_vars(res) = fv;
++  sexp_synclo_expr(res) = expr;
++  sexp_synclo_rename(res) = SEXP_FALSE;
+   return res;
+ }
+ 
+@@ -502,32 +500,10 @@
+ #endif
+ 
+ void sexp_init_eval_context_globals (sexp ctx) {
+-  const char* no_sys_path;
+-  const char* user_path;
+   ctx = sexp_make_child_context(ctx, NULL);
+-#if ! SEXP_USE_NATIVE_X86
+   sexp_init_eval_context_bytecodes(ctx);
+-#endif
++  /* Host/harness fills module path via add-module-directory foreigns. */
+   sexp_global(ctx, SEXP_G_MODULE_PATH) = SEXP_NULL;
+-  user_path = getenv(SEXP_MODULE_PATH_VAR);
+-  if (!user_path) user_path = sexp_default_user_module_path;
+-  sexp_add_path(ctx, user_path);
+-  no_sys_path = getenv(SEXP_NO_SYSTEM_PATH_VAR);
+-  if (!no_sys_path || strcmp(no_sys_path, "0")==0)
+-    sexp_add_path(ctx, sexp_default_module_path);
+-#if SEXP_USE_GREEN_THREADS
+-  sexp_global(ctx, SEXP_G_IO_BLOCK_ERROR)
+-    = sexp_user_exception(ctx, SEXP_FALSE, "I/O would block", SEXP_NULL);
+-  sexp_global(ctx, SEXP_G_IO_BLOCK_ONCE_ERROR)
+-    = sexp_user_exception(ctx, SEXP_FALSE, "I/O would block once", SEXP_NULL);
+-  sexp_global(ctx, SEXP_G_THREAD_TERMINATE_ERROR)
+-    = sexp_user_exception(ctx, SEXP_FALSE, "thread terminated", SEXP_NULL);
+-  sexp_global(ctx, SEXP_G_THREADS_FRONT) = SEXP_NULL;
+-  sexp_global(ctx, SEXP_G_THREADS_BACK) = SEXP_NULL;
+-  sexp_global(ctx, SEXP_G_THREADS_SIGNALS) = SEXP_ZERO;
+-  sexp_global(ctx, SEXP_G_THREADS_SIGNAL_RUNNER) = SEXP_FALSE;
+-  sexp_global(ctx, SEXP_G_ATOMIC_P) = SEXP_FALSE;
+-#endif
+ }
+ 
+ sexp sexp_make_eval_context (sexp ctx, sexp stack, sexp env, sexp_uint_t size, sexp_uint_t max_size) {
+@@ -904,7 +880,6 @@
+     if (sexp_exceptionp(tmp)) sexp_return(res, tmp);
+     sexp_push(ctx3, defs, tmp);
+     if (!sexp_lambdap(value)) trailing_non_procs = 1;
+-    if (trailing_non_procs || !SEXP_USE_UNBOXED_LOCALS)
+-      sexp_insert(ctx3, sexp_lambda_sv(res), name);
++    sexp_insert(ctx3, sexp_lambda_sv(res), name);
+   }
+   if (sexp_pairp(defs)) {
+@@ -1297,50 +1272,6 @@
+ 
+ /************************ library procedures **************************/
+ 
+-sexp sexp_open_input_file_op (sexp ctx, sexp self, sexp_sint_t n, sexp path) {
+-  FILE *in;
+-  int count = 0;
+-  sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, path);
+-  do {
+-    if (count != 0) sexp_gc(ctx, NULL);
+-    in = fopen(sexp_string_data(path), "r");
+-  } while (!in && sexp_out_of_file_descriptors() && !count++);
+-  if (!in)
+-    return sexp_file_exception(ctx, self, "couldn't open input file", path);
+-#if SEXP_USE_GREEN_THREADS
+-  fcntl(fileno(in), F_SETFL, O_NONBLOCK);
+-#endif
+-  return sexp_make_input_port(ctx, in, path);
+-}
+-
+-sexp sexp_open_output_file_op (sexp ctx, sexp self, sexp_sint_t n, sexp path) {
+-  FILE *out;
+-  int count = 0;
+-  sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, path);
+-  do {
+-    if (count != 0) sexp_gc(ctx, NULL);
+-    out = fopen(sexp_string_data(path), "w");
+-  } while (!out && sexp_out_of_file_descriptors() && !count++);
+-  if (!out)
+-    return sexp_file_exception(ctx, self, "couldn't open output file", path);
+-#if SEXP_USE_GREEN_THREADS
+-  fcntl(fileno(out), F_SETFL, O_NONBLOCK);
+-#endif
+-  return sexp_make_output_port(ctx, out, path);
+-}
+-
+-sexp sexp_open_binary_input_file (sexp ctx, sexp self, sexp_sint_t n, sexp path) {
+-  sexp res = sexp_open_input_file_op(ctx, self, n, path);
+-  if (sexp_portp(res)) sexp_port_binaryp(res) = 1;
+-  return res;
+-}
+-
+-sexp sexp_open_binary_output_file (sexp ctx, sexp self, sexp_sint_t n, sexp path) {
+-  sexp res = sexp_open_output_file_op(ctx, self, n, path);
+-  if (sexp_portp(res)) sexp_port_binaryp(res) = 1;
+-  return res;
+-}
+-
+ sexp sexp_close_port_op (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
+   sexp res = SEXP_VOID;
+   sexp_assert_type(ctx, sexp_portp, SEXP_OPORT, port);
+@@ -1364,7 +1296,7 @@
+   return SEXP_VOID;
+ }
+ 
+-#ifndef PLAN9
++#if defined(PUCHI_TEST)
+ sexp sexp_get_port_fileno (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
+   int fd;
+   sexp_assert_type(ctx, sexp_portp, SEXP_IPORT, port);
+@@ -1373,11 +1305,11 @@
+     return sexp_make_fixnum(fd);
+   return SEXP_FALSE;
+ }
++#endif
+ sexp sexp_stream_portp_op (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
+   sexp_assert_type(ctx, sexp_portp, SEXP_IPORT, port);
+   return sexp_make_boolean(sexp_stream_portp(port));
+ }
+-#endif
+ 
+ #if SEXP_USE_STATIC_LIBS
+ #if SEXP_USE_STATIC_LIBS_EMPTY
+@@ -1527,7 +1459,8 @@
+     in = source;
+   } else {
+     sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, source);
+-    in = sexp_open_input_file(ctx, source);
++    in = sexp_file_exception(ctx, self,
++      "load: file paths not available in puchi core (host may redefine)", source);
+   }
+   sexp_gc_preserve5(ctx, ctx2, x, in, res, out);
+   if (sexp_exceptionp(in)) {
+@@ -2030,7 +1963,7 @@
+   sexp_utf8_encode_char(ch, len, i);
+   if (sexp_port_stream(port))  {
+     while (len>0)
+-      ungetc(ch[--len], sexp_port_stream(port));
++      (sexp_port_stream_ops(port) && sexp_port_stream_ops(port)->unget_char ? sexp_port_stream_ops(port)->unget_char(sexp_port_stream_udata(port), (ch[--len])) : EOF);
+   } else {
+     while (len>0)
+       sexp_port_buf(port)[--sexp_port_offset(port)] = ch[--len];
+@@ -2349,45 +2282,14 @@
+ }
+ 
+ char* sexp_find_module_file_raw (sexp ctx, const char *file) {
+-  sexp ls;
+-  char *dir, *path;
+-  sexp_uint_t slash, dirlen, filelen, len;
+-#ifdef PLAN9
+-#define file_exists_p(path, buf) (stat(path, buf, 128) >= 0)
+-  unsigned char buf[128];
+-#else
+-#define file_exists_p(path, buf) (! stat(path, buf))
+-  struct stat buf_str;
+-  struct stat *buf = &buf_str;
+-#endif
+-
+-  filelen = strlen(file);
+-
+-  ls = sexp_global(ctx, SEXP_G_MODULE_PATH);
+-  for ( ; sexp_pairp(ls); ls=sexp_cdr(ls)) {
+-    dir = sexp_string_data(sexp_car(ls));
+-    dirlen = sexp_string_size(sexp_car(ls));
+-    slash = dir[dirlen-1] == '/';
+-    len = dirlen+filelen+2-slash;
+-    path = (char*) sexp_malloc(len);
+-    if (! path) return NULL;
+-    memcpy(path, dir, dirlen);
+-    if (! slash) path[dirlen] = '/';
+-    memcpy(path+len-filelen-1, file, filelen);
+-    path[len-1] = '\0';
+-    if (sexp_find_static_library(path) || file_exists_p(path, buf))
+-      return path;
+-    free(path);
+-  }
+-
++  (void)ctx; (void)file;
+   return NULL;
+ }
+ 
+ sexp sexp_find_module_file (sexp ctx, const char *file) {
+   char* path = sexp_find_module_file_raw(ctx, file);
+-  sexp res = sexp_c_string(ctx, path, -1);
+-  if (path) free(path);
+-  return res;
++  if (!path) return SEXP_FALSE;
++  return sexp_c_string(ctx, path, -1);
+ }
+ 
+ #define sexp_file_not_found "couldn't find file in module path"
+@@ -2501,38 +2403,26 @@
+   }
+ }
+ 
+-sexp sexp_load_standard_ports (sexp ctx, sexp env, FILE* in, FILE* out,
+-                               FILE* err, int no_close) {
+-  sexp_gc_var1(p);
+-  sexp_gc_preserve1(ctx, p);
++sexp sexp_set_standard_ports (sexp ctx, sexp env, sexp in, sexp out, sexp err) {
+   if (!env) env = sexp_context_env(ctx);
+-  if (in) {
+-    p = sexp_make_input_port(ctx, in, SEXP_FALSE);
+-    sexp_port_no_closep(p) = no_close;
+-    sexp_set_parameter(ctx, env, sexp_global(ctx, SEXP_G_CUR_IN_SYMBOL), p);
+-  }
+-  if (out) {
+-    p = sexp_make_output_port(ctx, out, SEXP_FALSE);
+-    sexp_port_no_closep(p) = no_close;
+-    sexp_set_parameter(ctx, env, sexp_global(ctx, SEXP_G_CUR_OUT_SYMBOL), p);
+-  }
+-  if (err) {
+-    p = sexp_make_output_port(ctx, err, SEXP_FALSE);
+-    sexp_port_no_closep(p) = no_close;
+-    sexp_set_parameter(ctx, env, sexp_global(ctx, SEXP_G_CUR_ERR_SYMBOL), p);
+-  }
+-  sexp_gc_release1(ctx);
++  if (sexp_portp(in))
++    sexp_set_parameter(ctx, env, sexp_global(ctx, SEXP_G_CUR_IN_SYMBOL), in);
++  if (sexp_portp(out))
++    sexp_set_parameter(ctx, env, sexp_global(ctx, SEXP_G_CUR_OUT_SYMBOL), out);
++  if (sexp_portp(err))
++    sexp_set_parameter(ctx, env, sexp_global(ctx, SEXP_G_CUR_ERR_SYMBOL), err);
+   return SEXP_VOID;
+ }
+ 
+ sexp sexp_load_standard_env (sexp ctx, sexp e, sexp version) {
+-  int len;
+-  char init_file[128];
+   sexp_gc_var3(op, tmp, sym);
+   sexp_gc_preserve3(ctx, op, tmp, sym);
++  (void)version;
+   if (!e) e = sexp_context_env(ctx);
++#if defined(PUCHI_TEST)
+   sexp_env_define(ctx, e, sym=sexp_intern(ctx, "*shared-object-extension*", -1),
+                   tmp=sexp_c_string(ctx, sexp_so_extension, -1));
++#endif
+   sexp_env_define(ctx, e, sym=sexp_intern(ctx, "*features*", -1), sexp_global(ctx, SEXP_G_FEATURES));
+   sexp_global(ctx, SEXP_G_OPTIMIZATIONS) = SEXP_NULL;
+ #if SEXP_USE_SIMPLIFY
+@@ -2541,35 +2431,22 @@
+   tmp = sexp_cons(ctx, sexp_make_fixnum(500), op);
+   sexp_push(ctx, sexp_global(ctx, SEXP_G_OPTIMIZATIONS), tmp);
+ #endif
++  tmp = puchi_load_init7_into_env(ctx, e);
++  if (sexp_exceptionp(tmp)) {
++    sexp_gc_release3(ctx);
++    return tmp;
++  }
+   sexp_global(ctx, SEXP_G_ERR_HANDLER)
+     = sexp_env_ref(ctx, e, sym=sexp_intern(ctx, "current-exception-handler", -1), SEXP_FALSE);
+-  /* load init-7.scm */
+-  len = strlen(sexp_init_file);
+-  strncpy(init_file, sexp_init_file, len+1);
+-  init_file[len] = (char)sexp_unbox_fixnum(version) + '0';
+-  strncpy(init_file + len + 1, sexp_init_file_suffix, strlen(sexp_init_file_suffix)+1);
+-  init_file[len + 1 + strlen(sexp_init_file_suffix)] = 0;
+-  tmp = sexp_load_module_file(ctx, init_file, e);
+   sexp_set_parameter(ctx, e, sexp_global(ctx, SEXP_G_INTERACTION_ENV_SYMBOL), e);
+-  /* load and bind meta-7.scm env */
+ #if SEXP_USE_MODULES
+-  if (!sexp_exceptionp(tmp)) {
+-    if (!sexp_envp(tmp=sexp_global(ctx, SEXP_G_META_ENV))) {
+-      tmp = sexp_make_env(ctx);
+-      if (! sexp_exceptionp(tmp)) {
+-        sexp_global(ctx, SEXP_G_META_ENV) = tmp;
+-        sexp_env_parent(tmp) = e;
+-        op = sexp_load_module_file(ctx, sexp_meta_file, tmp);
+-        if (sexp_exceptionp(op))
+-          sexp_print_exception(ctx, op, sexp_current_error_port(ctx));
+-      }
+-    }
+-    if (!sexp_exceptionp(tmp)) {
+-      sym = sexp_intern(ctx, "repl-import", -1);
+-      tmp = sexp_env_ref(ctx, tmp, sym, SEXP_VOID);
++  /* Host boots meta; splice import if already present. */
++  tmp = sexp_global(ctx, SEXP_G_META_ENV);
++  if (sexp_envp(tmp)) {
++    sym = sexp_intern(ctx, "repl-import", -1);
++    tmp = sexp_env_ref(ctx, tmp, sym, SEXP_VOID);
++    if (tmp != SEXP_VOID) {
+       sym = sexp_intern(ctx, "import", -1);
+-      /* splice import in place to mutate both this env and the */
+-      /* frozen version in the meta env) */
+       tmp = sexp_cons(ctx, sym, tmp);
+       sexp_env_next_cell(tmp) = sexp_env_next_cell(sexp_env_bindings(e));
+       sexp_env_next_cell(sexp_env_bindings(e)) = tmp;
+@@ -2577,8 +2454,9 @@
+   }
+ #endif
+   sexp_gc_release3(ctx);
+-  return sexp_exceptionp(tmp) ? tmp : e;
+-}
++  return e;
++}
++
+ 
+ sexp sexp_make_standard_env_op (sexp ctx, sexp self, sexp_sint_t n, sexp version) {
+   sexp_gc_var1(env);

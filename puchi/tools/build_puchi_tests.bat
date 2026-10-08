@@ -72,7 +72,7 @@ exit /b 1
 
 :run_msvc
 REM No /I. — puchi.h must be a true single-header (tests use #include "../puchi.h").
-set CF=/nologo /W1 /O2 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_DEPRECATE
+set CF=/nologo /W4 /O2 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_DEPRECATE
 set HF=/I%TEST%\harness-include
 
 echo === [%TAG%][integer] C suite ===
@@ -104,7 +104,7 @@ goto :run_scheme
 
 :run_clang
 REM No -I. — puchi.h must be a true single-header (tests use #include "../puchi.h").
-set CF=-O2 -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE -Wno-everything
+set CF=-O2 -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE -Weverything
 set HF=-I%TEST%\harness-include
 
 echo === [%TAG%][integer] C suite ===

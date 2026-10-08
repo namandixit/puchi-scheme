@@ -1,0 +1,538 @@
+--- sexp.h
++++ sexp.h
+@@ -12,63 +12,21 @@
+ #define SEXP_FLEXIBLE_ARRAY []
+ #endif
+ 
+-#define SEXP_MODULE_PATH_VAR "CHIBI_MODULE_PATH"
+-#define SEXP_NO_SYSTEM_PATH_VAR "CHIBI_IGNORE_SYSTEM_PATH"
++/* puchi: no CHIBI_* getenv names */
+ 
+ #include "chibi/features.h"
+ #include "chibi/install.h"
+ 
+-#if !(defined _WIN32) || defined(__CYGWIN__)
+-#include <sys/socket.h>
++/* ---- puchi: portable host surface (no OS backends) ---- */
++#define sexp_isalpha(x) (PUCHI_ISALPHA(x))
++#define sexp_isxdigit(x) (PUCHI_ISXDIGIT(x))
++#define sexp_isdigit(x) (PUCHI_ISDIGIT(x))
++#define sexp_tolower(x) (PUCHI_TOLOWER(x))
++#define sexp_toupper(x) (PUCHI_TOUPPER(x))
++
++/* Harness fileno sock field (production has no fileno type). */
++#if defined(PUCHI_TEST)
+ #define SOCKET_TYPE sexp_sint_t
+-#else
+-#include <winsock2.h>
+-#define SOCKET_TYPE SOCKET
+-#endif
+-
+-#ifdef _WIN32
+-#include <windows.h>
+-#include <errno.h>
+-#define sexp_isalpha(x) (isalpha(x))
+-#define sexp_isxdigit(x) (isxdigit(x))
+-#define sexp_isdigit(x) (isdigit(x))
+-#define sexp_tolower(x) (tolower(x))
+-#define sexp_toupper(x) (toupper(x))
+-#define SEXP_USE_POLL_PORT 0
+-#define sexp_poll_input(ctx, port) usleep(SEXP_POLL_SLEEP_TIME)
+-#define sexp_poll_output(ctx, port) usleep(SEXP_POLL_SLEEP_TIME)
+-#else
+-#if SEXP_USE_DL
+-#include <dlfcn.h>
+-#endif
+-#ifndef PLAN9
+-#include <errno.h>
+-#include <unistd.h>
+-#define SEXP_USE_POLL_PORT 1
+-#define sexp_poll_input(ctx, port) sexp_poll_port(ctx, port, 1)
+-#define sexp_poll_output(ctx, port) sexp_poll_port(ctx, port, 0)
+-#else
+-#define SEXP_USE_POLL_PORT 0
+-#define sexp_poll_input(ctx, port) sleep(SEXP_POLL_SLEEP_TIME_MS)
+-#define sexp_poll_output(ctx, port) sleep(SEXP_POLL_SLEEP_TIME_MS)
+-#endif
+-#if SEXP_USE_GREEN_THREADS
+-#include <sys/time.h>
+-#include <sys/select.h>
+-#include <fcntl.h>
+-#include <poll.h>
+-#endif
+-#define sexp_isalpha(x) (isalpha(x))
+-#define sexp_isxdigit(x) (isxdigit(x))
+-#define sexp_isdigit(x) (isdigit(x))
+-#define sexp_tolower(x) (tolower(x))
+-#define sexp_toupper(x) (toupper(x))
+-#endif
+-
+-#if SEXP_USE_GC_FILE_DESCRIPTORS
+-#define sexp_out_of_file_descriptors() (errno == EMFILE)
+-#else
+-#define sexp_out_of_file_descriptors() (0)
+ #endif
+ 
+ #ifdef __GNUC__
+@@ -77,49 +35,7 @@
+ #define SEXP_NO_WARN_UNUSED
+ #endif
+ 
+-#ifdef PLAN9
+-#include <u.h>
+-#include <libc.h>
+-#include <fcall.h>
+-#include <thread.h>
+-#include <9p.h>
+-typedef unsigned long size_t;
+-typedef long long off_t;
+-#define STRINGIFY(x) #x
+-#define TOSTRING(x) STRINGIFY(x)
+-#define exit(x)           exits(TOSTRING(x))
+-#define fabsl          fabs
+-#define M_PI           3.141592653589793
+-#define M_LN10         2.30258509299404568402  /* log_e 10 */
+-#define FLT_RADIX 2
+-#define NAN NaN()
+-#define INFINITY Inf(1)
+-#define isfinite(x) !(isNaN(x) || isInf(x,0))
+-typedef u32int uint32_t;
+-typedef s32int int32_t;
+-typedef u64int uint64_t;
+-typedef s64int int64_t;
+-#else
+-#include <stddef.h>
+-#include <stdlib.h>
+-#include <string.h>
+-#include <stdarg.h>
+-#include <sys/stat.h>
+-#include <sys/types.h>
+-#define _REENTRANT 1
+-#include <math.h>
+-#if SEXP_USE_FLONUMS
+-#include <float.h>
+-#include <limits.h>
+-#endif
+-#endif
+-
+-#if SEXP_USE_TRACK_ALLOC_BACKTRACE
+-#include <execinfo.h>
+-#endif
+-
+-#include <ctype.h>
+-#include <stdio.h>
++/* puchi: no stdio.h */
+ 
+ /* tagging system
+  *   bits end in     1:  fixnum
+@@ -188,7 +104,9 @@
+ #endif
+   SEXP_IPORT,
+   SEXP_OPORT,
++#if defined(PUCHI_TEST)
+   SEXP_FILENO,
++#endif
+   SEXP_EXCEPTION,
+   SEXP_PROCEDURE,
+   SEXP_MACRO,
+@@ -285,7 +203,7 @@
+ #ifdef PLAN9
+ #include <ape/stdint.h>
+ #else
+-#include <stdint.h>
++/* puchi: stdint.h in banner */
+ #endif
+ # ifdef UINT8_MAX
+ #  define SEXP_UINT8_DEFINED 1
+@@ -305,7 +223,7 @@
+ # ifdef PLAN9
+ # include <ape/stdint.h>
+ # else
+-# include <stdint.h>
++/* puchi: stdint.h in banner */
+ # endif
+ # endif
+ # endif
+@@ -376,8 +294,10 @@
+ typedef sexp (*sexp_proc5) (sexp, sexp, sexp_sint_t, sexp, sexp, sexp, sexp);
+ typedef sexp (*sexp_proc6) (sexp, sexp, sexp_sint_t, sexp, sexp, sexp, sexp, sexp);
+ typedef sexp (*sexp_proc7) (sexp, sexp, sexp_sint_t, sexp, sexp, sexp, sexp, sexp, sexp);
++#if defined(PUCHI_TEST)
+ typedef sexp (*sexp_init_proc)(sexp, sexp, sexp_sint_t, sexp, const char*, const sexp_abi_identifier_t);
+ SEXP_API sexp sexp_init_library(sexp, sexp, sexp_sint_t, sexp, const char*, const sexp_abi_identifier_t);
++#endif
+ 
+ typedef struct sexp_free_list_t *sexp_free_list;
+ struct sexp_free_list_t {
+@@ -403,10 +323,12 @@
+   struct sexp_gc_var_t *next;
+ };
+ 
+-struct sexp_library_entry_t {   /* for static builds and user exported C */
+-  const char *name;             /* libaries */
++#if defined(PUCHI_TEST)
++struct sexp_library_entry_t {   /* harness static include-shared */
++  const char *name;
+   sexp_init_proc init;
+ };
++#endif
+ 
+ struct sexp_type_struct {
+   sexp name, cpl, slots, getters, setters, id, print, dl, finalize_name;
+@@ -501,21 +423,37 @@
+     struct {
+       sexp name;
+       sexp cookie;
++#if defined(PUCHI_TEST)
+       sexp fd;
+-      FILE *stream;
++#endif
++      const puchi_stream_ops *stream_ops;
++      void *stream_udata;
+       char *buf;
+-      char openp, bidirp, binaryp, shutdownp, no_closep, sourcep,
+-        blockedp, fold_casep;
++      char openp,
++#if defined(PUCHI_TEST)
++        bidirp,
++#endif
++        binaryp,
++#if defined(PUCHI_TEST)
++        shutdownp,
++#endif
++        no_closep, sourcep,
++#if defined(PUCHI_TEST)
++        blockedp,
++#endif
++        fold_casep;
+       sexp_uint_t offset, line, flags;
+       size_t size;
+     } port;
++#if defined(PUCHI_TEST)
+     struct {
+       char openp, no_closep;
+       sexp_sint_t fd, count;
+-#ifdef _WIN32      
++#ifdef _WIN32
+       SOCKET_TYPE sock;
+-#endif      
++#endif
+     } fileno;
++#endif
+     struct {
+       sexp kind, message, irritants, procedure, source, stack_trace;
+     } exception;
+@@ -556,10 +494,7 @@
+     struct {
+       sexp env, free_vars, expr, rename;
+     } synclo;
+-    struct {
+-      sexp file;
+-      void* handle;
+-    } dl;
++    /* puchi: SEXP_DL removed */
+     struct sexp_opcode_struct opcode;
+     struct sexp_core_form_struct core;
+     /* ast types */
+@@ -590,7 +525,7 @@
+     } stack;
+     struct {
+       sexp stack, env, parent, child,
+-        globals, dk, params, proc, name, specific, event, result;
++        globals, dk, params, proc, name, specific, result;
+ #if SEXP_USE_STABLE_ABI || SEXP_USE_DL
+       sexp dl;
+ #endif
+@@ -603,7 +538,10 @@
+       unsigned char* ip;
+       struct timeval tval;
+ #endif
+-      char tailp, tracep, timeoutp, waitp, errorp, interruptp;
++      char tailp, tracep, errorp;
++#if defined(PUCHI_TEST)
++      char interruptp;
++#endif
+       sexp_uint_t last_fp;
+       sexp_uint_t gc_count;
+ #if SEXP_USE_TIME_GC
+@@ -645,7 +583,9 @@
+ #define SEXP_STRING_OPORT SEXP_MAKE_IMMEDIATE(8)  /* internal use */
+ #define SEXP_TRAMPOLINE   SEXP_MAKE_IMMEDIATE(9)  /* internal use */
+ #define SEXP_UNCAUGHT     SEXP_MAKE_IMMEDIATE(10) /* internal use */
++#if defined(PUCHI_TEST)
+ #define SEXP_ABI_ERROR    SEXP_MAKE_IMMEDIATE(11) /* internal use */
++#endif
+ #if SEXP_USE_OBJECT_BRACE_LITERALS
+ #define SEXP_CLOSE_BRACE  SEXP_MAKE_IMMEDIATE(12) /* internal use */
+ #endif
+@@ -837,11 +777,17 @@
+ #define sexp_vectorp(x)     (sexp_check_tag(x, SEXP_VECTOR))
+ #define sexp_iportp(x)      (sexp_check_tag(x, SEXP_IPORT))
+ #if SEXP_USE_BIDIRECTIONAL_PORTS
++#if defined(PUCHI_TEST)
+ #define sexp_oportp(x)      (sexp_check_tag(x, SEXP_OPORT) || (sexp_check_tag(x, SEXP_IPORT) && sexp_port_bidirp(x)))
+ #else
+ #define sexp_oportp(x)      (sexp_check_tag(x, SEXP_OPORT))
+ #endif
++#else
++#define sexp_oportp(x)      (sexp_check_tag(x, SEXP_OPORT))
++#endif
++#if defined(PUCHI_TEST)
+ #define sexp_filenop(x)     (sexp_check_tag(x, SEXP_FILENO))
++#endif
+ #if SEXP_USE_BIGNUMS
+ #define sexp_bignump(x)     (sexp_check_tag(x, SEXP_BIGNUM))
+ #else
+@@ -863,7 +809,6 @@
+ #define sexp_envp(x)        (sexp_check_tag(x, SEXP_ENV))
+ #define sexp_bytecodep(x)   (sexp_check_tag(x, SEXP_BYTECODE))
+ #define sexp_corep(x)       (sexp_check_tag(x, SEXP_CORE))
+-#define sexp_dlp(x)         (sexp_check_tag(x, SEXP_DL))
+ #define sexp_opcodep(x)     (sexp_check_tag(x, SEXP_OPCODE))
+ #define sexp_macrop(x)      (sexp_check_tag(x, SEXP_MACRO))
+ #define sexp_syntacticp(x)  (sexp_corep(x) || sexp_macrop(x))
+@@ -928,7 +873,7 @@
+ 
+ #define sexp_portp(x) (sexp_check_tag(x, SEXP_IPORT) || sexp_check_tag(x, SEXP_OPORT))
+ 
+-#define sexp_stream_portp(x) (sexp_port_stream(x) != NULL)
++#define sexp_stream_portp(x) (sexp_port_stream_ops(x) != NULL)
+ 
+ #define sexp_port_customp(x) (sexp_vectorp(sexp_port_cookie(x)) && sexp_vector_length(sexp_port_cookie(x)) == 6)
+ 
+@@ -1124,8 +1069,10 @@
+ 
+ #endif	/* SEXP_USE_FLONUMS || SEXP_USE_BIGNUMS */
+ 
+-#define sexp_shift_epoch(x) ((x)-SEXP_EPOCH_OFFSET)
+-#define sexp_unshift_epoch(x) ((x)+SEXP_EPOCH_OFFSET)
++#if defined(PUCHI_TEST)
++#define sexp_shift_epoch(x) (x)
++#define sexp_unshift_epoch(x) (x)
++#endif
+ 
+ #define sexp_infp(x) (sexp_flonump(x) && isinf(sexp_flonum_value(x)))
+ #define sexp_nanp(x) (sexp_flonump(x) && isnan(sexp_flonum_value(x)))
+@@ -1253,33 +1200,54 @@
+ #define sexp_lsymbol_data(x)   sexp_flexible_array_field(x, symbol, char)
+ #define sexp_lsymbol_length(x) (sexp_field(x, symbol, SEXP_SYMBOL, length))
+ 
+-#define sexp_port_stream(p)     (sexp_pred_field(p, port, sexp_portp, stream))
++#define sexp_port_stream_ops(p)   (sexp_pred_field(p, port, sexp_portp, stream_ops))
++#define sexp_port_stream_udata(p) (sexp_pred_field(p, port, sexp_portp, stream_udata))
++/* truthy alias used by upstream conditions */
++#define sexp_port_stream(p)       sexp_port_stream_ops(p)
+ #define sexp_port_name(p)       (sexp_pred_field(p, port, sexp_portp, name))
+ #define sexp_port_line(p)       (sexp_pred_field(p, port, sexp_portp, line))
+ #define sexp_port_openp(p)      (sexp_pred_field(p, port, sexp_portp, openp))
++#if defined(PUCHI_TEST)
+ #define sexp_port_bidirp(p)     (sexp_pred_field(p, port, sexp_portp, bidirp))
++#endif
+ #define sexp_port_binaryp(p)    (sexp_pred_field(p, port, sexp_portp, binaryp))
++#if defined(PUCHI_TEST)
+ #define sexp_port_shutdownp(p)  (sexp_pred_field(p, port, sexp_portp, shutdownp))
++#endif
+ #define sexp_port_no_closep(p)  (sexp_pred_field(p, port, sexp_portp, no_closep))
+ #define sexp_port_sourcep(p)    (sexp_pred_field(p, port, sexp_portp, sourcep))
++#if defined(PUCHI_TEST)
+ #define sexp_port_blockedp(p)   (sexp_pred_field(p, port, sexp_portp, blockedp))
++#endif
+ #define sexp_port_fold_casep(p) (sexp_pred_field(p, port, sexp_portp, fold_casep))
+ #define sexp_port_cookie(p)     (sexp_pred_field(p, port, sexp_portp, cookie))
+ #define sexp_port_buf(p)        (sexp_pred_field(p, port, sexp_portp, buf))
+ #define sexp_port_size(p)       (sexp_pred_field(p, port, sexp_portp, size))
+ #define sexp_port_offset(p)     (sexp_pred_field(p, port, sexp_portp, offset))
+ #define sexp_port_flags(p)      (sexp_pred_field(p, port, sexp_portp, flags))
++#if defined(PUCHI_TEST)
+ #define sexp_port_fd(p)         (sexp_pred_field(p, port, sexp_portp, fd))
+-
++#endif
++
++#if defined(PUCHI_TEST)
+ #define sexp_fileno_fd(f)        (sexp_pred_field(f, fileno, sexp_filenop, fd))
++#endif
++#if defined(PUCHI_TEST)
+ #define sexp_fileno_count(f)     (sexp_pred_field(f, fileno, sexp_filenop, count))
++#endif
++#if defined(PUCHI_TEST)
+ #define sexp_fileno_openp(f)     (sexp_pred_field(f, fileno, sexp_filenop, openp))
++#endif
++#if defined(PUCHI_TEST)
+ #ifdef _WIN32
+ #define sexp_fileno_sock(f)      (sexp_pred_field(f, fileno, sexp_filenop, sock))
+ #else
+ #define sexp_fileno_sock(f)      (sexp_fileno_fd(f))
+ #endif
++#endif
++#if defined(PUCHI_TEST)
+ #define sexp_fileno_no_closep(f) (sexp_pred_field(f, fileno, sexp_filenop, no_closep))
++#endif
+ 
+ #define sexp_ratio_numerator(q)   (sexp_pred_field(q, ratio, sexp_ratiop, numerator))
+ #define sexp_ratio_denominator(q) (sexp_pred_field(q, ratio, sexp_ratiop, denominator))
+@@ -1335,8 +1303,6 @@
+ #define sexp_core_code(x)         (sexp_field(x, core, SEXP_CORE, code))
+ #define sexp_core_name(x)         (sexp_field(x, core, SEXP_CORE, name))
+ 
+-#define sexp_dl_file(x)            (sexp_field(x, dl, SEXP_DL, file))
+-#define sexp_dl_handle(x)          (sexp_field(x, dl, SEXP_DL, handle))
+ 
+ #define sexp_opcode_class(x)       (sexp_field(x, opcode, SEXP_OPCODE, op_class))
+ #define sexp_opcode_code(x)        (sexp_field(x, opcode, SEXP_OPCODE, code))
+@@ -1441,14 +1407,13 @@
+ #define sexp_context_timeval(x)  (sexp_field(x, context, SEXP_CONTEXT, tval))
+ #define sexp_context_name(x)     (sexp_field(x, context, SEXP_CONTEXT, name))
+ #define sexp_context_specific(x) (sexp_field(x, context, SEXP_CONTEXT, specific))
+-#define sexp_context_event(x)    (sexp_field(x, context, SEXP_CONTEXT, event))
+-#define sexp_context_timeoutp(x) (sexp_field(x, context, SEXP_CONTEXT, timeoutp))
+-#define sexp_context_waitp(x)    (sexp_field(x, context, SEXP_CONTEXT, waitp))
+ #define sexp_context_dl(x)       (sexp_field(x, context, SEXP_CONTEXT, dl))
+ 
+ #define sexp_context_result(x)   (sexp_field(x, context, SEXP_CONTEXT, result))
+ #define sexp_context_errorp(x)   (sexp_field(x, context, SEXP_CONTEXT, errorp))
++#if defined(PUCHI_TEST)
+ #define sexp_context_interruptp(x) (sexp_field(x, context, SEXP_CONTEXT, interruptp))
++#endif
+ 
+ /* during compilation, sexp_context_specific is set to a vector */
+ /* containing the following elements: */
+@@ -1584,10 +1549,10 @@
+   SEXP_G_NUM_TYPES,
+   SEXP_G_OOM_ERROR,             /* out of memory exception object */
+   SEXP_G_OOS_ERROR,             /* out of stack exception object */
++#if defined(PUCHI_TEST)
+   SEXP_G_ABI_ERROR,             /* incompatible ABI loading library */
+-  SEXP_G_INTERRUPT_ERROR,       /* C-c in the repl */
++#endif
+   SEXP_G_OPTIMIZATIONS,
+-  SEXP_G_SIGNAL_HANDLERS,
+   SEXP_G_META_ENV,
+   SEXP_G_MODULE_PATH,
+   SEXP_G_QUOTE_SYMBOL,
+@@ -1607,7 +1572,6 @@
+   SEXP_G_ERR_HANDLER,
+   SEXP_G_RESUMECC_BYTECODE,
+   SEXP_G_FINAL_RESUMER,
+-  SEXP_G_RANDOM_SOURCE,
+   SEXP_G_STRICT_P,
+   SEXP_G_NO_TAIL_CALLS_P,
+ #if SEXP_USE_STABLE_ABI || SEXP_USE_FOLD_CASE_SYMS
+@@ -1615,8 +1579,6 @@
+ #endif
+ #if SEXP_USE_STABLE_ABI || SEXP_USE_WEAK_REFERENCES
+   SEXP_G_WEAK_OBJECTS_PRESENT,
+-  SEXP_G_FILE_DESCRIPTORS,
+-  SEXP_G_NUM_FILE_DESCRIPTORS,
+ #endif
+ #if SEXP_USE_STABLE_ABI || ! SEXP_USE_BOEHM
+   SEXP_G_PRESERVATIVES,
+@@ -1675,13 +1637,13 @@
+ 
+ /***************************** general API ****************************/
+ 
+-#define sexp_read_char(x, p) (sexp_port_buf(p) ? ((sexp_port_offset(p) < sexp_port_size(p)) ? ((unsigned char*)sexp_port_buf(p))[sexp_port_offset(p)++] : sexp_buffered_read_char(x, p)) : getc(sexp_port_stream(p)))
+-#define sexp_push_char(x, c, p) ((c!=EOF) && (sexp_port_buf(p) ? (sexp_port_buf(p)[--sexp_port_offset(p)] = ((char)(c))) : ungetc(c, sexp_port_stream(p))))
+-#define sexp_write_char(x, c, p) (sexp_port_buf(p) ? ((sexp_port_offset(p) < sexp_port_size(p)) ? ((((sexp_port_buf(p))[sexp_port_offset(p)++]) = (char)(c)), 0) : sexp_buffered_write_char(x, c, p)) : putc(c, sexp_port_stream(p)))
+-#define sexp_write_string(x, s, p) (sexp_port_buf(p) ? sexp_buffered_write_string(x, s, p) : fputs(s, sexp_port_stream(p)))
+-#define sexp_write_string_n(x, s, n, p) (sexp_port_buf(p) ? sexp_buffered_write_string_n(x, s, n, p) : fwrite(s, 1, n, sexp_port_stream(p)))
+-#define sexp_flush(x, p) (sexp_port_buf(p) ? sexp_buffered_flush(x, p, 0) : fflush(sexp_port_stream(p)))
+-#define sexp_flush_forced(x, p) (sexp_port_buf(p) ? sexp_buffered_flush(x, p, 1) : fflush(sexp_port_stream(p)))
++#define sexp_read_char(x, p) (sexp_port_buf(p) ? ((sexp_port_offset(p) < sexp_port_size(p)) ? ((unsigned char*)sexp_port_buf(p))[sexp_port_offset(p)++] : sexp_buffered_read_char(x, p)) : (sexp_port_stream_ops(p) && sexp_port_stream_ops(p)->read_char ? sexp_port_stream_ops(p)->read_char(sexp_port_stream_udata(p)) : EOF))
++#define sexp_push_char(x, c, p) ((c!=EOF) && (sexp_port_buf(p) ? (sexp_port_buf(p)[--sexp_port_offset(p)] = ((char)(c))) : (sexp_port_stream_ops(p) && sexp_port_stream_ops(p)->unget_char ? sexp_port_stream_ops(p)->unget_char(sexp_port_stream_udata(p), c) : 0)))
++#define sexp_write_char(x, c, p) (sexp_port_buf(p) ? ((sexp_port_offset(p) < sexp_port_size(p)) ? ((((sexp_port_buf(p))[sexp_port_offset(p)++]) = (char)(c)), 0) : sexp_buffered_write_char(x, c, p)) : (sexp_port_stream_ops(p) && sexp_port_stream_ops(p)->write_char ? sexp_port_stream_ops(p)->write_char(sexp_port_stream_udata(p), c) : -1))
++#define sexp_write_string(x, s, p) (sexp_port_buf(p) ? sexp_buffered_write_string(x, s, p) : (sexp_port_stream_ops(p) && sexp_port_stream_ops(p)->write ? (int)sexp_port_stream_ops(p)->write(sexp_port_stream_udata(p), (const void*)(s), PUCHI_STRLEN(s)) : -1))
++#define sexp_write_string_n(x, s, n, p) (sexp_port_buf(p) ? sexp_buffered_write_string_n(x, s, n, p) : (sexp_port_stream_ops(p) && sexp_port_stream_ops(p)->write ? sexp_port_stream_ops(p)->write(sexp_port_stream_udata(p), (const void*)(s), (size_t)(n)) : 0))
++#define sexp_flush(x, p) (sexp_port_buf(p) ? sexp_buffered_flush(x, p, 0) : (sexp_port_stream_ops(p) && sexp_port_stream_ops(p)->flush ? sexp_port_stream_ops(p)->flush(sexp_port_stream_udata(p)) : 0))
++#define sexp_flush_forced(x, p) (sexp_port_buf(p) ? sexp_buffered_flush(x, p, 1) : (sexp_port_stream_ops(p) && sexp_port_stream_ops(p)->flush ? sexp_port_stream_ops(p)->flush(sexp_port_stream_udata(p)) : 0))
+ 
+ SEXP_API int sexp_buffered_read_char (sexp ctx, sexp p);
+ SEXP_API int sexp_buffered_write_char (sexp ctx, int c, sexp p);
+@@ -1690,18 +1652,24 @@
+ SEXP_API int sexp_buffered_flush (sexp ctx, sexp p, int forcep);
+ 
+ #define sexp_newline(ctx, p) sexp_write_char((ctx), '\n', (p))
+-#define sexp_at_eofp(p)      (feof(sexp_port_stream(p)))
+-#define sexp_port_fileno(p)  (sexp_port_stream(p) ? fileno(sexp_port_stream(p)) : sexp_filenop(sexp_port_fd(p)) ? sexp_fileno_fd(sexp_port_fd(p)) : -1)
+-#define sexp_port_sock(p)  (sexp_port_stream(p) ? -1 : sexp_filenop(sexp_port_fd(p)) ? sexp_fileno_sock(sexp_port_fd(p)) : -1)
+-
+-#if SEXP_USE_AUTOCLOSE_PORTS
+-#define SEXP_FINALIZE_PORT sexp_finalize_port
+-#define SEXP_FINALIZE_PORTN (sexp)"sexp_finalize_port"
++#define sexp_at_eofp(p)      (sexp_port_stream_ops(p) && sexp_port_stream_ops(p)->eof_p ? sexp_port_stream_ops(p)->eof_p(sexp_port_stream_udata(p)) : 0)
++#if defined(PUCHI_TEST)
++#define sexp_port_fileno(p)  (sexp_filenop(sexp_port_fd(p)) ? sexp_fileno_fd(sexp_port_fd(p)) : -1)
++#else
++#define sexp_port_fileno(p)  (-1)
++#endif
++#if defined(PUCHI_TEST)
++#define sexp_port_sock(p)  (sexp_filenop(sexp_port_fd(p)) ? sexp_fileno_sock(sexp_port_fd(p)) : -1)
++#else
++#define sexp_port_sock(p)  (-1)
++#endif
++
++#define SEXP_FINALIZE_PORT NULL
++#define SEXP_FINALIZE_PORTN NULL
++#if defined(PUCHI_TEST)
+ #define SEXP_FINALIZE_FILENO sexp_finalize_fileno
+ #define SEXP_FINALIZE_FILENON (sexp)"sexp_finalize_fileno"
+ #else
+-#define SEXP_FINALIZE_PORT NULL
+-#define SEXP_FINALIZE_PORTN NULL
+ #define SEXP_FINALIZE_FILENO NULL
+ #define SEXP_FINALIZE_FILENON NULL
+ #endif
+@@ -1711,8 +1679,6 @@
+ #define SEXP_FINALIZE_DL sexp_finalize_dl
+ #define SEXP_FINALIZE_DLN (sexp)"sexp_finalize_dl"
+ #else
+-#define SEXP_FINALIZE_DL NULL
+-#define SEXP_FINALIZE_DLN NULL
+ #endif
+ 
+ #if SEXP_USE_TRACK_ALLOC_SOURCE
+@@ -1729,7 +1695,9 @@
+ /* array libraries must be terminated with {NULL, NULL} and must     */
+ /* remain valid throughout its use by Chibi.                         */
+ 
++#if defined(PUCHI_TEST)
+ SEXP_API void sexp_add_static_libraries(struct sexp_library_entry_t* libraries);
++#endif
+ 
+ SEXP_API sexp sexp_alloc_tagged_aux(sexp ctx, size_t size, sexp_uint_t tag sexp_current_source_param);
+ SEXP_API sexp sexp_make_context(sexp ctx, size_t size, size_t max_size);
+@@ -1786,14 +1754,20 @@
+ SEXP_API sexp sexp_write_to_string (sexp ctx, sexp obj);
+ SEXP_API sexp sexp_write_simple_object (sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp writer, sexp out);
+ SEXP_API sexp sexp_finalize_port (sexp ctx, sexp self, sexp_sint_t n, sexp port);
++#if defined(PUCHI_TEST)
+ SEXP_API sexp sexp_make_fileno_op (sexp ctx, sexp self, sexp_sint_t n, sexp fd, sexp no_closep);
+-SEXP_API sexp sexp_make_input_port (sexp ctx, FILE* in, sexp name);
+-SEXP_API sexp sexp_make_output_port (sexp ctx, FILE* out, sexp name);
++#endif
++SEXP_API sexp sexp_make_input_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name);
++SEXP_API sexp sexp_make_output_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name);
++#if defined(PUCHI_TEST)
+ SEXP_API sexp sexp_open_input_file_descriptor (sexp ctx, sexp self, sexp_sint_t n, sexp fileno, sexp socketp);
++#endif
++#if defined(PUCHI_TEST)
+ SEXP_API sexp sexp_open_output_file_descriptor (sexp ctx, sexp self, sexp_sint_t n, sexp fileno, sexp socketp);
+-SEXP_API sexp sexp_make_non_null_input_port (sexp ctx, FILE* in, sexp name);
+-SEXP_API sexp sexp_make_non_null_output_port (sexp ctx, FILE* out, sexp name);
+-SEXP_API sexp sexp_make_non_null_input_output_port (sexp ctx, FILE* io, sexp name);
++#endif
++SEXP_API sexp sexp_make_non_null_input_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name);
++SEXP_API sexp sexp_make_non_null_output_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name);
++SEXP_API sexp sexp_make_non_null_input_output_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name);
+ SEXP_API sexp sexp_port_outputp_op (sexp ctx, sexp self, sexp_sint_t n, sexp port);
+ SEXP_API sexp sexp_port_binaryp_op (sexp ctx, sexp self, sexp_sint_t n, sexp port);
+ SEXP_API sexp sexp_port_openp_op (sexp ctx, sexp self, sexp_sint_t n, sexp port);
+@@ -1997,7 +1971,9 @@
+ #define sexp_make_getter(ctx, a, b, c) sexp_make_getter_op(ctx, NULL, 3, a, b, c)
+ #define sexp_make_setter(ctx, a, b, c) sexp_make_setter_op(ctx, NULL, 3, a, b, c)
+ #define sexp_lookup_type(ctx, name, id) sexp_lookup_type_op(ctx, NULL, 2, name, id)
++#if defined(PUCHI_TEST)
+ #define sexp_make_fileno(ctx, fd, no_closep) sexp_make_fileno_op(ctx, NULL, 2, fd, no_closep)
++#endif
+ 
+ enum sexp_opcode_names {
+   /*  0 00 */ SEXP_OP_NOOP,

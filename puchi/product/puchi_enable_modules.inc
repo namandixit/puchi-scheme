@@ -18,27 +18,7 @@ static int puchi_module_join_path(char *out, size_t out_sz, const char *dir, con
 }
 
 static sexp puchi_module_eval_source(sexp ctx, const char *text, size_t len, sexp env) {
-  sexp_gc_var5(ctx2, x, in, res, s);
-  sexp_gc_preserve5(ctx, ctx2, x, in, res, s);
-  res = SEXP_VOID;
-  s = sexp_c_string(ctx, text, (sexp_sint_t)len);
-  in = sexp_open_input_string(ctx, s);
-  if (sexp_exceptionp(in)) {
-    res = in;
-  } else {
-    sexp_port_sourcep(in) = 1;
-    ctx2 = sexp_make_eval_context(ctx, NULL, env, 0, 0);
-    sexp_context_parent(ctx2) = ctx;
-    sexp_context_tailp(ctx2) = 0;
-    while ((x = sexp_read(ctx2, in)) != (sexp)SEXP_EOF) {
-      res = sexp_exceptionp(x) ? x : sexp_eval(ctx2, x, env);
-      if (sexp_exceptionp(res)) break;
-    }
-    if (x == SEXP_EOF) res = SEXP_VOID;
-    sexp_close_port(ctx, in);
-  }
-  sexp_gc_release5(ctx);
-  return res;
+  return puchi_eval_scheme_text(ctx, text, (sexp_sint_t)len, env, 1);
 }
 
 static sexp puchi_module_find_file_f(sexp ctx, sexp self, sexp_sint_t n, sexp file) {
