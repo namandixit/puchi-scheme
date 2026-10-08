@@ -1,0 +1,39 @@
+--- eval.c
++++ eval.c
+@@ -9,8 +9,6 @@
+ #endif
+ 
+ /************************************************************************/
+-
+-static int scheme_initialized_p = 0;
+ 
+ static sexp analyze (sexp ctx, sexp x, int depth, int defok);
+ 
+@@ -530,9 +528,9 @@
+ #endif
+ }
+ 
+-sexp sexp_make_eval_context (sexp ctx, sexp stack, sexp env, sexp_uint_t size, sexp_uint_t max_size) {
++sexp sexp_make_eval_context_host (sexp ctx, sexp stack, sexp env, sexp_uint_t size, sexp_uint_t max_size, const puchi_host *host) {
+   sexp_gc_var1(res);
+-  res = sexp_make_context(ctx, size, max_size);
++  res = sexp_make_context(ctx, size, max_size, host);
+   if (!res || sexp_exceptionp(res))
+     return res;
+   if (ctx) sexp_gc_preserve1(ctx, res);
+@@ -2769,9 +2767,10 @@
+   return res;
+ }
+ 
++sexp sexp_make_eval_context (sexp ctx, sexp stack, sexp env, sexp_uint_t size, sexp_uint_t max_size) {
++  return sexp_make_eval_context_host(ctx, stack, env, size, max_size, NULL);
++}
++
+ void sexp_scheme_init (void) {
+-  if (! scheme_initialized_p) {
+-    scheme_initialized_p = 1;
+-    sexp_init();
+-  }
+-}
++  /* puchi: no process-global scheme init */
++}

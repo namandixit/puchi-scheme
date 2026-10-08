@@ -7,6 +7,14 @@
 #define PUCHI_TEST 1
 #endif
 
+/* Stubs such as lib/srfi/151/bit.c still #if SEXP_USE_BIGNUMS. puchi.h has
+ * no SEXP_USE_* knobs; bridge tower mode so bitmaps are not fixnum-only. */
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#if !defined(SEXP_USE_BIGNUMS)
+#define SEXP_USE_BIGNUMS 1
+#endif
+#endif
+
 #include "../../../puchi.h"
 
 #endif /* PUCHI_HARNESS_CHIBI_EVAL_H */

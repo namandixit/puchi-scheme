@@ -28,6 +28,7 @@ from puchi_host_embed import (
 )
 from puchi_strip_gunk import (
     assert_no_os_residue,
+    assert_no_process_globals,
     assert_no_project_includes,
     scrub_amalgamation_residue,
     scrub_shipped_always_zero_defines,
@@ -87,7 +88,7 @@ def embed_c_string(name: str, text: str) -> str:
 def trim_meta7(src: str) -> str:
     """Keep include-shared → load-modules; don't re-include disk init-7 for (chibi).
 
-    Under PUCHI_TEST, find-module-file resolves *.so via sexp_static_libraries.
+    Under PUCHI_TEST, find-module-file resolves *.so via the per-heap static library list.
     *chibi-env* is already a snapshot of interaction (embedded init-7); including
     lib/init-7.scm from disk would reload the untrimmed stock file and break loads.
     """
@@ -1061,6 +1062,7 @@ def main() -> None:
         assert_no_project_includes(text)
         assert_no_os_residue(text)
         assert_no_sexp_use(text)
+        assert_no_process_globals(text)
         write_text_lf(path, text)
 
 

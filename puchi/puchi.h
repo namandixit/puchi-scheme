@@ -285,7 +285,7 @@ typedef struct puchi_stream_ops {
 } puchi_stream_ops;
 
 /* Host VFS for sexp_enable_modules — disk, zip, or embedded string table.
- * One ops config per process; call enable once after context create. */
+ * Stored on the context heap by sexp_enable_modules. */
 typedef struct puchi_module_ops {
   void *userdata;
   int (*exists)(void *userdata, const char *name); /* 1 if readable */
@@ -294,9 +294,6 @@ typedef struct puchi_module_ops {
 } puchi_module_ops;
 
 #if defined(PUCHI_IMPLEMENTATION)
-static puchi_host puchi_g_host;
-static int puchi_g_host_set;
-
 static void puchi_default_diagnose(void *ud, int code, const char *msg) {
   (void)ud;
   (void)code;
@@ -310,63 +307,27 @@ static void puchi_default_fatal(void *ud, int code, const char *msg) {
   }
 }
 
-static void puchi_host_init(const puchi_host *host) {
-  if (!host || !host->alloc || !host->free) {
-    puchi_g_host.userdata = NULL;
-    puchi_g_host.alloc = NULL;
-    puchi_g_host.free = NULL;
-    puchi_g_host.diagnose = puchi_default_diagnose;
-    puchi_g_host.fatal = puchi_default_fatal;
-    puchi_g_host_set = 0;
-    puchi_default_fatal(NULL, PUCHI_FATAL_INTERNAL, "puchi_host alloc/free required");
-    return;
-  }
-  puchi_g_host = *host;
-  if (!puchi_g_host.diagnose) puchi_g_host.diagnose = puchi_default_diagnose;
-  if (!puchi_g_host.fatal) puchi_g_host.fatal = puchi_default_fatal;
-  puchi_g_host_set = 1;
-}
-
-static void puchi_diagnose(void *ctx, int code, const char *msg) {
-  (void)ctx;
-  if (!puchi_g_host_set) {
-    puchi_default_fatal(NULL, PUCHI_FATAL_INTERNAL, "puchi_host required");
-  }
-  puchi_g_host.diagnose(puchi_g_host.userdata, code, msg ? msg : "");
-}
-
-static void puchi_fatal(void *ctx, int code, const char *msg) {
-  (void)ctx;
-  if (!puchi_g_host_set) {
-    puchi_default_fatal(NULL, code, msg ? msg : "");
-  }
-  puchi_g_host.fatal(puchi_g_host.userdata, code, msg ? msg : "");
-  for (;;) {
-  }
-}
+/* Defined after sexp.h (need sexp_context_heap). */
+static void *puchi_host_alloc(void *ctx, size_t size);
+static void puchi_host_free(void *ctx, void *ptr);
+static void puchi_diagnose(void *ctx, int code, const char *msg);
+static void puchi_fatal(void *ctx, int code, const char *msg);
 #endif
 
-/* ---- allocator hooks (host only; no silent CRT malloc) ---- */
+/* ---- allocator hooks (per-context host on the heap; no process global) ---- */
 #if !defined(SEXP_MALLOC)
 #if defined(PUCHI_IMPLEMENTATION)
-#define SEXP_MALLOC(ctx, size) ((void)(ctx), (puchi_g_host_set ? puchi_g_host.alloc(puchi_g_host.userdata, (size)) : (puchi_fatal(NULL, PUCHI_FATAL_INTERNAL, "no host alloc"), (void *)0)))
+#define SEXP_MALLOC(ctx, size) puchi_host_alloc((void *)(ctx), (size))
 #else
 #define SEXP_MALLOC(ctx, size) ((void)(ctx), (void)(size), (void *)0)
 #endif
 #endif
 #if !defined(SEXP_FREE)
 #if defined(PUCHI_IMPLEMENTATION)
-#define SEXP_FREE(ctx, ptr) ((void)(ctx), (puchi_g_host_set ? puchi_g_host.free(puchi_g_host.userdata, (ptr)) : (void)(puchi_fatal(NULL, PUCHI_FATAL_INTERNAL, "no host free"), 0)))
+#define SEXP_FREE(ctx, ptr) puchi_host_free((void *)(ctx), (ptr))
 #else
 #define SEXP_FREE(ctx, ptr) ((void)(ctx), (void)(ptr))
 #endif
-#endif
-
-#if !defined(sexp_malloc)
-#define sexp_malloc(sz) SEXP_MALLOC(NULL, (sz))
-#endif
-#if !defined(sexp_free)
-#define sexp_free(p) SEXP_FREE(NULL, (p))
 #endif
 
 /* ---- install.h replacements (amalgamate inlines these) ---- */
@@ -818,11 +779,22 @@ struct sexp_free_list_t {
   sexp_free_list next;
 };
 
+/* Per-heap registry. Tables stay caller-owned and unmodified. */
+struct sexp_library_entry_t;
+struct sexp_static_library_list_t {
+  struct sexp_library_entry_t *table;
+  struct sexp_static_library_list_t *next;
+};
+
 typedef struct sexp_heap_t *sexp_heap;
 struct sexp_heap_t {
   sexp_uint_t size, max_size, chunk_size;
   sexp_free_list free_list;
   sexp_heap next;
+  puchi_host host;
+  puchi_module_ops modules;
+  int modules_set;
+  struct sexp_static_library_list_t *static_libraries;
   /* note this must be aligned on a proper heap boundary, */
   /* so we can't just use char data[] */
   char *data;
@@ -2316,11 +2288,11 @@ SEXP_API int sexp_buffered_flush (sexp ctx, sexp p, int forcep);
 /* remain valid throughout its use by Chibi.                         */
 
 #if defined(PUCHI_TEST)
-SEXP_API void sexp_add_static_libraries(struct sexp_library_entry_t* libraries);
+SEXP_API void sexp_add_static_libraries(sexp ctx, struct sexp_library_entry_t* libraries);
 #endif
 
 SEXP_API sexp sexp_alloc_tagged_aux(sexp ctx, size_t size, sexp_uint_t tag sexp_current_source_param);
-SEXP_API sexp sexp_make_context(sexp ctx, size_t size, size_t max_size);
+SEXP_API sexp sexp_make_context(sexp ctx, size_t size, size_t max_size, const puchi_host *host);
 SEXP_API sexp sexp_cons_op(sexp ctx, sexp self, sexp_sint_t n, sexp head, sexp tail);
 SEXP_API sexp sexp_list2(sexp ctx, sexp a, sexp b);
 SEXP_API sexp sexp_list3(sexp ctx, sexp a, sexp b, sexp c);
@@ -2452,7 +2424,7 @@ SEXP_API int sexp_write_utf8_char (sexp ctx, int c, sexp out);
 
 
 SEXP_API int sexp_grow_heap (sexp ctx, size_t size, size_t chunk_size);
-SEXP_API sexp_heap sexp_make_heap (size_t size, size_t max_size, size_t chunk_size);
+SEXP_API sexp_heap sexp_make_heap (const puchi_host *host, size_t size, size_t max_size, size_t chunk_size);
 SEXP_API void sexp_mark (sexp ctx, sexp x);
 SEXP_API sexp sexp_sweep (sexp ctx, size_t *sum_freed_ptr);
 SEXP_API sexp sexp_finalize (sexp ctx);
@@ -2815,6 +2787,10 @@ SEXP_API sexp sexp_create_context(sexp_uint_t heap_size, sexp_uint_t heap_max_si
 SEXP_API sexp sexp_delete_context(sexp ctx);
 SEXP_API sexp sexp_load_default_libs(sexp ctx);
 SEXP_API sexp sexp_enable_modules(sexp ctx, const puchi_module_ops *ops);
+/* Root create only; other callers use sexp_make_eval_context (host = NULL). */
+SEXP_API sexp sexp_make_eval_context_host(sexp ctx, sexp stack, sexp env,
+                                          sexp_uint_t size, sexp_uint_t max_size,
+                                          const puchi_host *host);
 
 #if defined(__cplusplus)
 } /* extern "C" declarations */
@@ -2827,6 +2803,52 @@ SEXP_API sexp sexp_enable_modules(sexp ctx, const puchi_module_ops *ops);
 #if defined(__cplusplus)
 extern "C" {
 #endif
+
+/* Host callbacks live on sexp_context_heap(ctx)->host (set by sexp_make_heap). */
+static void *puchi_host_alloc(void *ctx_v, size_t size) {
+  sexp ctx = (sexp)ctx_v;
+  sexp_heap h;
+  if (!ctx || !sexp_pointerp(ctx) || !sexp_contextp(ctx))
+    puchi_fatal(NULL, PUCHI_FATAL_INTERNAL, "no host alloc");
+  h = sexp_context_heap(ctx);
+  if (!h || !h->host.alloc)
+    puchi_fatal(ctx, PUCHI_FATAL_INTERNAL, "no host alloc");
+  return h->host.alloc(h->host.userdata, size);
+}
+
+static void puchi_host_free(void *ctx_v, void *ptr) {
+  sexp ctx = (sexp)ctx_v;
+  sexp_heap h;
+  if (!ctx || !sexp_pointerp(ctx) || !sexp_contextp(ctx))
+    puchi_fatal(NULL, PUCHI_FATAL_INTERNAL, "no host free");
+  h = sexp_context_heap(ctx);
+  if (!h || !h->host.free)
+    puchi_fatal(ctx, PUCHI_FATAL_INTERNAL, "no host free");
+  h->host.free(h->host.userdata, ptr);
+}
+
+static void puchi_diagnose(void *ctx_v, int code, const char *msg) {
+  sexp ctx = (sexp)ctx_v;
+  sexp_heap h;
+  if (!ctx || !sexp_pointerp(ctx) || !sexp_contextp(ctx) ||
+      !(h = sexp_context_heap(ctx)) || !h->host.diagnose) {
+    puchi_default_fatal(NULL, PUCHI_FATAL_INTERNAL, "puchi_host required");
+  }
+  h->host.diagnose(h->host.userdata, code, msg ? msg : "");
+}
+
+static void puchi_fatal(void *ctx_v, int code, const char *msg) {
+  sexp ctx = (sexp)ctx_v;
+  sexp_heap h;
+  if (ctx && sexp_pointerp(ctx) && sexp_contextp(ctx) &&
+      (h = sexp_context_heap(ctx)) && h->host.fatal) {
+    h->host.fatal(h->host.userdata, code, msg ? msg : "");
+  } else {
+    puchi_default_fatal(NULL, code, msg ? msg : "");
+  }
+  for (;;) {
+  }
+}
 
 /* Forward decl — defined after embedded init-7; used by load_standard_env. */
 static sexp puchi_load_init7_into_env(sexp ctx, sexp env);
@@ -2860,7 +2882,15 @@ static size_t sexp_heap_total_size (sexp_heap h) {
 
 
 void sexp_free_heap (sexp_heap heap) {
-  SEXP_FREE(NULL, heap);
+  /* host copy lives on the heap header; free via that callback */
+  {
+    struct sexp_static_library_list_t *link, *next;
+    for (link = heap->static_libraries; link; link = next) {
+      next = link->next;
+      heap->host.free(heap->host.userdata, link);
+    }
+  }
+  heap->host.free(heap->host.userdata, heap);
 }
 
 
@@ -2908,7 +2938,7 @@ static void sexp_mark_stack_push (sexp ctx, sexp *start, sexp *end) {
   } else if (old >= stack && old + 1 < stack + SEXP_MARK_STACK_COUNT) {
     (*ptr)++;
   } else {
-    *ptr = SEXP_MALLOC(NULL, sizeof(**ptr));
+    *ptr = SEXP_MALLOC(ctx, sizeof(**ptr));
   }
 
   (*ptr)->start = start;
@@ -2922,7 +2952,7 @@ static void sexp_mark_stack_pop (sexp ctx) {
 
   sexp_context_mark_stack_ptr(ctx) = old->prev;
   if (!(old >= stack && old < stack + SEXP_MARK_STACK_COUNT)) {
-    SEXP_FREE(NULL, old);
+    SEXP_FREE(ctx, old);
   }
 }
 
@@ -3136,11 +3166,17 @@ sexp sexp_gc (sexp ctx, size_t *sum_freed) {
   return res;
 }
 
-sexp_heap sexp_make_heap (size_t size, size_t max_size, size_t chunk_size) {
+sexp_heap sexp_make_heap (const puchi_host *host, size_t size, size_t max_size, size_t chunk_size) {
   sexp_free_list free, next;
   sexp_heap h;
-  h =  SEXP_MALLOC(NULL, sexp_heap_pad_size(size));
+  if (!host || !host->alloc || !host->free) return NULL;
+  h =  (sexp_heap) host->alloc(host->userdata, sexp_heap_pad_size(size));
   if (! h) return NULL;
+  h->host = *host;
+  if (!h->host.diagnose) h->host.diagnose = puchi_default_diagnose;
+  if (!h->host.fatal) h->host.fatal = puchi_default_fatal;
+  h->modules_set = 0;
+  h->static_libraries = NULL;
   h->size = size;
   h->max_size = max_size;
   h->chunk_size = chunk_size;
@@ -3160,7 +3196,7 @@ int sexp_grow_heap (sexp ctx, size_t size, size_t chunk_size) {
   sexp_heap tmp, h = sexp_heap_last(sexp_context_heap(ctx));
   cur_size = h->size;
   new_size = (size_t) PUCHI_CEIL(SEXP_GROW_HEAP_FACTOR * (double) (sexp_heap_align(((cur_size > size) ? cur_size : size))));
-  tmp = sexp_make_heap(new_size, h->max_size, chunk_size);
+  tmp = sexp_make_heap(&h->host, new_size, h->max_size, chunk_size);
   if (tmp) {
     tmp->next = h->next;
     h->next = tmp;
@@ -3258,8 +3294,6 @@ static sexp puchi_fx_or_fl_mul(sexp ctx, sexp a, sexp b) {
 
 
 /* puchi: no io.h */
-
-static int sexp_initialized_p = 0;
 
 static const char sexp_separators[] = {
   /* 1  2  3  4  5  6  7  8  9  a  b  c  d  e  f         */
@@ -3444,7 +3478,7 @@ sexp sexp_finalize_port (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
 
 sexp sexp_finalize_uvector (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
   /* if (sexp_uvector_freep(obj)) */
-  /*   SEXP_FREE(NULL, sexp_uvector_data(obj)); */
+  /*   SEXP_FREE(ctx, sexp_uvector_data(obj)); */
   return SEXP_VOID;
 }
 
@@ -3629,7 +3663,7 @@ sexp sexp_lookup_type_op(sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp id)
 
 sexp sexp_finalize_c_type (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
   if (sexp_cpointer_freep(obj))
-    SEXP_FREE(NULL, sexp_cpointer_value(obj));
+    SEXP_FREE(ctx, sexp_cpointer_value(obj));
   return SEXP_VOID;
 }
 
@@ -3729,14 +3763,14 @@ void sexp_init_context_globals (sexp ctx) {
   }
 }
 
-sexp sexp_bootstrap_context (sexp_uint_t size, sexp_uint_t max_size) {
+sexp sexp_bootstrap_context (const puchi_host *host, sexp_uint_t size, sexp_uint_t max_size) {
   sexp ctx;
   sexp_heap heap;
   struct sexp_struct dummy_ctx;
   if (size < SEXP_MINIMUM_HEAP_SIZE) size = SEXP_INITIAL_HEAP_SIZE;
   size = sexp_heap_align(size);
   max_size = sexp_heap_align(max_size);
-  heap = sexp_make_heap(size, max_size, 0);
+  heap = sexp_make_heap(host, size, max_size, 0);
   if (!heap) return 0;
   sexp_pointer_tag(&dummy_ctx) = SEXP_CONTEXT;
   sexp_context_mark_stack_ptr(&dummy_ctx) = NULL;
@@ -3751,11 +3785,11 @@ sexp sexp_bootstrap_context (sexp_uint_t size, sexp_uint_t max_size) {
   return ctx;
 }
 
-sexp sexp_make_context (sexp ctx, size_t size, size_t max_size) {
+sexp sexp_make_context (sexp ctx, size_t size, size_t max_size, const puchi_host *host) {
   sexp_gc_var1(res);
   if (ctx) sexp_gc_preserve1(ctx, res);
   if (! ctx) {
-    res = sexp_bootstrap_context(size, max_size);
+    res = sexp_bootstrap_context(host, size, max_size);
     if (!res || sexp_exceptionp(res)) return res;
   } else
     {
@@ -5307,11 +5341,11 @@ sexp sexp_read_string (sexp ctx, sexp in, int sentinel) {
     }
     buf[i++] = c;
   maybe_expand:
-    if (i+4 >= size) {       /* expand buffer w/ SEXP_MALLOC(NULL, ), later SEXP_FREE(NULL, ) it */
-      tmp = (char*) SEXP_MALLOC(NULL, size*2);
+    if (i+4 >= size) {       /* expand buffer w/ SEXP_MALLOC(ctx, ), later SEXP_FREE(ctx, ) it */
+      tmp = (char*) SEXP_MALLOC(ctx, size*2);
       if (!tmp) {res = sexp_global(ctx, SEXP_G_OOM_ERROR); break;}
       PUCHI_MEMCPY(tmp, buf, i);
-      if (size != INIT_STRING_BUFFER_SIZE) SEXP_FREE(NULL, buf);
+      if (size != INIT_STRING_BUFFER_SIZE) SEXP_FREE(ctx, buf);
       buf = tmp;
       size *= 2;
     }
@@ -5321,7 +5355,7 @@ sexp sexp_read_string (sexp ctx, sexp in, int sentinel) {
     buf[i] = '\0';
     res = sexp_c_string(ctx, buf, i);
   }
-  if (size != INIT_STRING_BUFFER_SIZE) SEXP_FREE(NULL, buf);
+  if (size != INIT_STRING_BUFFER_SIZE) SEXP_FREE(ctx, buf);
   return res;
 }
 
@@ -5344,11 +5378,11 @@ sexp sexp_read_symbol (sexp ctx, sexp in, int init, int internp) {
       break;
     }
     buf[i++] = c;
-    if (i >= size) {       /* expand buffer w/ SEXP_MALLOC(NULL, ), later SEXP_FREE(NULL, ) it */
-      tmp = (char*) SEXP_MALLOC(NULL, size*2);
+    if (i >= size) {       /* expand buffer w/ SEXP_MALLOC(ctx, ), later SEXP_FREE(ctx, ) it */
+      tmp = (char*) SEXP_MALLOC(ctx, size*2);
       if (!tmp) {res = sexp_global(ctx, SEXP_G_OOM_ERROR); break;}
       PUCHI_MEMCPY(tmp, buf, i);
-      if (size != INIT_STRING_BUFFER_SIZE) SEXP_FREE(NULL, buf);
+      if (size != INIT_STRING_BUFFER_SIZE) SEXP_FREE(ctx, buf);
       buf = tmp;
       size *= 2;
     }
@@ -5358,7 +5392,7 @@ sexp sexp_read_symbol (sexp ctx, sexp in, int init, int internp) {
     buf[i] = '\0';
     res = (internp ? sexp_intern(ctx, buf, i) : sexp_c_string(ctx, buf, i));
   }
-  if (size != INIT_STRING_BUFFER_SIZE) SEXP_FREE(NULL, buf);
+  if (size != INIT_STRING_BUFFER_SIZE) SEXP_FREE(ctx, buf);
   return res;
 }
 
@@ -6573,9 +6607,7 @@ sexp sexp_square_brackets_sym (sexp ctx, sexp self, sexp_sint_t n) {
 }
 
 void sexp_init (void) {
-  if (! sexp_initialized_p) {
-    sexp_initialized_p = 1;
-  }
+  /* puchi: no process-global GC/symbol init */
 }
 /* ==== opcodes.c ==== */
 
@@ -8733,8 +8765,6 @@ const char** sexp_opcode_names = sexp_opcode_names_;
 
 /************************************************************************/
 
-static int scheme_initialized_p = 0;
-
 static sexp analyze (sexp ctx, sexp x, int depth, int defok);
 
 sexp sexp_load_module_file_op (sexp ctx, sexp self, sexp_sint_t n, sexp file, sexp env);
@@ -9210,9 +9240,9 @@ void sexp_init_eval_context_globals (sexp ctx) {
   sexp_global(ctx, SEXP_G_MODULE_PATH) = SEXP_NULL;
 }
 
-sexp sexp_make_eval_context (sexp ctx, sexp stack, sexp env, sexp_uint_t size, sexp_uint_t max_size) {
+sexp sexp_make_eval_context_host (sexp ctx, sexp stack, sexp env, sexp_uint_t size, sexp_uint_t max_size, const puchi_host *host) {
   sexp_gc_var1(res);
-  res = sexp_make_context(ctx, size, max_size);
+  res = sexp_make_context(ctx, size, max_size, host);
   if (!res || sexp_exceptionp(res))
     return res;
   if (ctx) sexp_gc_preserve1(ctx, res);
@@ -10000,51 +10030,51 @@ sexp sexp_stream_portp_op (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
 }
 
 #if defined(PUCHI_TEST)
-struct sexp_library_entry_t* sexp_static_libraries = NULL;
-
-void sexp_add_static_libraries(struct sexp_library_entry_t* libraries)
+void sexp_add_static_libraries(sexp ctx, struct sexp_library_entry_t* libraries)
 {
-  struct sexp_library_entry_t *entry, *table;
+  sexp_heap h;
+  struct sexp_static_library_list_t *node, **tail;
 
-  if (!sexp_static_libraries) {
-    sexp_static_libraries = libraries;
-    return;
-  }
-
-  for (table = sexp_static_libraries; ;
-       table = (struct sexp_library_entry_t*)entry->init) {
-    for (entry = &table[0]; entry->name; entry++)
-       ;
-    if (!entry->init) {
-      entry->init = (sexp_init_proc)libraries;
-      return;
-    }
-  }
+  if (!libraries) return;
+  if (!ctx || !sexp_contextp(ctx))
+    puchi_fatal(NULL, PUCHI_FATAL_INTERNAL, "no context");
+  h = sexp_context_heap(ctx);
+  if (!h || !h->host.alloc)
+    puchi_fatal(ctx, PUCHI_FATAL_INTERNAL, "no host alloc");
+  node = h->host.alloc(h->host.userdata, sizeof(*node));
+  if (!node)
+    puchi_fatal(ctx, PUCHI_FATAL_INTERNAL, "out of memory");
+  node->table = libraries;
+  node->next = NULL;
+  for (tail = &h->static_libraries; *tail; tail = &(*tail)->next)
+    ;
+  *tail = node;
 }
 
-static struct sexp_library_entry_t *sexp_find_static_library(const char *file)
+static struct sexp_library_entry_t *sexp_find_static_library(sexp ctx, const char *file)
 {
   size_t base_len;
-  struct sexp_library_entry_t *entry, *table;
+  struct sexp_library_entry_t *entry;
+  struct sexp_static_library_list_t *link;
+  sexp_heap h;
 
-  if(!sexp_static_libraries)
+  if (!ctx || !file) return NULL;
+  h = sexp_context_heap(ctx);
+  if (!h || !h->static_libraries)
     return NULL;
   if (file[0] == '.' && file[1] == '/')
     file += 2;
   base_len = PUCHI_STRLEN(file) - PUCHI_STRLEN(sexp_so_extension);
   if (PUCHI_STRCMP(file + base_len, sexp_so_extension))
     return NULL;
-  for (table = sexp_static_libraries;
-       table;
-       table = (struct sexp_library_entry_t*)entry->init) {
-    for (entry = &table[0]; entry->name; entry++)
+  for (link = h->static_libraries; link; link = link->next)
+    for (entry = link->table; entry->name; entry++)
       if (! PUCHI_STRNCMP(file, entry->name, base_len))
         return entry;
-  }
   return NULL;
 }
 #else
-#define sexp_find_static_library(path) NULL
+#define sexp_find_static_library(ctx, path) NULL
 #endif
 
 #define sexp_load_dl(ctx, file, env) SEXP_UNDEF
@@ -10057,7 +10087,7 @@ static sexp sexp_load_binary(sexp ctx, sexp file, sexp env) {
   sexp res = sexp_load_dl(ctx, file, env);
 #if defined(PUCHI_TEST)
   if (res == SEXP_UNDEF || sexp_exceptionp(res)) {
-    entry = sexp_find_static_library(sexp_string_data(file));
+    entry = sexp_find_static_library(ctx, sexp_string_data(file));
     if (entry == NULL)
       res = (res == SEXP_UNDEF ? sexp_compile_error(ctx, "couldn't find builtin library", file) : res);
     else
@@ -11238,11 +11268,12 @@ sexp sexp_eval_string (sexp ctx, const char *str, sexp_sint_t len, sexp env) {
   return res;
 }
 
+sexp sexp_make_eval_context (sexp ctx, sexp stack, sexp env, sexp_uint_t size, sexp_uint_t max_size) {
+  return sexp_make_eval_context_host(ctx, stack, env, size, max_size, NULL);
+}
+
 void sexp_scheme_init (void) {
-  if (! scheme_initialized_p) {
-    scheme_initialized_p = 1;
-    sexp_init();
-  }
+  /* puchi: no process-global scheme init */
 }
 /* ==== simplify.c ==== */
 
@@ -15264,9 +15295,9 @@ static sexp puchi_load_init7_into_env(sexp ctx, sexp env) {
 }
 
 sexp sexp_create_context(sexp_uint_t heap_size, sexp_uint_t heap_max_size, const puchi_host *host) {
-  puchi_host_init(host);
-  sexp_scheme_init();
-  return sexp_make_eval_context(NULL, NULL, NULL, heap_size, heap_max_size);
+  if (!host || !host->alloc || !host->free)
+    puchi_default_fatal(NULL, PUCHI_FATAL_INTERNAL, "puchi_host alloc/free required");
+  return sexp_make_eval_context_host(NULL, NULL, NULL, heap_size, heap_max_size, host);
 }
 
 sexp sexp_delete_context(sexp ctx) {
@@ -15278,9 +15309,7 @@ sexp sexp_load_default_libs(sexp ctx) {
   return puchi_load_init7_into_env(ctx, sexp_context_env(ctx));
 }
 
-/* ---- module ops + sexp_enable_modules (host-owned I/O) ---- */
-static puchi_module_ops puchi_g_module_ops;
-static int puchi_g_module_ops_set;
+/* ---- module ops + sexp_enable_modules (host-owned I/O, per-context heap) ---- */
 
 static int puchi_module_join_path(char *out, size_t out_sz, const char *dir, const char *file) {
   size_t dlen, flen, need;
@@ -15297,6 +15326,12 @@ static int puchi_module_join_path(char *out, size_t out_sz, const char *dir, con
   return 0;
 }
 
+static puchi_module_ops *puchi_ctx_modules(sexp ctx) {
+  sexp_heap h = sexp_context_heap(ctx);
+  if (!h || !h->modules_set) return NULL;
+  return &h->modules;
+}
+
 static sexp puchi_module_eval_source(sexp ctx, const char *text, size_t len, sexp env) {
   return puchi_eval_scheme_text(ctx, text, (sexp_sint_t)len, env, 1);
 }
@@ -15305,15 +15340,17 @@ static sexp puchi_module_find_file_f(sexp ctx, sexp self, sexp_sint_t n, sexp fi
   sexp ls;
   char path[4096];
   const char *fname;
+  puchi_module_ops *ops;
   (void)n;
-  if (!puchi_g_module_ops_set || !puchi_g_module_ops.exists)
+  ops = puchi_ctx_modules(ctx);
+  if (!ops || !ops->exists)
     return sexp_global(ctx, SEXP_G_OOM_ERROR);
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, file);
   fname = sexp_string_data(file);
-  if (puchi_g_module_ops.exists(puchi_g_module_ops.userdata, fname))
+  if (ops->exists(ops->userdata, fname))
     return sexp_c_string(ctx, fname, -1);
 #if defined(PUCHI_TEST)
-  if (sexp_find_static_library(fname))
+  if (sexp_find_static_library(ctx, fname))
     return sexp_c_string(ctx, fname, -1);
 #endif
   ls = sexp_global(ctx, SEXP_G_MODULE_PATH);
@@ -15321,10 +15358,10 @@ static sexp puchi_module_find_file_f(sexp ctx, sexp self, sexp_sint_t n, sexp fi
     if (!sexp_stringp(sexp_car(ls))) continue;
     if (puchi_module_join_path(path, sizeof path, sexp_string_data(sexp_car(ls)), fname) != 0)
       continue;
-    if (puchi_g_module_ops.exists(puchi_g_module_ops.userdata, path))
+    if (ops->exists(ops->userdata, path))
       return sexp_c_string(ctx, path, -1);
 #if defined(PUCHI_TEST)
-    if (sexp_find_static_library(path))
+    if (sexp_find_static_library(ctx, path))
       return sexp_c_string(ctx, path, -1);
 #endif
   }
@@ -15335,18 +15372,20 @@ static sexp puchi_module_open_input_f(sexp ctx, sexp self, sexp_sint_t n, sexp p
   char *buf;
   size_t len = 0;
   sexp res;
+  puchi_module_ops *ops;
   (void)n;
-  if (!puchi_g_module_ops_set || !puchi_g_module_ops.read || !puchi_g_module_ops.free_buf)
+  ops = puchi_ctx_modules(ctx);
+  if (!ops || !ops->read || !ops->free_buf)
     return sexp_global(ctx, SEXP_G_OOM_ERROR);
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, path);
-  buf = puchi_g_module_ops.read(puchi_g_module_ops.userdata, sexp_string_data(path), &len);
+  buf = ops->read(ops->userdata, sexp_string_data(path), &len);
   if (!buf)
     return sexp_file_exception(ctx, self, "couldn't open input file", path);
   {
     sexp_gc_var1(s);
     sexp_gc_preserve1(ctx, s);
     s = sexp_c_string(ctx, buf, (sexp_sint_t)len);
-    puchi_g_module_ops.free_buf(puchi_g_module_ops.userdata, buf);
+    ops->free_buf(ops->userdata, buf);
     res = sexp_open_input_string(ctx, s);
     sexp_gc_release1(ctx);
   }
@@ -15362,6 +15401,7 @@ static sexp puchi_module_load_f(sexp ctx, sexp self, sexp_sint_t n, sexp source,
   size_t len = 0;
   sexp res;
   const char *path;
+  puchi_module_ops *ops;
   if (!env) env = sexp_context_env(ctx);
   sexp_assert_type(ctx, sexp_envp, SEXP_ENV, env);
   if (sexp_iportp(source))
@@ -15377,13 +15417,14 @@ static sexp puchi_module_load_f(sexp ctx, sexp self, sexp_sint_t n, sexp source,
       return sexp_load_op(ctx, self, n, source, env);
   }
 #endif
-  if (!puchi_g_module_ops_set || !puchi_g_module_ops.read || !puchi_g_module_ops.free_buf)
+  ops = puchi_ctx_modules(ctx);
+  if (!ops || !ops->read || !ops->free_buf)
     return sexp_global(ctx, SEXP_G_OOM_ERROR);
-  buf = puchi_g_module_ops.read(puchi_g_module_ops.userdata, path, &len);
+  buf = ops->read(ops->userdata, path, &len);
   if (!buf)
     return sexp_file_exception(ctx, self, "couldn't open input file", source);
   res = puchi_module_eval_source(ctx, buf, len, env);
-  puchi_g_module_ops.free_buf(puchi_g_module_ops.userdata, buf);
+  ops->free_buf(ops->userdata, buf);
   return res;
 }
 
@@ -15436,13 +15477,17 @@ static int puchi_modules_enabled_p(sexp ctx) {
 
 sexp sexp_enable_modules(sexp ctx, const puchi_module_ops *ops) {
   sexp env, meta, tmp, sym;
+  sexp_heap h;
   sexp_gc_var3(meta_gc, tmp_gc, sym_gc);
   if (!ctx || sexp_exceptionp(ctx)) return ctx;
   if (!ops || !ops->exists || !ops->read || !ops->free_buf)
     return sexp_user_exception(ctx, NULL, "sexp_enable_modules: incomplete puchi_module_ops", SEXP_FALSE);
 
-  puchi_g_module_ops = *ops;
-  puchi_g_module_ops_set = 1;
+  h = sexp_context_heap(ctx);
+  if (!h)
+    return sexp_user_exception(ctx, NULL, "sexp_enable_modules: no heap", SEXP_FALSE);
+  h->modules = *ops;
+  h->modules_set = 1;
 
   tmp = sexp_load_default_libs(ctx);
   if (sexp_exceptionp(tmp)) return tmp;

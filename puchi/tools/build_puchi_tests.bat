@@ -101,6 +101,12 @@ if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 
+echo === [%TAG%][tower] two-host smoke ===
+cl %CF% /Fo%OUT%\ /Fe:%OUT%\%TAG%_two_host_smoke.exe %TEST%\puchi_two_host_smoke.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
+"%OUT%\%TAG%_two_host_smoke.exe"
+if %ERRORLEVEL% NEQ 0 exit /b 1
+
 echo === [%TAG%][tower] harness ===
 cl %CF% %HF% /DPUCHI_ENABLE_NUMERICAL_TOWER /Fo%OUT%\%TAG%_harness_tower.obj /c %TEST%\puchi_harness.c
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -152,6 +158,12 @@ echo === [%TAG%][tower] smoke ===
 clang %CF% -o "%OUT%\%TAG%_smoke.exe" %TEST%\puchi_smoke.c
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_smoke.exe"
+if %ERRORLEVEL% NEQ 0 exit /b 1
+
+echo === [%TAG%][tower] two-host smoke ===
+clang %CF% -o "%OUT%\%TAG%_two_host_smoke.exe" %TEST%\puchi_two_host_smoke.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
+"%OUT%\%TAG%_two_host_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 
 echo === [%TAG%][tower] harness ===

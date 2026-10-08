@@ -164,6 +164,25 @@ def assert_no_project_includes(puchi_h: str) -> None:
         )
 
 
+def assert_no_process_globals(puchi_h: str) -> None:
+    """Fail if host/module/init state is still process-global."""
+    hits = []
+    for name in (
+        "puchi_g_host",
+        "puchi_g_module_ops",
+        "sexp_initialized_p",
+        "scheme_initialized_p",
+        "SEXP_MALLOC(NULL",
+        "SEXP_FREE(NULL",
+    ):
+        if name in puchi_h:
+            hits.append(name)
+    if hits:
+        raise SystemExit(
+            "puchi.h still has process-global host residue: " + ", ".join(hits)
+        )
+
+
 # OS / CPU / compiler tokens that must not appear in the product header.
 _FORBIDDEN_OS_TOKENS = (
     "_WIN32",

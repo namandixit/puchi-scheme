@@ -1,0 +1,55 @@
+--- gc.c
++++ gc.c
+@@ -87,7 +87,8 @@
+ #if SEXP_USE_MMAP_GC
+   munmap(heap, sexp_heap_pad_size(heap->size));
+ #else
+-  free(heap);
++  /* host copy lives on the heap header; free via that callback */
++  heap->host.free(heap->host.userdata, heap);
+ #endif
+ }
+ #endif
+@@ -578,17 +579,22 @@
+   return res;
+ }
+ 
+-sexp_heap sexp_make_heap (size_t size, size_t max_size, size_t chunk_size) {
++sexp_heap sexp_make_heap (const puchi_host *host, size_t size, size_t max_size, size_t chunk_size) {
+   sexp_free_list free, next;
+   sexp_heap h;
++  if (!host || !host->alloc || !host->free) return NULL;
+ #if SEXP_USE_MMAP_GC
+   h =  mmap(NULL, sexp_heap_pad_size(size), PROT_READ|PROT_WRITE,
+             MAP_ANON|MAP_PRIVATE, -1, 0);
+   if (h == MAP_FAILED) return NULL;
+ #else
+-  h =  sexp_malloc(sexp_heap_pad_size(size));
++  h =  (sexp_heap) host->alloc(host->userdata, sexp_heap_pad_size(size));
+   if (! h) return NULL;
+ #endif
++  h->host = *host;
++  if (!h->host.diagnose) h->host.diagnose = puchi_default_diagnose;
++  if (!h->host.fatal) h->host.fatal = puchi_default_fatal;
++  h->modules_set = 0;
+   h->size = size;
+   h->max_size = max_size;
+   h->chunk_size = chunk_size;
+@@ -626,7 +632,7 @@
+ #endif
+   cur_size = h->size;
+   new_size = (size_t) ceil(SEXP_GROW_HEAP_FACTOR * (double) (sexp_heap_align(((cur_size > size) ? cur_size : size))));
+-  tmp = sexp_make_heap(new_size, h->max_size, chunk_size);
++  tmp = sexp_make_heap(&h->host, new_size, h->max_size, chunk_size);
+   if (tmp) {
+     tmp->next = h->next;
+     h->next = tmp;
+@@ -750,7 +756,7 @@
+   sexp_uint_t size = sexp_heap_align(SEXP_INITIAL_HEAP_SIZE);
+ #endif
+ #if SEXP_USE_GLOBAL_HEAP
+-  sexp_global_heap = sexp_make_heap(size, SEXP_MAXIMUM_HEAP_SIZE, 0);
++  sexp_global_heap = sexp_make_heap(NULL, size, SEXP_MAXIMUM_HEAP_SIZE, 0); /* puchi: GLOBAL_HEAP unused */
+ #endif
+ #if SEXP_USE_CONSERVATIVE_GC
+   /* the +32 is a hack, but this is just for debugging anyway */

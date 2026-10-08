@@ -55,7 +55,7 @@
  sexp sexp_finalize_uvector (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
    /* if (sexp_uvector_freep(obj)) */
 -  /*   free(sexp_uvector_data(obj)); */
-+  /*   SEXP_FREE(NULL, sexp_uvector_data(obj)); */
++  /*   SEXP_FREE(ctx, sexp_uvector_data(obj)); */
    return SEXP_VOID;
  }
  #endif
@@ -99,7 +99,7 @@
  sexp sexp_finalize_c_type (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
    if (sexp_cpointer_freep(obj))
 -    free(sexp_cpointer_value(obj));
-+    SEXP_FREE(NULL, sexp_cpointer_value(obj));
++    SEXP_FREE(ctx, sexp_cpointer_value(obj));
    return SEXP_VOID;
  }
  

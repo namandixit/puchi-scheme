@@ -52,9 +52,9 @@ static sexp puchi_load_init7_into_env(sexp ctx, sexp env) {
 }
 
 sexp sexp_create_context(sexp_uint_t heap_size, sexp_uint_t heap_max_size, const puchi_host *host) {
-  puchi_host_init(host);
-  sexp_scheme_init();
-  return sexp_make_eval_context(NULL, NULL, NULL, heap_size, heap_max_size);
+  if (!host || !host->alloc || !host->free)
+    puchi_default_fatal(NULL, PUCHI_FATAL_INTERNAL, "puchi_host alloc/free required");
+  return sexp_make_eval_context_host(NULL, NULL, NULL, heap_size, heap_max_size, host);
 }
 
 sexp sexp_delete_context(sexp ctx) {

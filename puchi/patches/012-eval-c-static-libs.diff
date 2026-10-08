@@ -1,0 +1,96 @@
+--- eval.c
++++ eval.c
+@@ -1311,57 +1311,51 @@
+ }
+ 
+ #if SEXP_USE_STATIC_LIBS
+-#if SEXP_USE_STATIC_LIBS_EMPTY
+-struct sexp_library_entry_t* sexp_static_libraries = NULL;
+-#elif SEXP_USE_STATIC_LIBS_NO_INCLUDE
+-extern struct sexp_library_entry_t* sexp_static_libraries;
+-#else
+-#include "clibs.c"
+-#endif
+-
+-void sexp_add_static_libraries(struct sexp_library_entry_t* libraries)
++void sexp_add_static_libraries(sexp ctx, struct sexp_library_entry_t* libraries)
+ {
+-  struct sexp_library_entry_t *entry, *table;
+-
+-  if (!sexp_static_libraries) {
+-    sexp_static_libraries = libraries;
+-    return;
+-  }
++  sexp_heap h;
++  struct sexp_static_library_list_t *node, **tail;
+ 
+-  for (table = sexp_static_libraries; ;
+-       table = (struct sexp_library_entry_t*)entry->init) {
+-    for (entry = &table[0]; entry->name; entry++)
+-       ;
+-    if (!entry->init) {
+-      entry->init = (sexp_init_proc)libraries;
+-      return;
+-    }
+-  }
++  if (!libraries) return;
++  if (!ctx || !sexp_contextp(ctx))
++    puchi_fatal(NULL, PUCHI_FATAL_INTERNAL, "no context");
++  h = sexp_context_heap(ctx);
++  if (!h || !h->host.alloc)
++    puchi_fatal(ctx, PUCHI_FATAL_INTERNAL, "no host alloc");
++  node = h->host.alloc(h->host.userdata, sizeof(*node));
++  if (!node)
++    puchi_fatal(ctx, PUCHI_FATAL_INTERNAL, "out of memory");
++  node->table = libraries;
++  node->next = NULL;
++  for (tail = &h->static_libraries; *tail; tail = &(*tail)->next)
++    ;
++  *tail = node;
+ }
+ 
+-static struct sexp_library_entry_t *sexp_find_static_library(const char *file)
++static struct sexp_library_entry_t *sexp_find_static_library(sexp ctx, const char *file)
+ {
+   size_t base_len;
+-  struct sexp_library_entry_t *entry, *table;
++  struct sexp_library_entry_t *entry;
++  struct sexp_static_library_list_t *link;
++  sexp_heap h;
+ 
+-  if(!sexp_static_libraries)
++  if (!ctx || !file) return NULL;
++  h = sexp_context_heap(ctx);
++  if (!h || !h->static_libraries)
+     return NULL;
+   if (file[0] == '.' && file[1] == '/')
+     file += 2;
+   base_len = strlen(file) - strlen(sexp_so_extension);
+   if (strcmp(file + base_len, sexp_so_extension))
+     return NULL;
+-  for (table = sexp_static_libraries;
+-       table;
+-       table = (struct sexp_library_entry_t*)entry->init) {
+-    for (entry = &table[0]; entry->name; entry++)
++  for (link = h->static_libraries; link; link = link->next)
++    for (entry = link->table; entry->name; entry++)
+       if (! strncmp(file, entry->name, base_len))
+         return entry;
+-  }
+   return NULL;
+ }
+ #else
+-#define sexp_find_static_library(path) NULL
++#define sexp_find_static_library(ctx, path) NULL
+ #endif
+ 
+ #if SEXP_USE_DL
+@@ -1428,7 +1422,7 @@
+   sexp res = sexp_load_dl(ctx, file, env);
+ #if SEXP_USE_STATIC_LIBS
+   if (res == SEXP_UNDEF || sexp_exceptionp(res)) {
+-    entry = sexp_find_static_library(sexp_string_data(file));
++    entry = sexp_find_static_library(ctx, sexp_string_data(file));
+     if (entry == NULL)
+       res = (res == SEXP_UNDEF ? sexp_compile_error(ctx, "couldn't find builtin library", file) : res);
+     else

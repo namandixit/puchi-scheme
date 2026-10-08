@@ -285,7 +285,7 @@ typedef struct puchi_stream_ops {
 } puchi_stream_ops;
 
 /* Host VFS for sexp_enable_modules — disk, zip, or embedded string table.
- * One ops config per process; call enable once after context create. */
+ * Stored on the context heap by sexp_enable_modules. */
 typedef struct puchi_module_ops {
   void *userdata;
   int (*exists)(void *userdata, const char *name); /* 1 if readable */
@@ -294,9 +294,6 @@ typedef struct puchi_module_ops {
 } puchi_module_ops;
 
 #if defined(PUCHI_IMPLEMENTATION)
-static puchi_host puchi_g_host;
-static int puchi_g_host_set;
-
 static void puchi_default_diagnose(void *ud, int code, const char *msg) {
   (void)ud;
   (void)code;
@@ -310,63 +307,27 @@ static void puchi_default_fatal(void *ud, int code, const char *msg) {
   }
 }
 
-static void puchi_host_init(const puchi_host *host) {
-  if (!host || !host->alloc || !host->free) {
-    puchi_g_host.userdata = NULL;
-    puchi_g_host.alloc = NULL;
-    puchi_g_host.free = NULL;
-    puchi_g_host.diagnose = puchi_default_diagnose;
-    puchi_g_host.fatal = puchi_default_fatal;
-    puchi_g_host_set = 0;
-    puchi_default_fatal(NULL, PUCHI_FATAL_INTERNAL, "puchi_host alloc/free required");
-    return;
-  }
-  puchi_g_host = *host;
-  if (!puchi_g_host.diagnose) puchi_g_host.diagnose = puchi_default_diagnose;
-  if (!puchi_g_host.fatal) puchi_g_host.fatal = puchi_default_fatal;
-  puchi_g_host_set = 1;
-}
-
-static void puchi_diagnose(void *ctx, int code, const char *msg) {
-  (void)ctx;
-  if (!puchi_g_host_set) {
-    puchi_default_fatal(NULL, PUCHI_FATAL_INTERNAL, "puchi_host required");
-  }
-  puchi_g_host.diagnose(puchi_g_host.userdata, code, msg ? msg : "");
-}
-
-static void puchi_fatal(void *ctx, int code, const char *msg) {
-  (void)ctx;
-  if (!puchi_g_host_set) {
-    puchi_default_fatal(NULL, code, msg ? msg : "");
-  }
-  puchi_g_host.fatal(puchi_g_host.userdata, code, msg ? msg : "");
-  for (;;) {
-  }
-}
+/* Defined after sexp.h (need sexp_context_heap). */
+static void *puchi_host_alloc(void *ctx, size_t size);
+static void puchi_host_free(void *ctx, void *ptr);
+static void puchi_diagnose(void *ctx, int code, const char *msg);
+static void puchi_fatal(void *ctx, int code, const char *msg);
 #endif /* PUCHI_IMPLEMENTATION */
 
-/* ---- allocator hooks (host only; no silent CRT malloc) ---- */
+/* ---- allocator hooks (per-context host on the heap; no process global) ---- */
 #ifndef SEXP_MALLOC
 #if defined(PUCHI_IMPLEMENTATION)
-#define SEXP_MALLOC(ctx, size) ((void)(ctx), (puchi_g_host_set ? puchi_g_host.alloc(puchi_g_host.userdata, (size)) : (puchi_fatal(NULL, PUCHI_FATAL_INTERNAL, "no host alloc"), (void *)0)))
+#define SEXP_MALLOC(ctx, size) puchi_host_alloc((void *)(ctx), (size))
 #else
 #define SEXP_MALLOC(ctx, size) ((void)(ctx), (void)(size), (void *)0)
 #endif
 #endif
 #ifndef SEXP_FREE
 #if defined(PUCHI_IMPLEMENTATION)
-#define SEXP_FREE(ctx, ptr) ((void)(ctx), (puchi_g_host_set ? puchi_g_host.free(puchi_g_host.userdata, (ptr)) : (void)(puchi_fatal(NULL, PUCHI_FATAL_INTERNAL, "no host free"), 0)))
+#define SEXP_FREE(ctx, ptr) puchi_host_free((void *)(ctx), (ptr))
 #else
 #define SEXP_FREE(ctx, ptr) ((void)(ctx), (void)(ptr))
 #endif
-#endif
-
-#ifndef sexp_malloc
-#define sexp_malloc(sz) SEXP_MALLOC(NULL, (sz))
-#endif
-#ifndef sexp_free
-#define sexp_free(p) SEXP_FREE(NULL, (p))
 #endif
 
 /* ---- install.h replacements (amalgamate inlines these) ---- */

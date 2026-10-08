@@ -1,0 +1,86 @@
+--- sexp.c
++++ sexp.c
+@@ -18,8 +18,6 @@
+ #ifdef _WIN32
+ #include <io.h>
+ #endif
+-
+-static int sexp_initialized_p = 0;
+ 
+ static const char sexp_separators[] = {
+   /* 1  2  3  4  5  6  7  8  9  a  b  c  d  e  f         */
+@@ -619,14 +617,14 @@
+ }
+ 
+ #if ! SEXP_USE_GLOBAL_HEAP
+-sexp sexp_bootstrap_context (sexp_uint_t size, sexp_uint_t max_size) {
++sexp sexp_bootstrap_context (const puchi_host *host, sexp_uint_t size, sexp_uint_t max_size) {
+   sexp ctx;
+   sexp_heap heap;
+   struct sexp_struct dummy_ctx;
+   if (size < SEXP_MINIMUM_HEAP_SIZE) size = SEXP_INITIAL_HEAP_SIZE;
+   size = sexp_heap_align(size);
+   max_size = sexp_heap_align(max_size);
+-  heap = sexp_make_heap(size, max_size, 0);
++  heap = sexp_make_heap(host, size, max_size, 0);
+   if (!heap) return 0;
+   sexp_pointer_tag(&dummy_ctx) = SEXP_CONTEXT;
+   sexp_context_mark_stack_ptr(&dummy_ctx) = NULL;
+@@ -639,13 +637,13 @@
+     sexp_context_heap(ctx) = heap;
+ #if SEXP_USE_FIXED_CHUNK_SIZE_HEAPS
+     heap->chunk_size = sexp_heap_align(1);
+-    heap->next = sexp_make_heap(size, max_size, 0);
++    heap->next = sexp_make_heap(host, size, max_size, 0);
+     if (heap->next) {
+       heap->next->chunk_size = sexp_heap_align(1 + sexp_heap_align(1));
+-      heap->next->next = sexp_make_heap(size, max_size, 0);
++      heap->next->next = sexp_make_heap(host, size, max_size, 0);
+       if (heap->next->next) {
+         heap->next->next->chunk_size = sexp_heap_align(1 + sexp_heap_align(1 + sexp_heap_align(1)));
+-        heap->next->next->next = sexp_make_heap(size, max_size, 0);
++        heap->next->next->next = sexp_make_heap(host, size, max_size, 0);
+       }
+     }
+ #endif
+@@ -654,12 +652,12 @@
+ }
+ #endif
+ 
+-sexp sexp_make_context (sexp ctx, size_t size, size_t max_size) {
++sexp sexp_make_context (sexp ctx, size_t size, size_t max_size, const puchi_host *host) {
+   sexp_gc_var1(res);
+   if (ctx) sexp_gc_preserve1(ctx, res);
+ #if ! SEXP_USE_GLOBAL_HEAP
+   if (! ctx) {
+-    res = sexp_bootstrap_context(size, max_size);
++    res = sexp_bootstrap_context(host, size, max_size);
+     if (!res || sexp_exceptionp(res)) return res;
+   } else
+ #endif
+@@ -4107,23 +4105,5 @@
+ }
+ 
+ void sexp_init (void) {
+-#if SEXP_USE_GLOBAL_SYMBOLS
+-  int i;
+-#endif
+-  if (! sexp_initialized_p) {
+-    sexp_initialized_p = 1;
+-#if SEXP_USE_BOEHM
+-    GC_init();
+-#if SEXP_USE_GLOBAL_SYMBOLS
+-    GC_add_roots((char*)&sexp_symbol_table,
+-                 ((char*)&sexp_symbol_table)+sizeof(sexp_symbol_table)+1);
+-#endif
+-#elif ! SEXP_USE_MALLOC
+-    sexp_gc_init();
+-#endif
+-#if SEXP_USE_GLOBAL_SYMBOLS
+-    for (i=0; i<SEXP_SYMBOL_TABLE_SIZE; i++)
+-      sexp_symbol_table[i] = SEXP_NULL;
+-#endif
+-  }
+-}
++  /* puchi: no process-global GC/symbol init */
++}

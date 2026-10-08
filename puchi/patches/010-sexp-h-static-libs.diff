@@ -1,0 +1,33 @@
+--- sexp.h
++++ sexp.h
+@@ -227,6 +227,13 @@
+   sexp_free_list next;
+ };
+ 
++/* Per-heap registry. Tables stay caller-owned and unmodified. */
++struct sexp_library_entry_t;
++struct sexp_static_library_list_t {
++  struct sexp_library_entry_t *table;
++  struct sexp_static_library_list_t *next;
++};
++
+ typedef struct sexp_heap_t *sexp_heap;
+ struct sexp_heap_t {
+   sexp_uint_t size, max_size, chunk_size;
+@@ -235,6 +241,7 @@
+   puchi_host host;
+   puchi_module_ops modules;
+   int modules_set;
++  struct sexp_static_library_list_t *static_libraries;
+   /* note this must be aligned on a proper heap boundary, */
+   /* so we can't just use char data[] */
+   char *data;
+@@ -2053,7 +2060,7 @@
+ /* remain valid throughout its use by Chibi.                         */
+ 
+ #if defined(PUCHI_TEST)
+-SEXP_API void sexp_add_static_libraries(struct sexp_library_entry_t* libraries);
++SEXP_API void sexp_add_static_libraries(sexp ctx, struct sexp_library_entry_t* libraries);
+ #endif
+ 
+ SEXP_API sexp sexp_alloc_tagged_aux(sexp ctx, size_t size, sexp_uint_t tag sexp_current_source_param);

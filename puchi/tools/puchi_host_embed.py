@@ -244,7 +244,11 @@ def rewrite_libc_calls(src: str) -> str:
 
 
 def rewrite_host_allocators(src: str) -> str:
-    """Rewrite malloc/free/sexp_malloc/sexp_free to SEXP_MALLOC/SEXP_FREE."""
+    """Rewrite malloc/free/sexp_malloc/sexp_free to SEXP_MALLOC(ctx)/SEXP_FREE(ctx).
+
+    Sites must have a ``ctx`` local (amalgamation assert fails on NULL).
+    Do not rewrite ``host->free`` / ``heap->host.free`` method calls.
+    """
     lines = src.splitlines(keepends=True)
     out = []
     for line in lines:
@@ -258,14 +262,20 @@ def rewrite_host_allocators(src: str) -> str:
         if stripped.startswith("#define sexp_malloc") or stripped.startswith("#define sexp_free"):
             out.append(line)
             continue
-        # Already rewritten
+        # Host method calls: host->free(...), heap->host.free(...)
+        if re.search(r"(->|\.)\s*free\s*\(", line):
+            out.append(line)
+            continue
+        # Fix older patches that used SEXP_*(NULL, ...)
+        line = line.replace("SEXP_MALLOC(NULL,", "SEXP_MALLOC(ctx,")
+        line = line.replace("SEXP_FREE(NULL,", "SEXP_FREE(ctx,")
         if "SEXP_MALLOC" in line or "SEXP_FREE" in line:
             out.append(line)
             continue
-        line = re.sub(r"\bsexp_malloc\s*\(", "SEXP_MALLOC(NULL, ", line)
-        line = re.sub(r"\bsexp_free\s*\(", "SEXP_FREE(NULL, ", line)
-        line = re.sub(r"\bmalloc\s*\(", "SEXP_MALLOC(NULL, ", line)
-        line = re.sub(r"\bfree\s*\(", "SEXP_FREE(NULL, ", line)
+        line = re.sub(r"\bsexp_malloc\s*\(", "SEXP_MALLOC(ctx, ", line)
+        line = re.sub(r"\bsexp_free\s*\(", "SEXP_FREE(ctx, ", line)
+        line = re.sub(r"\bmalloc\s*\(", "SEXP_MALLOC(ctx, ", line)
+        line = re.sub(r"(?<![.\w])free\s*\(", "SEXP_FREE(ctx, ", line)
         out.append(line)
     return "".join(out)
 

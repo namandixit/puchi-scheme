@@ -1,0 +1,24 @@
+--- gc.c
++++ gc.c
+@@ -87,6 +87,13 @@
+   munmap(heap, sexp_heap_pad_size(heap->size));
+ #else
+   /* host copy lives on the heap header; free via that callback */
++  {
++    struct sexp_static_library_list_t *link, *next;
++    for (link = heap->static_libraries; link; link = next) {
++      next = link->next;
++      heap->host.free(heap->host.userdata, link);
++    }
++  }
+   heap->host.free(heap->host.userdata, heap);
+ #endif
+ }
+@@ -595,6 +602,7 @@
+   if (!h->host.diagnose) h->host.diagnose = puchi_default_diagnose;
+   if (!h->host.fatal) h->host.fatal = puchi_default_fatal;
+   h->modules_set = 0;
++  h->static_libraries = NULL;
+   h->size = size;
+   h->max_size = max_size;
+   h->chunk_size = chunk_size;

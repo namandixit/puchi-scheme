@@ -1,6 +1,4 @@
-/* ---- module ops + sexp_enable_modules (host-owned I/O) ---- */
-static puchi_module_ops puchi_g_module_ops;
-static int puchi_g_module_ops_set;
+/* ---- module ops + sexp_enable_modules (host-owned I/O, per-context heap) ---- */
 
 static int puchi_module_join_path(char *out, size_t out_sz, const char *dir, const char *file) {
   size_t dlen, flen, need;
@@ -17,6 +15,12 @@ static int puchi_module_join_path(char *out, size_t out_sz, const char *dir, con
   return 0;
 }
 
+static puchi_module_ops *puchi_ctx_modules(sexp ctx) {
+  sexp_heap h = sexp_context_heap(ctx);
+  if (!h || !h->modules_set) return NULL;
+  return &h->modules;
+}
+
 static sexp puchi_module_eval_source(sexp ctx, const char *text, size_t len, sexp env) {
   return puchi_eval_scheme_text(ctx, text, (sexp_sint_t)len, env, 1);
 }
@@ -25,15 +29,17 @@ static sexp puchi_module_find_file_f(sexp ctx, sexp self, sexp_sint_t n, sexp fi
   sexp ls;
   char path[4096];
   const char *fname;
+  puchi_module_ops *ops;
   (void)n;
-  if (!puchi_g_module_ops_set || !puchi_g_module_ops.exists)
+  ops = puchi_ctx_modules(ctx);
+  if (!ops || !ops->exists)
     return sexp_global(ctx, SEXP_G_OOM_ERROR);
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, file);
   fname = sexp_string_data(file);
-  if (puchi_g_module_ops.exists(puchi_g_module_ops.userdata, fname))
+  if (ops->exists(ops->userdata, fname))
     return sexp_c_string(ctx, fname, -1);
 #if defined(PUCHI_TEST)
-  if (sexp_find_static_library(fname))
+  if (sexp_find_static_library(ctx, fname))
     return sexp_c_string(ctx, fname, -1);
 #endif
   ls = sexp_global(ctx, SEXP_G_MODULE_PATH);
@@ -41,10 +47,10 @@ static sexp puchi_module_find_file_f(sexp ctx, sexp self, sexp_sint_t n, sexp fi
     if (!sexp_stringp(sexp_car(ls))) continue;
     if (puchi_module_join_path(path, sizeof path, sexp_string_data(sexp_car(ls)), fname) != 0)
       continue;
-    if (puchi_g_module_ops.exists(puchi_g_module_ops.userdata, path))
+    if (ops->exists(ops->userdata, path))
       return sexp_c_string(ctx, path, -1);
 #if defined(PUCHI_TEST)
-    if (sexp_find_static_library(path))
+    if (sexp_find_static_library(ctx, path))
       return sexp_c_string(ctx, path, -1);
 #endif
   }
@@ -55,18 +61,20 @@ static sexp puchi_module_open_input_f(sexp ctx, sexp self, sexp_sint_t n, sexp p
   char *buf;
   size_t len = 0;
   sexp res;
+  puchi_module_ops *ops;
   (void)n;
-  if (!puchi_g_module_ops_set || !puchi_g_module_ops.read || !puchi_g_module_ops.free_buf)
+  ops = puchi_ctx_modules(ctx);
+  if (!ops || !ops->read || !ops->free_buf)
     return sexp_global(ctx, SEXP_G_OOM_ERROR);
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, path);
-  buf = puchi_g_module_ops.read(puchi_g_module_ops.userdata, sexp_string_data(path), &len);
+  buf = ops->read(ops->userdata, sexp_string_data(path), &len);
   if (!buf)
     return sexp_file_exception(ctx, self, "couldn't open input file", path);
   {
     sexp_gc_var1(s);
     sexp_gc_preserve1(ctx, s);
     s = sexp_c_string(ctx, buf, (sexp_sint_t)len);
-    puchi_g_module_ops.free_buf(puchi_g_module_ops.userdata, buf);
+    ops->free_buf(ops->userdata, buf);
     res = sexp_open_input_string(ctx, s);
     sexp_gc_release1(ctx);
   }
@@ -82,6 +90,7 @@ static sexp puchi_module_load_f(sexp ctx, sexp self, sexp_sint_t n, sexp source,
   size_t len = 0;
   sexp res;
   const char *path;
+  puchi_module_ops *ops;
   if (!env) env = sexp_context_env(ctx);
   sexp_assert_type(ctx, sexp_envp, SEXP_ENV, env);
   if (sexp_iportp(source))
@@ -97,13 +106,14 @@ static sexp puchi_module_load_f(sexp ctx, sexp self, sexp_sint_t n, sexp source,
       return sexp_load_op(ctx, self, n, source, env);
   }
 #endif
-  if (!puchi_g_module_ops_set || !puchi_g_module_ops.read || !puchi_g_module_ops.free_buf)
+  ops = puchi_ctx_modules(ctx);
+  if (!ops || !ops->read || !ops->free_buf)
     return sexp_global(ctx, SEXP_G_OOM_ERROR);
-  buf = puchi_g_module_ops.read(puchi_g_module_ops.userdata, path, &len);
+  buf = ops->read(ops->userdata, path, &len);
   if (!buf)
     return sexp_file_exception(ctx, self, "couldn't open input file", source);
   res = puchi_module_eval_source(ctx, buf, len, env);
-  puchi_g_module_ops.free_buf(puchi_g_module_ops.userdata, buf);
+  ops->free_buf(ops->userdata, buf);
   return res;
 }
 
@@ -156,13 +166,17 @@ static int puchi_modules_enabled_p(sexp ctx) {
 
 sexp sexp_enable_modules(sexp ctx, const puchi_module_ops *ops) {
   sexp env, meta, tmp, sym;
+  sexp_heap h;
   sexp_gc_var3(meta_gc, tmp_gc, sym_gc);
   if (!ctx || sexp_exceptionp(ctx)) return ctx;
   if (!ops || !ops->exists || !ops->read || !ops->free_buf)
     return sexp_user_exception(ctx, NULL, "sexp_enable_modules: incomplete puchi_module_ops", SEXP_FALSE);
 
-  puchi_g_module_ops = *ops;
-  puchi_g_module_ops_set = 1;
+  h = sexp_context_heap(ctx);
+  if (!h)
+    return sexp_user_exception(ctx, NULL, "sexp_enable_modules: no heap", SEXP_FALSE);
+  h->modules = *ops;
+  h->modules_set = 1;
 
   tmp = sexp_load_default_libs(ctx);
   if (sexp_exceptionp(tmp)) return tmp;

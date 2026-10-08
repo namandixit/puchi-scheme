@@ -4,6 +4,10 @@
  * harness-only extras: output ports, delete-file, static include-shared
  * stubs (see puchi_harness_clibs.c).
  *
+ * Runs the script once on a single context first. On success, spawns
+ * PUCHI_HARNESS_THREADS workers; each creates its own VM context and runs
+ * the script top to bottom.
+ *
  * Usage:
  *   puchi_harness.exe [-I dir] <script.scm> [args...]
  */
@@ -21,74 +25,153 @@
 #endif
 #endif
 
+#include "puchi_threads.h"
+
 #define PUCHI_TEST 1
 #define PUCHI_IMPLEMENTATION
 #include "../puchi.h"
 
-/* ---- host callbacks + FILE* stream adapters (harness-owned CRT) ---- */
-static void *puchi_host_alloc(void *ud, size_t n) {
+#define PUCHI_HARNESS_THREADS 64
+
+/* ---- capture buffer (per-worker stdout/stderr; no tmpfile) ---- */
+
+typedef struct {
+  char *data;
+  size_t len;
+  size_t cap;
+} puchi_membuf;
+
+typedef struct {
+  int argc;
+  char **argv;
+  int script_i;
+  const char *script;
+  const char *x_module;
+} puchi_harness_args;
+
+typedef struct {
+  int index;
+  const puchi_harness_args *args;
+  int status;
+  puchi_membuf capture;
+} puchi_worker;
+
+static int puchi_membuf_grow(puchi_membuf *b, size_t need) {
+  char *p;
+  size_t ncap;
+  if (need <= b->cap) return 0;
+  ncap = b->cap ? b->cap : 4096;
+  while (ncap < need) ncap *= 2;
+  p = (char *)realloc(b->data, ncap);
+  if (!p) return -1;
+  b->data = p;
+  b->cap = ncap;
+  return 0;
+}
+
+static int puchi_membuf_write(puchi_membuf *b, const void *buf, size_t n) {
+  if (!n) return 0;
+  if (puchi_membuf_grow(b, b->len + n + 1) != 0) return -1;
+  memcpy(b->data + b->len, buf, n);
+  b->len += n;
+  b->data[b->len] = '\0';
+  return 0;
+}
+
+static void puchi_membuf_free(puchi_membuf *b) {
+  free(b->data);
+  b->data = NULL;
+  b->len = b->cap = 0;
+}
+
+/* ---- host callbacks + stream adapters ---- */
+
+static void *puchi_crt_alloc(void *ud, size_t n) {
   (void)ud;
   return malloc(n);
 }
-static void puchi_host_free(void *ud, void *p) {
+static void puchi_crt_free(void *ud, void *p) {
   (void)ud;
   free(p);
 }
-static void puchi_host_diagnose(void *ud, int code, const char *msg) {
+static void puchi_crt_diagnose(void *ud, int code, const char *msg) {
   (void)ud;
   fprintf(stderr, "[puchi diag %d] %s", code, msg ? msg : "");
   if (msg && msg[0] && msg[strlen(msg) - 1] != '\n') fputc('\n', stderr);
 }
-static void puchi_host_fatal(void *ud, int code, const char *msg) {
-  puchi_host_diagnose(ud, code, msg);
-  exit(70);
+static void puchi_crt_fatal(void *ud, int code, const char *msg) {
+  puchi_worker *w = (puchi_worker *)ud;
+  puchi_crt_diagnose(ud, code, msg);
+  if (w) w->status = 70;
+  (void)code;
+  puchi_thread_exit(70);
 }
 
-static int puchi_file_read_char(void *ud) { return getc((FILE *)ud); }
-static int puchi_file_write_char(void *ud, int c) { return putc(c, (FILE *)ud); }
-static int puchi_file_unget_char(void *ud, int c) { return ungetc(c, (FILE *)ud); }
-static size_t puchi_file_read(void *ud, void *buf, size_t n) {
-  return fread(buf, 1, n, (FILE *)ud);
+static int puchi_mem_read_char(void *ud) {
+  (void)ud;
+  return EOF;
 }
-static size_t puchi_file_write(void *ud, const void *buf, size_t n) {
-  return fwrite(buf, 1, n, (FILE *)ud);
+static int puchi_mem_write_char(void *ud, int c) {
+  unsigned char ch = (unsigned char)c;
+  if (puchi_membuf_write((puchi_membuf *)ud, &ch, 1) != 0) return EOF;
+  return c;
 }
-static int puchi_file_flush(void *ud) { return fflush((FILE *)ud); }
-static void puchi_file_close(void *ud) { (void)ud; /* no_close for stdio */ }
-static int puchi_file_eof(void *ud) { return feof((FILE *)ud); }
-static int puchi_file_error(void *ud) { return ferror((FILE *)ud); }
-static void puchi_file_clearerr(void *ud) { clearerr((FILE *)ud); }
+static int puchi_mem_unget_char(void *ud, int c) {
+  (void)ud;
+  (void)c;
+  return EOF;
+}
+static size_t puchi_mem_read(void *ud, void *buf, size_t n) {
+  (void)ud;
+  (void)buf;
+  (void)n;
+  return 0;
+}
+static size_t puchi_mem_write(void *ud, const void *buf, size_t n) {
+  if (puchi_membuf_write((puchi_membuf *)ud, buf, n) != 0) return 0;
+  return n;
+}
+static int puchi_mem_flush(void *ud) {
+  (void)ud;
+  return 0;
+}
+static void puchi_mem_close(void *ud) { (void)ud; }
+static int puchi_mem_eof(void *ud) {
+  (void)ud;
+  return 1;
+}
+static int puchi_mem_error(void *ud) {
+  (void)ud;
+  return 0;
+}
+static void puchi_mem_clearerr(void *ud) { (void)ud; }
 
-static const puchi_stream_ops puchi_file_ops = {
-  puchi_file_read_char,
-  puchi_file_write_char,
-  puchi_file_unget_char,
-  puchi_file_read,
-  puchi_file_write,
-  puchi_file_flush,
-  puchi_file_close,
-  puchi_file_eof,
-  puchi_file_error,
-  puchi_file_clearerr
+static const puchi_stream_ops puchi_mem_ops = {
+  puchi_mem_read_char,
+  puchi_mem_write_char,
+  puchi_mem_unget_char,
+  puchi_mem_read,
+  puchi_mem_write,
+  puchi_mem_flush,
+  puchi_mem_close,
+  puchi_mem_eof,
+  puchi_mem_error,
+  puchi_mem_clearerr
 };
 
-static sexp puchi_make_stdio_port(sexp ctx, FILE *fp, int input) {
-  sexp p = input ? sexp_make_input_port(ctx, &puchi_file_ops, fp, SEXP_FALSE)
-                 : sexp_make_output_port(ctx, &puchi_file_ops, fp, SEXP_FALSE);
+static sexp puchi_make_mem_port(sexp ctx, puchi_membuf *buf, int input) {
+  sexp p = input ? sexp_make_input_port(ctx, &puchi_mem_ops, buf, SEXP_FALSE)
+                 : sexp_make_output_port(ctx, &puchi_mem_ops, buf, SEXP_FALSE);
   if (sexp_portp(p)) sexp_port_no_closep(p) = 1;
   return p;
 }
 
-static void puchi_install_stdio_ports(sexp ctx, sexp env) {
-  sexp in = puchi_make_stdio_port(ctx, stdin, 1);
-  sexp out = puchi_make_stdio_port(ctx, stdout, 0);
-  sexp err = puchi_make_stdio_port(ctx, stderr, 0);
+static void puchi_install_capture_ports(sexp ctx, sexp env, puchi_membuf *buf) {
+  sexp in = puchi_make_mem_port(ctx, buf, 1);
+  sexp out = puchi_make_mem_port(ctx, buf, 0);
+  sexp err = puchi_make_mem_port(ctx, buf, 0);
   sexp_set_standard_ports(ctx, env, in, out, err);
 }
-
-static const puchi_host puchi_test_host = {
-  NULL, puchi_host_alloc, puchi_host_free, puchi_host_diagnose, puchi_host_fatal
-};
 
 #ifdef _WIN32
 #include <io.h>
@@ -356,13 +439,14 @@ static void puchi_install_foreigns(sexp ctx, sexp env) {
   sexp_define_foreign_opt(ctx, env, "%load", 2, puchi_load_f, SEXP_FALSE);
 }
 
-static sexp puchi_check(sexp ctx, sexp x) {
+/* Returns 0 on success, 70 on Scheme exception (prints into capture ports). */
+static int puchi_check(sexp ctx, sexp x) {
   if (sexp_exceptionp(x)) {
     sexp_print_exception(ctx, x, sexp_current_error_port(ctx));
     sexp_stack_trace(ctx, sexp_current_error_port(ctx));
-    exit(70);
+    return 70;
   }
-  return x;
+  return 0;
 }
 
 static void usage(void) {
@@ -386,26 +470,37 @@ static char *puchi_make_environment(const char *mod) {
   return buf;
 }
 
-int main(int argc, char **argv) {
-  sexp ctx, env, tmp, sym, args;
-  int i, script_i = -1;
-  const char *script;
-  const char *x_module = NULL;
+static int puchi_capture_failed(const puchi_membuf *b) {
+  if (!b->data || !b->len) return 0;
+  return strstr(b->data, " failure") != NULL || strstr(b->data, " error") != NULL;
+}
+
+/* One script run on a fresh root context. No exit(). */
+static int puchi_harness_run(puchi_worker *w) {
+  const puchi_harness_args *a = w->args;
+  puchi_host host;
+  sexp ctx = NULL, env, tmp, sym, args;
+  int i, status = 0;
   char *impmod = NULL;
 
-  if (argc < 2) usage();
+  memset(&w->capture, 0, sizeof(w->capture));
+  w->status = 0;
 
-  ctx = sexp_create_context(0, 0, &puchi_test_host);
+  host.userdata = w;
+  host.alloc = puchi_crt_alloc;
+  host.free = puchi_crt_free;
+  host.diagnose = puchi_crt_diagnose;
+  host.fatal = puchi_crt_fatal;
+
+  ctx = sexp_create_context(0, 0, &host);
   if (!ctx || sexp_exceptionp(ctx)) {
-    fprintf(stderr, "sexp_create_context failed\n");
+    fprintf(stderr, "[worker %d] sexp_create_context failed\n", w->index);
     return 1;
   }
   env = sexp_context_env(ctx);
 
-  sexp_add_static_libraries(puchi_harness_static_libraries);
+  sexp_add_static_libraries(ctx, puchi_harness_static_libraries);
 
-  /* Upstream (scheme process-context) cond-expands on windows. Keep that
-   * string out of sexp_initial_features; only the Win32 harness adds it. */
 #if defined(_WIN32)
   {
     sexp win = sexp_intern(ctx, "windows", -1);
@@ -414,25 +509,129 @@ int main(int argc, char **argv) {
   }
 #endif
 
-  /* Boots init-7 (once) + embedded meta-7 via CRT module ops. */
   tmp = sexp_enable_modules(ctx, &puchi_crt_module_ops);
-  puchi_check(ctx, tmp);
+  if (puchi_check(ctx, tmp)) { status = 70; goto done; }
   env = sexp_context_env(ctx);
 
-  /* Harness extras: output/delete + static-lib-aware find/load (overrides core). */
   puchi_install_foreigns(ctx, env);
   {
     sexp meta = sexp_global(ctx, SEXP_G_META_ENV);
     if (sexp_envp(meta)) puchi_install_foreigns(ctx, meta);
   }
 
-  /* Default module path includes ./lib */
   sexp_add_module_directory(ctx, sexp_c_string(ctx, "lib", -1), SEXP_FALSE);
+
+  for (i = 1; i < a->script_i; i++) {
+    if (strcmp(a->argv[i], "-I") == 0) {
+      i++;
+      if (i < a->script_i)
+        sexp_add_module_directory(ctx, sexp_c_string(ctx, a->argv[i], -1), SEXP_FALSE);
+    }
+  }
+
+  puchi_install_capture_ports(ctx, env, &w->capture);
+
+  if (a->x_module) {
+    impmod = puchi_make_environment(a->x_module);
+    if (!impmod) { status = 1; goto done; }
+    tmp = sexp_eval_string(ctx, impmod, -1, sexp_global(ctx, SEXP_G_META_ENV));
+    free(impmod);
+    impmod = NULL;
+    if (puchi_check(ctx, tmp)) { status = 70; goto done; }
+    if (!sexp_envp(tmp)) {
+      fprintf(stderr, "[worker %d] -x%s did not produce an environment\n",
+              w->index, a->x_module);
+      status = 1;
+      goto done;
+    }
+    env = tmp;
+    sexp_set_parameter(ctx, sexp_global(ctx, SEXP_G_META_ENV),
+                       sexp_global(ctx, SEXP_G_INTERACTION_ENV_SYMBOL), env);
+    sexp_context_env(ctx) = env;
+    sym = sexp_intern(ctx, "repl-import", -1);
+    tmp = sexp_env_ref(ctx, sexp_global(ctx, SEXP_G_META_ENV), sym, SEXP_VOID);
+    sym = sexp_intern(ctx, "import", -1);
+    if (puchi_check(ctx, sexp_env_define(ctx, env, sym, tmp))) { status = 70; goto done; }
+    puchi_install_foreigns(ctx, env);
+    {
+      sexp outp = sexp_env_ref(ctx, env, sexp_global(ctx, SEXP_G_CUR_OUT_SYMBOL), SEXP_FALSE);
+      if (sexp_opcodep(outp)) outp = sexp_parameter_ref(ctx, outp);
+      if (!sexp_oportp(outp))
+        puchi_install_capture_ports(ctx, env, &w->capture);
+    }
+  } else {
+    env = sexp_make_env(ctx);
+    if (puchi_check(ctx, env)) { status = 70; goto done; }
+    sexp_set_parameter(ctx, sexp_global(ctx, SEXP_G_META_ENV),
+                       sexp_global(ctx, SEXP_G_INTERACTION_ENV_SYMBOL), env);
+    sexp_context_env(ctx) = env;
+    sym = sexp_intern(ctx, "repl-import", -1);
+    tmp = sexp_env_ref(ctx, sexp_global(ctx, SEXP_G_META_ENV), sym, SEXP_VOID);
+    sym = sexp_intern(ctx, "import", -1);
+    if (puchi_check(ctx, sexp_env_define(ctx, env, sym, tmp))) { status = 70; goto done; }
+    sym = sexp_intern(ctx, "cond-expand", -1);
+    tmp = sexp_env_cell(ctx, sexp_global(ctx, SEXP_G_META_ENV), sym, 0);
+    if (tmp) {
+      sexp_env_rename(ctx, env, sym, tmp);
+      sexp_env_define(ctx, env, sym, sexp_cdr(tmp));
+    }
+    puchi_install_foreigns(ctx, env);
+  }
+
+  args = SEXP_NULL;
+  for (i = a->argc - 1; i >= a->script_i; i--)
+    args = sexp_cons(ctx, sexp_c_string(ctx, a->argv[i], -1), args);
+  sexp_set_parameter(ctx, sexp_global(ctx, SEXP_G_META_ENV),
+                     sexp_intern(ctx, "command-line", -1), args);
+  sexp_env_define(ctx, sexp_global(ctx, SEXP_G_META_ENV),
+                  sexp_intern(ctx, "raw-script-file", -1),
+                  sexp_c_string(ctx, a->script, -1));
+
+  sym = sexp_intern(ctx, "load", -1);
+  tmp = sexp_env_ref(ctx, sexp_global(ctx, SEXP_G_META_ENV), sym, SEXP_FALSE);
+  if (sexp_procedurep(tmp) || sexp_opcodep(tmp)) {
+    sym = sexp_list2(ctx, sexp_c_string(ctx, a->script, -1), env);
+    if (puchi_check(ctx, sexp_apply(ctx, tmp, sym))) { status = 70; goto done; }
+  } else {
+    if (puchi_check(ctx, puchi_load_f(ctx, NULL, 2, sexp_c_string(ctx, a->script, -1), env))) {
+      status = 70;
+      goto done;
+    }
+  }
+
+  if (puchi_capture_failed(&w->capture))
+    status = 70;
+
+done:
+  if (status != 0 && w->capture.data && w->capture.len) {
+    fprintf(stderr, "===== [worker %d] begin capture =====\n", w->index);
+    fwrite(w->capture.data, 1, w->capture.len, stderr);
+    if (w->capture.data[w->capture.len - 1] != '\n') fputc('\n', stderr);
+    fprintf(stderr, "===== [worker %d] end capture =====\n", w->index);
+  }
+  if (ctx && !sexp_exceptionp(ctx))
+    sexp_delete_context(ctx);
+  puchi_membuf_free(&w->capture);
+  w->status = status;
+  return status;
+}
+
+static int puchi_worker_main(void *arg) {
+  return puchi_harness_run((puchi_worker *)arg);
+}
+
+int main(int argc, char **argv) {
+  puchi_harness_args args;
+  puchi_worker workers[PUCHI_HARNESS_THREADS];
+  puchi_thread threads[PUCHI_HARNESS_THREADS];
+  int i, script_i = -1, passed = 0, failed = 0;
+  const char *x_module = NULL;
+
+  if (argc < 2) usage();
 
   for (i = 1; i < argc; i++) {
     if (strcmp(argv[i], "-I") == 0) {
       if (++i >= argc) usage();
-      sexp_add_module_directory(ctx, sexp_c_string(ctx, argv[i], -1), SEXP_FALSE);
     } else if (strcmp(argv[i], "-x") == 0 ||
                (argv[i][0] == '-' && argv[i][1] == 'x' && argv[i][2] != '\0')) {
       if (argv[i][2] == '\0') {
@@ -450,77 +649,61 @@ int main(int argc, char **argv) {
     }
   }
   if (script_i < 0) usage();
-  script = argv[script_i];
 
-  puchi_install_stdio_ports(ctx, env);
+  args.argc = argc;
+  args.argv = argv;
+  args.script_i = script_i;
+  args.script = argv[script_i];
+  args.x_module = x_module;
 
-  if (x_module) {
-    /* Like chibi-scheme -xMODULE: run script in that module's env. */
-    impmod = puchi_make_environment(x_module);
-    if (!impmod) { fprintf(stderr, "oom\n"); return 1; }
-    tmp = sexp_eval_string(ctx, impmod, -1, sexp_global(ctx, SEXP_G_META_ENV));
-    free(impmod);
-    puchi_check(ctx, tmp);
-    if (!sexp_envp(tmp)) {
-      fprintf(stderr, "puchi_harness: -x%s did not produce an environment\n", x_module);
-      return 1;
+  /* Single-threaded first: easier to debug; skip parallel on failure. */
+  {
+    puchi_worker solo;
+    int st;
+    memset(&solo, 0, sizeof(solo));
+    solo.index = -1;
+    solo.args = &args;
+    fprintf(stderr, "puchi_harness: single-threaded run on %s\n", args.script);
+    st = puchi_harness_run(&solo);
+    if (st != 0) {
+      fprintf(stderr, "puchi_harness: single-threaded run failed (status %d); "
+              "skipping parallel\n", st);
+      return st;
     }
-    env = tmp;
-    sexp_set_parameter(ctx, sexp_global(ctx, SEXP_G_META_ENV),
-                       sexp_global(ctx, SEXP_G_INTERACTION_ENV_SYMBOL), env);
-    sexp_context_env(ctx) = env;
-    /* Ensure import is available */
-    sym = sexp_intern(ctx, "repl-import", -1);
-    tmp = sexp_env_ref(ctx, sexp_global(ctx, SEXP_G_META_ENV), sym, SEXP_VOID);
-    sym = sexp_intern(ctx, "import", -1);
-    puchi_check(ctx, sexp_env_define(ctx, env, sym, tmp));
-    puchi_install_foreigns(ctx, env);
-    {
-      sexp outp = sexp_env_ref(ctx, env, sexp_global(ctx, SEXP_G_CUR_OUT_SYMBOL), SEXP_FALSE);
-      if (sexp_opcodep(outp)) outp = sexp_parameter_ref(ctx, outp);
-      if (!sexp_oportp(outp))
-        puchi_install_stdio_ports(ctx, env);
-    }
-  } else {
-    /* Fresh script env with import + cond-expand from meta */
-    env = sexp_make_env(ctx);
-    puchi_check(ctx, env);
-    sexp_set_parameter(ctx, sexp_global(ctx, SEXP_G_META_ENV),
-                       sexp_global(ctx, SEXP_G_INTERACTION_ENV_SYMBOL), env);
-    sexp_context_env(ctx) = env;
-    sym = sexp_intern(ctx, "repl-import", -1);
-    tmp = sexp_env_ref(ctx, sexp_global(ctx, SEXP_G_META_ENV), sym, SEXP_VOID);
-    sym = sexp_intern(ctx, "import", -1);
-    puchi_check(ctx, sexp_env_define(ctx, env, sym, tmp));
-    sym = sexp_intern(ctx, "cond-expand", -1);
-    tmp = sexp_env_cell(ctx, sexp_global(ctx, SEXP_G_META_ENV), sym, 0);
-    if (tmp) {
-      sexp_env_rename(ctx, env, sym, tmp);
-      sexp_env_define(ctx, env, sym, sexp_cdr(tmp));
-    }
-    puchi_install_foreigns(ctx, env);
+    fprintf(stderr, "puchi_harness: single-threaded run passed\n");
   }
 
-  /* command-line */
-  args = SEXP_NULL;
-  for (i = argc - 1; i >= script_i; i--)
-    args = sexp_cons(ctx, sexp_c_string(ctx, argv[i], -1), args);
-  sexp_set_parameter(ctx, sexp_global(ctx, SEXP_G_META_ENV),
-                     sexp_intern(ctx, "command-line", -1), args);
-  sexp_env_define(ctx, sexp_global(ctx, SEXP_G_META_ENV),
-                  sexp_intern(ctx, "raw-script-file", -1),
-                  sexp_c_string(ctx, script, -1));
+  fprintf(stderr, "puchi_harness: %d parallel contexts on %s\n",
+          PUCHI_HARNESS_THREADS, args.script);
 
-  /* Prefer meta load for stack traces */
-  sym = sexp_intern(ctx, "load", -1);
-  tmp = sexp_env_ref(ctx, sexp_global(ctx, SEXP_G_META_ENV), sym, SEXP_FALSE);
-  if (sexp_procedurep(tmp) || sexp_opcodep(tmp)) {
-    sym = sexp_list2(ctx, sexp_c_string(ctx, script, -1), env);
-    puchi_check(ctx, sexp_apply(ctx, tmp, sym));
-  } else {
-    puchi_check(ctx, puchi_load_f(ctx, NULL, 2, sexp_c_string(ctx, script, -1), env));
+  for (i = 0; i < PUCHI_HARNESS_THREADS; i++) {
+    memset(&workers[i], 0, sizeof(workers[i]));
+    workers[i].index = i;
+    workers[i].args = &args;
+    threads[i] = NULL;
   }
 
-  sexp_delete_context(ctx);
-  return 0;
+  for (i = 0; i < PUCHI_HARNESS_THREADS; i++) {
+    if (puchi_thread_create(&threads[i], puchi_worker_main, &workers[i]) != 0) {
+      fprintf(stderr, "puchi_harness: failed to create worker %d\n", i);
+      threads[i] = NULL;
+      workers[i].status = 1;
+    }
+  }
+
+  for (i = 0; i < PUCHI_HARNESS_THREADS; i++) {
+    int st = 1;
+    if (threads[i]) {
+      if (puchi_thread_join(threads[i], &st) != 0)
+        st = 1;
+    } else {
+      st = workers[i].status ? workers[i].status : 1;
+    }
+    if (st == 0) passed++;
+    else failed++;
+  }
+
+  fprintf(stderr, "puchi_harness: %d/%d workers passed\n",
+          passed, PUCHI_HARNESS_THREADS);
+  return failed ? 1 : 0;
 }
