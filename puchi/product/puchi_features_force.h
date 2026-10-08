@@ -17,6 +17,9 @@
  * immediates are padded/aligned and UBSan alignment checks are meaningful. */
 #define SEXP_USE_ALIGNED_BYTECODE 1
 
+/* Always the portable {hi,lo} 128-bit limb pair — never GCC mode(TI). */
+#define SEXP_USE_CUSTOM_LONG_LONGS 1
+
 #if defined(PUCHI_INTEGER_ONLY)
 #define SEXP_USE_FLONUMS 0
 #define SEXP_USE_MATH 0

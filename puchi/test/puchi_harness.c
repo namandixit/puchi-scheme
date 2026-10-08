@@ -404,6 +404,16 @@ int main(int argc, char **argv) {
 
   sexp_add_static_libraries(puchi_harness_static_libraries);
 
+  /* Upstream (scheme process-context) cond-expands on windows. Keep that
+   * string out of sexp_initial_features; only the Win32 harness adds it. */
+#if defined(_WIN32)
+  {
+    sexp win = sexp_intern(ctx, "windows", -1);
+    sexp_global(ctx, SEXP_G_FEATURES) =
+      sexp_cons(ctx, win, sexp_global(ctx, SEXP_G_FEATURES));
+  }
+#endif
+
   /* Boots init-7 (once) + embedded meta-7 via CRT module ops. */
   tmp = sexp_enable_modules(ctx, &puchi_crt_module_ops);
   puchi_check(ctx, tmp);

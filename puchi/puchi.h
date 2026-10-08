@@ -4,13 +4,15 @@
  * Change puchi/product/, patches/, and tools/ then re-run.
  *
  * Host contract: core is CPU/memory only. The host owns OS I/O, clocks,
- * and process death. Pass puchi_host at context create; install ports with
- * puchi_stream_ops (or string ports). Scheme calls C only via host-registered
- * foreigns (sexp_define_foreign).
+ * and process death. Pass puchi_host at context create (alloc/free required);
+ * install ports with puchi_stream_ops (or string ports). Scheme calls C only
+ * via host-registered foreigns (sexp_define_foreign).
  *
  * True single-header: no #include of opt/, chibi/, or lib/ project files.
  * OS/debug backends (dlopen, Boehm, green threads, mmap, image load, …) are
  * deleted from this amalgamation — not merely forced off. Do not re-enable.
+ * The header has no OS `#if` and no syscalls; a PUCHI_TEST harness may use
+ * the CRT and may add OS names to *features* at runtime.
  *
  * Module path starts empty. sexp_load_default_libs loads embedded init-7 only
  * (idempotent; no disk). sexp_enable_modules(ctx, ops) ensures default libs,
@@ -33,7 +35,7 @@
  *   static void my_fatal(void *ud, int code, const char *msg); // must not return
  *
  *   puchi_host host = { NULL, my_alloc, my_free, my_diag, my_fatal };
- *   sexp ctx = sexp_create_context(0, 0, &host);  // NULL host => CRT defaults
+ *   sexp ctx = sexp_create_context(0, 0, &host);  // host alloc/free required
  *   sexp_load_default_libs(ctx);                 // interaction language only
  *   // Or, for import / define-library (ops = exists/read/free_buf VFS):
  *   //   sexp_enable_modules(ctx, &ops);         // also loads default libs once
@@ -59,18 +61,19 @@ extern "C" {
 #include <ctype.h>
 /* Host: include <stdio.h> before this header when using default
  * PUCHI_SNPRINTF / SPRINTF / SSCANF (sexp.h stdio is scrubbed). */
-/* MSVC: must precede math.h so M_LN10 / M_PI exist (features.h is too late). */
-#if defined(_WIN32) && defined(_MSC_VER)
-#if !defined(_USE_MATH_DEFINES)
-#define _USE_MATH_DEFINES
-#endif
-#endif
 #include <math.h>
 #include <float.h>
 #include <limits.h>
 #include <stdint.h>
 #if !defined(EOF)
 #define EOF (-1)
+#endif
+
+#if !defined(M_LN10)
+#define M_LN10 2.30258509299404568402
+#endif
+#if !defined(M_PI)
+#define M_PI 3.14159265358979323846
 #endif
 
 /* ---- overridable libc wrappers (core calls only these names) ---- */
@@ -106,21 +109,6 @@ extern "C" {
 #endif
 #if !defined(PUCHI_STRCHR)
 #define PUCHI_STRCHR strchr
-#endif
-#if defined(_WIN32)
-#if !defined(PUCHI_STRCASECMP)
-#define PUCHI_STRCASECMP _stricmp
-#endif
-#if !defined(PUCHI_STRNCASECMP)
-#define PUCHI_STRNCASECMP _strnicmp
-#endif
-#else
-#if !defined(PUCHI_STRCASECMP)
-#define PUCHI_STRCASECMP strcasecmp
-#endif
-#if !defined(PUCHI_STRNCASECMP)
-#define PUCHI_STRNCASECMP strncasecmp
-#endif
 #endif
 #if !defined(PUCHI_SNPRINTF)
 #define PUCHI_SNPRINTF snprintf
@@ -200,6 +188,58 @@ extern "C" {
 #if !defined(PUCHI_TRUNC)
 #define PUCHI_TRUNC trunc
 #endif
+#if !defined(PUCHI_ISNAN)
+#define PUCHI_ISNAN isnan
+#endif
+#if !defined(PUCHI_ISINF)
+#define PUCHI_ISINF isinf
+#endif
+#if !defined(PUCHI_ISFINITE)
+#define PUCHI_ISFINITE isfinite
+#endif
+#if !defined(PUCHI_ROUND)
+#define PUCHI_ROUND round
+#endif
+#if !defined(PUCHI_LABS)
+#define PUCHI_LABS labs
+#endif
+#if !defined(PUCHI_ACOS)
+#define PUCHI_ACOS acos
+#endif
+
+/* Portable case-insensitive compare (no _stricmp / strcasecmp). */
+static inline int puchi_strcasecmp(const char *a, const char *b) {
+  unsigned char ca, cb;
+  for (;;) {
+    ca = (unsigned char)PUCHI_TOLOWER((unsigned char)*a++);
+    cb = (unsigned char)PUCHI_TOLOWER((unsigned char)*b++);
+    if (ca != cb) return (int)ca - (int)cb;
+    if (ca == 0) return 0;
+  }
+}
+static inline int puchi_strncasecmp(const char *a, const char *b, size_t n) {
+  unsigned char ca, cb;
+  if (n == 0) return 0;
+  do {
+    ca = (unsigned char)PUCHI_TOLOWER((unsigned char)*a++);
+    cb = (unsigned char)PUCHI_TOLOWER((unsigned char)*b++);
+    if (ca != cb) return (int)ca - (int)cb;
+    if (ca == 0) return 0;
+  } while (--n != 0);
+  return 0;
+}
+#if !defined(PUCHI_STRCASECMP)
+#define PUCHI_STRCASECMP puchi_strcasecmp
+#endif
+#if !defined(PUCHI_STRNCASECMP)
+#define PUCHI_STRNCASECMP puchi_strncasecmp
+#endif
+
+static inline double puchi_f64_from_bits(uint64_t u) {
+  double d;
+  PUCHI_MEMCPY(&d, &u, sizeof(d));
+  return d;
+}
 
 /* ---- host callbacks (context create) ---- */
 enum {
@@ -243,14 +283,6 @@ typedef struct puchi_module_ops {
 static puchi_host puchi_g_host;
 static int puchi_g_host_set;
 
-static void *puchi_default_alloc(void *ud, size_t n) {
-  (void)ud;
-  return PUCHI_MALLOC(n);
-}
-static void puchi_default_free(void *ud, void *p) {
-  (void)ud;
-  PUCHI_FREE(p);
-}
 static void puchi_default_diagnose(void *ud, int code, const char *msg) {
   (void)ud;
   (void)code;
@@ -265,17 +297,17 @@ static void puchi_default_fatal(void *ud, int code, const char *msg) {
 }
 
 static void puchi_host_init(const puchi_host *host) {
-  if (host) {
-    puchi_g_host = *host;
-  } else {
+  if (!host || !host->alloc || !host->free) {
     puchi_g_host.userdata = NULL;
-    puchi_g_host.alloc = puchi_default_alloc;
-    puchi_g_host.free = puchi_default_free;
+    puchi_g_host.alloc = NULL;
+    puchi_g_host.free = NULL;
     puchi_g_host.diagnose = puchi_default_diagnose;
     puchi_g_host.fatal = puchi_default_fatal;
+    puchi_g_host_set = 0;
+    puchi_default_fatal(NULL, PUCHI_FATAL_INTERNAL, "puchi_host alloc/free required");
+    return;
   }
-  if (!puchi_g_host.alloc) puchi_g_host.alloc = puchi_default_alloc;
-  if (!puchi_g_host.free) puchi_g_host.free = puchi_default_free;
+  puchi_g_host = *host;
   if (!puchi_g_host.diagnose) puchi_g_host.diagnose = puchi_default_diagnose;
   if (!puchi_g_host.fatal) puchi_g_host.fatal = puchi_default_fatal;
   puchi_g_host_set = 1;
@@ -283,32 +315,36 @@ static void puchi_host_init(const puchi_host *host) {
 
 static void puchi_diagnose(void *ctx, int code, const char *msg) {
   (void)ctx;
-  if (!puchi_g_host_set) puchi_host_init(NULL);
+  if (!puchi_g_host_set) {
+    puchi_default_fatal(NULL, PUCHI_FATAL_INTERNAL, "puchi_host required");
+  }
   puchi_g_host.diagnose(puchi_g_host.userdata, code, msg ? msg : "");
 }
 
 static void puchi_fatal(void *ctx, int code, const char *msg) {
   (void)ctx;
-  if (!puchi_g_host_set) puchi_host_init(NULL);
+  if (!puchi_g_host_set) {
+    puchi_default_fatal(NULL, code, msg ? msg : "");
+  }
   puchi_g_host.fatal(puchi_g_host.userdata, code, msg ? msg : "");
   for (;;) {
   }
 }
 #endif
 
-/* ---- allocator hooks (prefer host callbacks) ---- */
+/* ---- allocator hooks (host only; no silent CRT malloc) ---- */
 #if !defined(SEXP_MALLOC)
 #if defined(PUCHI_IMPLEMENTATION)
-#define SEXP_MALLOC(ctx, size) ((void)(ctx), (puchi_g_host_set ? puchi_g_host.alloc(puchi_g_host.userdata, (size)) : PUCHI_MALLOC(size)))
+#define SEXP_MALLOC(ctx, size) ((void)(ctx), (puchi_g_host_set ? puchi_g_host.alloc(puchi_g_host.userdata, (size)) : (puchi_fatal(NULL, PUCHI_FATAL_INTERNAL, "no host alloc"), (void *)0)))
 #else
-#define SEXP_MALLOC(ctx, size) ((void)(ctx), PUCHI_MALLOC(size))
+#define SEXP_MALLOC(ctx, size) ((void)(ctx), (void)(size), (void *)0)
 #endif
 #endif
 #if !defined(SEXP_FREE)
 #if defined(PUCHI_IMPLEMENTATION)
-#define SEXP_FREE(ctx, ptr) ((void)(ctx), (puchi_g_host_set ? puchi_g_host.free(puchi_g_host.userdata, (ptr)) : PUCHI_FREE(ptr)))
+#define SEXP_FREE(ctx, ptr) ((void)(ctx), (puchi_g_host_set ? puchi_g_host.free(puchi_g_host.userdata, (ptr)) : (void)(puchi_fatal(NULL, PUCHI_FATAL_INTERNAL, "no host free"), 0)))
 #else
-#define SEXP_FREE(ctx, ptr) ((void)(ctx), PUCHI_FREE(ptr))
+#define SEXP_FREE(ctx, ptr) ((void)(ctx), (void)(ptr))
 #endif
 #endif
 
@@ -320,10 +356,12 @@ static void puchi_fatal(void *ctx, int code, const char *msg) {
 #endif
 
 /* ---- install.h replacements (amalgamate inlines these) ---- */
-/* Always defined: meta-7 include-shared / STATIC_LIBS matching need it.
- * Harness resolves *.so via sexp_static_libraries (no dlopen). */
+#if defined(PUCHI_TEST)
+/* Harness STATIC_LIBS matching / meta-7 include-shared need the suffix.
+ * Product builds leave the name unbound so include-shared errors. */
 #if !defined(sexp_so_extension)
 #define sexp_so_extension ".so"
+#endif
 #endif
 #define sexp_default_module_path ""
 #define sexp_platform "puchi"
@@ -349,6 +387,9 @@ static void puchi_fatal(void *ctx, int code, const char *msg) {
 /* x86 defaults this to 0 (CPU allows unaligned loads); force on so bytecode
  * immediates are padded/aligned and UBSan alignment checks are meaningful. */
 #define SEXP_USE_ALIGNED_BYTECODE 1
+
+/* Always the portable {hi,lo} 128-bit limb pair — never GCC mode(TI). */
+#define SEXP_USE_CUSTOM_LONG_LONGS 1
 
 #if defined(PUCHI_INTEGER_ONLY)
 #define SEXP_USE_FLONUMS 0
@@ -439,7 +480,7 @@ static void puchi_fatal(void *ctx, int code, const char *msg) {
 /************************************************************************/
 
 #if !defined(SEXP_64_BIT)
-#if (((((((defined(__amd64) || defined(__x86_64)) || defined(_WIN64)) || defined(_Wp64)) || defined(__LP64__)) || defined(__PPC64__)) || defined(__mips64__)) || defined(__sparc64__)) || defined(__arm64)
+#if UINTPTR_MAX > 0xFFFFFFFFu
 #define SEXP_64_BIT 1
 #else
 #define SEXP_64_BIT 0
@@ -447,21 +488,11 @@ static void puchi_fatal(void *ctx, int code, const char *msg) {
 #endif
 
 /* puchi: no host-OS feature probe; platform is "puchi"/"portable" */
-#define SEXP_BSD 0
-#define SEXP_DARWIN 0
-#define SEXP_FREEBSD 0
-#define SEXP_NETBSD 0
-#define SEXP_DRAGONFLY 0
-#define SEXP_OPENBSD 0
 
 /* for bignum support, need a double long to store long*long */
 /* gcc supports uint128_t, otherwise we need a custom struct */
 #if !defined(SEXP_USE_CUSTOM_LONG_LONGS)
-#if SEXP_64_BIT && (!defined(__GNUC__))
 #define SEXP_USE_CUSTOM_LONG_LONGS 1
-#else
-#define SEXP_USE_CUSTOM_LONG_LONGS 0
-#endif
 #endif
 
 #if !defined(SEXP_USE_NO_FEATURES)
@@ -774,46 +805,13 @@ static void puchi_fatal(void *ctx, int code, const char *msg) {
 
 
 
-#if !defined(SEXP_USE_ALIGNED_BYTECODE)
-#if ((((defined(__arm__) || defined(__sparc__)) || defined(__sparc64__)) || defined(__mips__)) || defined(__mips64__)) || defined(__riscv)
-#define SEXP_USE_ALIGNED_BYTECODE 1
-#else
-#define SEXP_USE_ALIGNED_BYTECODE 0
-#endif
-#endif
 
 
-#if defined(_WIN32)
-#if defined(_MSC_VER)
-#define _CRT_SECURE_NO_WARNINGS 1
-#define _CRT_NONSTDC_NO_DEPRECATE 1
-#define _USE_MATH_DEFINES /* For M_LN10 */
-/* puchi: use PUCHI_STRCASECMP */
-/* puchi: use PUCHI_STRNCASECMP */
-#pragma warning(disable:4146) /* unary minus operator to unsigned type */
-#if _MSC_VER < 1900
-/* puchi: use PUCHI_SNPRINTF */
-/* puchi: use PUCHI_STRCASECMP */
-/* puchi: use PUCHI_STRNCASECMP */
-#define round(x) floor((x)+0.5)
-#define trunc(x) floor((x)+0.5*(((x)<0)?1:0))
-#define isnan(x) (x!=x)
-#define isinf(x) (x > DBL_MAX || x < -DBL_MAX)
-#endif
-#elif !defined(__MINGW32__)
-#error Unknown Win32 compiler!
-#endif
-#endif
 
-#if defined(_WIN32)
-#define sexp_pos_infinity (DBL_MAX*DBL_MAX)
-#define sexp_neg_infinity -sexp_pos_infinity
-#define sexp_nan log(-2)
-#else
-#define sexp_pos_infinity (1.0/0.0)
-#define sexp_neg_infinity -sexp_pos_infinity
-#define sexp_nan (0.0/0.0)
-#endif
+/* puchi: IEEE-754 bit patterns (no OS / division tricks) */
+#define sexp_pos_infinity (puchi_f64_from_bits(0x7FF0000000000000ULL))
+#define sexp_neg_infinity (puchi_f64_from_bits(0xFFF0000000000000ULL))
+#define sexp_nan          (puchi_f64_from_bits(0x7FF8000000000000ULL))
 
 #define SEXP_API    extern
 
@@ -857,11 +855,7 @@ extern "C" {
 #define SOCKET_TYPE sexp_sint_t
 #endif
 
-#if defined(__GNUC__)
-#define SEXP_NO_WARN_UNUSED __attribute__((unused))
-#else
 #define SEXP_NO_WARN_UNUSED
-#endif
 
 /* puchi: no stdio.h */
 
@@ -964,42 +958,19 @@ enum sexp_types {
 #define SEXP_STRING_CURSOR SEXP_FIXNUM
 #endif
 
-#if defined(_WIN32)
-#if SEXP_64_BIT
+#if UINTPTR_MAX > 0xFFFFFFFFu
 typedef unsigned int sexp_tag_t;
-typedef unsigned long long sexp_uint_t;
-typedef long long sexp_sint_t;
+typedef uint64_t sexp_uint_t;
+typedef int64_t sexp_sint_t;
 #define SEXP_PRIdFIXNUM "lld"
 #else
 typedef unsigned short sexp_tag_t;
-typedef unsigned int sexp_uint_t;
-typedef int sexp_sint_t;
+typedef uint32_t sexp_uint_t;
+typedef int32_t sexp_sint_t;
 #define SEXP_PRIdFIXNUM "d"
 #endif
 #define sexp_heap_align(n) sexp_align(n, 5)
 #define sexp_heap_chunks(n) (sexp_heap_align(n)>>5)
-#elif SEXP_64_BIT
-typedef unsigned int sexp_tag_t;
-typedef unsigned long sexp_uint_t;
-typedef long sexp_sint_t;
-#define SEXP_PRIdFIXNUM "ld"
-#define sexp_heap_align(n) sexp_align(n, 5)
-#define sexp_heap_chunks(n) (sexp_heap_align(n)>>5)
-#elif defined(__CYGWIN__)
-typedef unsigned short sexp_tag_t;
-typedef unsigned int sexp_uint_t;
-typedef int sexp_sint_t;
-#define SEXP_PRIdFIXNUM "d"
-#define sexp_heap_align(n) sexp_align(n, 5)
-#define sexp_heap_chunks(n) (sexp_heap_align(n)>>5)
-#else
-typedef unsigned short sexp_tag_t;
-typedef unsigned int sexp_uint_t;
-typedef int sexp_sint_t;
-#define SEXP_PRIdFIXNUM "d"
-#define sexp_heap_align(n) sexp_align(n, 4)
-#define sexp_heap_chunks(n) (sexp_heap_align(n)>>4)
-#endif
 
 /* procedure flags */
 #define SEXP_PROC_NONE ((sexp_uint_t)0)
@@ -1010,40 +981,14 @@ typedef int sexp_sint_t;
 
 #if defined(SEXP_USE_INTTYPES)
 /* puchi: stdint.h in banner */
-#if defined(UINT8_MAX)
-#  define SEXP_UINT8_DEFINED 1
+#define SEXP_UINT8_DEFINED 1
 typedef uint8_t  sexp_uint8_t;
-#endif
-#if defined(UINT32_MAX)
-#  define SEXP_UINT32_DEFINED 1
+#define SEXP_UINT32_DEFINED 1
 typedef uint32_t sexp_uint32_t;
 typedef int32_t sexp_int32_t;
 #endif
-#else
-# include <limits.h>
-#if SEXP_USE_UNIFORM_VECTOR_LITERALS
-/* puchi: stdint.h in banner */
-#endif
-#if UCHAR_MAX == 255
-#  define SEXP_UINT8_DEFINED 1
-typedef unsigned char sexp_uint8_t;
-#endif
-#if UINT_MAX == 4294967295U
-#  define SEXP_UINT32_DEFINED 1
-typedef unsigned int sexp_uint32_t;
-typedef int sexp_int32_t;
-#elif ULONG_MAX == 4294967295UL
-#  define SEXP_UINT32_DEFINED 1
-typedef unsigned long sexp_uint32_t;
-typedef long sexp_int32_t;
-#elif USHRT_MAX == 4294967295U
-#  define SEXP_UINT32_DEFINED 1
-typedef unsigned short sexp_uint32_t;
-typedef short sexp_int32_t;
-#endif
-#endif
 
-#if (defined(__APPLE__) || defined(_WIN64)) || (defined(__CYGWIN__) && (__SIZEOF_POINTER__ == 8))
+#if UINTPTR_MAX > 0xFFFFFFFFu
 #define SEXP_PRIdOFF "lld"
 #else
 #define SEXP_PRIdOFF "ld"
@@ -1227,9 +1172,6 @@ struct sexp_struct {
     struct {
       char openp, no_closep;
       sexp_sint_t fd, count;
-#if defined(_WIN32)
-      SOCKET_TYPE sock;
-#endif
     } fileno;
 #endif
     struct {
@@ -1427,8 +1369,7 @@ void* sexp_alloc(sexp ctx, size_t size);
 
 /* amalgamated */
 
-#if SEXP_USE_CUSTOM_LONG_LONGS
-/* puchi: stdint.h in banner */
+/* puchi: always portable 128-bit limb pair (SEXP_USE_CUSTOM_LONG_LONGS) */
 typedef struct
 {
   uint64_t hi;
@@ -1439,15 +1380,6 @@ typedef struct
   int64_t  hi;
   uint64_t lo;
 } sexp_lsint_t;
-#elif SEXP_64_BIT
-typedef unsigned int uint128_t __attribute__((mode(TI)));
-typedef int sint128_t __attribute__((mode(TI)));
-typedef uint128_t sexp_luint_t;
-typedef sint128_t sexp_lsint_t;
-#else
-typedef unsigned long long sexp_luint_t;
-typedef long long sexp_lsint_t;
-#endif
 
 #if !SEXP_USE_CUSTOM_LONG_LONGS
 
@@ -2197,8 +2129,8 @@ SEXP_API unsigned long long sexp_bignum_to_uint(sexp x);
 #define sexp_unshift_epoch(x) (x)
 #endif
 
-#define sexp_infp(x) (sexp_flonump(x) && isinf(sexp_flonum_value(x)))
-#define sexp_nanp(x) (sexp_flonump(x) && isnan(sexp_flonum_value(x)))
+#define sexp_infp(x) (sexp_flonump(x) && PUCHI_ISINF(sexp_flonum_value(x)))
+#define sexp_nanp(x) (sexp_flonump(x) && PUCHI_ISNAN(sexp_flonum_value(x)))
 
 #if SEXP_USE_IEEE_EQV
 #define sexp_flonum_eqv(x, y) (PUCHI_MEMCMP(sexp_flonum_bits(x), sexp_flonum_bits(y), sizeof(double)) == 0)
@@ -2341,11 +2273,7 @@ enum sexp_uniform_vector_type {
 #define sexp_fileno_openp(f)     (sexp_pred_field(f, fileno, sexp_filenop, openp))
 #endif
 #if defined(PUCHI_TEST)
-#if defined(_WIN32)
-#define sexp_fileno_sock(f)      (sexp_pred_field(f, fileno, sexp_filenop, sock))
-#else
 #define sexp_fileno_sock(f)      (sexp_fileno_fd(f))
-#endif
 #endif
 #if defined(PUCHI_TEST)
 #define sexp_fileno_no_closep(f) (sexp_pred_field(f, fileno, sexp_filenop, no_closep))
@@ -4171,11 +4099,8 @@ sexp sexp_write_uvector(sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp write
 sexp sexp_finalize_fileno (sexp ctx, sexp self, sexp_sint_t n, sexp fileno) {
   if (sexp_fileno_openp(fileno) && !sexp_fileno_no_closep(fileno)) {
     sexp_fileno_openp(fileno) = 0;
-#if defined(PUCHI_TEST)
-    close(sexp_fileno_fd(fileno));
-#else
+    /* puchi: no close(2); harness FILE* ports close via stream_ops */
     (void)fileno;
-#endif
   }
   return SEXP_VOID;
 }
@@ -4446,9 +4371,6 @@ static const char* sexp_initial_features[] = {
   "ratios",
 #endif
   "r7rs",
-#if defined(_WIN32)
-  "windows",
-#endif
   "puchi-" sexp_version,
   "chibi",
   "puchi",
@@ -5821,9 +5743,9 @@ sexp sexp_write_one (sexp ctx, sexp obj, sexp out, sexp_sint_t bound) {
     case SEXP_FLONUM:
       f = sexp_flonum_value(obj);
 #if SEXP_USE_INFINITIES
-      if (isinf(f) || isnan(f)) {
-        numbuf[0] = (isinf(f) && f < 0 ? '-' : '+');
-        PUCHI_STRNCPY(numbuf+1, isinf(f) ? "inf.0" : "nan.0", NUMBUF_LEN-1);
+      if (PUCHI_ISINF(f) || PUCHI_ISNAN(f)) {
+        numbuf[0] = (PUCHI_ISINF(f) && f < 0 ? '-' : '+');
+        PUCHI_STRNCPY(numbuf+1, PUCHI_ISINF(f) ? "inf.0" : "nan.0", NUMBUF_LEN-1);
       } else
 #endif
       {
@@ -6686,7 +6608,7 @@ sexp sexp_read_number (sexp ctx, sexp in, int base, int exactp) {
         if (real < 0) {
           theta += M_PI;
         }
-        rho = sexp_to_double(ctx, sexp_div(ctx, res, sexp_make_fixnum((sexp_sint_t)round(rho))));
+        rho = sexp_to_double(ctx, sexp_div(ctx, res, sexp_make_fixnum((sexp_sint_t)PUCHI_ROUND(rho))));
         sexp_complex_real(den) = sexp_make_flonum(ctx, rho * PUCHI_COS(theta));
         sexp_complex_imag(den) = sexp_make_flonum(ctx, rho * PUCHI_SIN(theta));
 #endif
@@ -6819,9 +6741,9 @@ double sexp_quarter_to_double(unsigned char q) {
 
 unsigned char sexp_double_to_quarter(double f) {
   int lo = 0, hi = SEXP_QUARTERS_INFINITY_INDEX - 1, mid;
-  if (isnan(f)) return SEXP_QUARTERS_NAN_INDEX;
+  if (PUCHI_ISNAN(f)) return SEXP_QUARTERS_NAN_INDEX;
   if (f < 0) return 128 + sexp_double_to_quarter(-f);
-  if (isinf(f)) return SEXP_QUARTERS_INFINITY_INDEX;
+  if (PUCHI_ISINF(f)) return SEXP_QUARTERS_INFINITY_INDEX;
   while (lo <= hi) {
     mid = (lo + hi) / 2;
     if (sexp_quarters[mid] < f) {
@@ -6862,8 +6784,8 @@ double sexp_half_to_double(unsigned short x) {
 
 unsigned short sexp_double_to_half(double x) {
   unsigned int b, e, m;
-  if (isnan(x)) return 32767;
-  if (isinf(x)) return x < 0 ? 64512 : 31744;
+  if (PUCHI_ISNAN(x)) return 32767;
+  if (PUCHI_ISINF(x)) return x < 0 ? 64512 : 31744;
   b = float_as_int(x)+0x00001000;
   e = (b&0x7F800000)>>23;
   m = b&0x007FFFFF;
@@ -7193,7 +7115,7 @@ sexp sexp_read_raw (sexp ctx, sexp in, sexp *shares) {
       res = sexp_read_number(ctx, in, 10, 1);
 #if SEXP_USE_INFINITIES
       if (sexp_flonump(res)
-          && (isnan(sexp_flonum_value(res)) || isinf(sexp_flonum_value(res))))
+          && (PUCHI_ISNAN(sexp_flonum_value(res)) || PUCHI_ISINF(sexp_flonum_value(res))))
         res = sexp_read_error(ctx, "can't convert non-finite flonum to exact", res, in);
       else
 #endif
@@ -11463,7 +11385,7 @@ define_math_op(sexp_atan, atan, sexp_complex_atan)
   }
 
 static double even_round (double d) {
-  double res = round(d);
+  double res = PUCHI_ROUND(d);
   if (PUCHI_FABS(d - res) == 0.5 && ((long)res & 1))
     res += (res < 0) ? 1 : -1;
   return res;
@@ -11525,8 +11447,8 @@ sexp sexp_inexact_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
   sexp_gc_preserve1(ctx, res);
   r = PUCHI_SQRT(d);
   if (sexp_fixnump(z)
-      && (((sexp_uint_t)r*(sexp_uint_t)r)==labs(sexp_unbox_fixnum(z))))
-    res = sexp_make_fixnum(round(r));
+      && (((sexp_uint_t)r*(sexp_uint_t)r)==PUCHI_LABS(sexp_unbox_fixnum(z))))
+    res = sexp_make_fixnum(PUCHI_ROUND(r));
   else
     res = sexp_make_flonum(ctx, r);
 #if SEXP_USE_COMPLEX
@@ -11716,7 +11638,7 @@ sexp sexp_expt_op (sexp ctx, sexp self, sexp_sint_t n, sexp x, sexp e) {
 #endif
       res = sexp_make_flonum(ctx, f);
   } else
-    res = sexp_make_fixnum((sexp_sint_t)round(f));
+    res = sexp_make_fixnum((sexp_sint_t)PUCHI_ROUND(f));
 #if SEXP_USE_BIGNUMS
   }
 #endif
@@ -11784,7 +11706,7 @@ sexp sexp_inexact_to_exact (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
   }
 #if SEXP_USE_FLONUMS
   else if (sexp_flonump(z)) {
-    if (isinf(sexp_flonum_value(z)) || isnan(sexp_flonum_value(z))) {
+    if (PUCHI_ISINF(sexp_flonum_value(z)) || PUCHI_ISNAN(sexp_flonum_value(z))) {
       res = sexp_xtype_exception(ctx, self, "exact: not a finite number", z);
     } else if (sexp_flonum_value(z) != PUCHI_TRUNC(sexp_flonum_value(z))) {
 #if SEXP_USE_RATIOS
@@ -13062,7 +12984,7 @@ sexp sexp_read_bignum (sexp ctx, sexp in, sexp_uint_t init,
 #endif
       if (sexp_exceptionp(tmp)) {
         res = tmp;
-      } else if (sexp_fixnump(tmp) && labs(sexp_unbox_fixnum(tmp)) < 100*1024*1024) {
+      } else if (sexp_fixnump(tmp) && PUCHI_LABS(sexp_unbox_fixnum(tmp)) < 100*1024*1024) {
         tmp = sexp_expt(ctx, SEXP_TEN, tmp);
         res = sexp_mul(ctx, res, tmp);
       } else {
@@ -13476,7 +13398,7 @@ sexp sexp_bignum_sqrt (sexp ctx, sexp a, sexp* rem_out) {
   res = sexp_inexact_sqrt(ctx, NULL, 1, res);
   if (sexp_flonump(res) &&
       sexp_flonum_value(res) > SEXP_MAX_ACCURATE_FLONUM_SQRT) {
-    if (isinf(sexp_flonum_value(res)))
+    if (PUCHI_ISINF(sexp_flonum_value(res)))
       res = sexp_bignum_sqrt_estimate(ctx, a);
     else
       res = sexp_double_to_bignum(ctx, sexp_flonum_value(res));
@@ -13518,7 +13440,7 @@ double sexp_ratio_to_double (sexp ctx, sexp rat) {
           : sexp_fixnum_to_double(num))
     / (sexp_bignump(den) ? sexp_bignum_to_double(den)
        : sexp_fixnum_to_double(den));
-  if (!isfinite(res)) {
+  if (!PUCHI_ISFINITE(res)) {
     sexp_gc_preserve1(ctx, quot);
     if (sexp_unbox_fixnum(sexp_compare(ctx, sexp_ratio_numerator(rat),  sexp_ratio_denominator(rat))) < 0) {
       quot = sexp_quotient(ctx, sexp_ratio_denominator(rat),  sexp_ratio_numerator(rat));
@@ -13912,7 +13834,7 @@ sexp sexp_complex_acos (sexp ctx, sexp z) {
   sexp_gc_preserve2(ctx, res, tmp);
   res = sexp_complex_asin(ctx, z);
   tmp = sexp_make_complex(ctx, SEXP_ZERO, SEXP_ZERO);
-  sexp_complex_real(tmp) = sexp_make_flonum(ctx, acos(-1)/2);
+  sexp_complex_real(tmp) = sexp_make_flonum(ctx, PUCHI_ACOS(-1)/2);
   res = sexp_sub(ctx, tmp, res);
   sexp_gc_release2(ctx);
   return res;
@@ -14541,10 +14463,10 @@ sexp sexp_remainder (sexp ctx, sexp a, sexp b) {
 #if SEXP_USE_RATIOS
   case SEXP_NUM_FLO_RAT:
 #endif
-    if (isinf(sexp_flonum_value(a)) ||
+    if (PUCHI_ISINF(sexp_flonum_value(a)) ||
         sexp_flonum_value(a) != PUCHI_TRUNC(sexp_flonum_value(a))) {
       r = sexp_type_exception(ctx, NULL, SEXP_FIXNUM, a);
-    } else if (bt == SEXP_NUM_FLO && isinf(sexp_flonum_value(b))) {
+    } else if (bt == SEXP_NUM_FLO && PUCHI_ISINF(sexp_flonum_value(b))) {
       r = sexp_type_exception(ctx, NULL, SEXP_FIXNUM, b);
     } else {
       tmp = sexp_bignum_normalize(sexp_double_to_bignum(ctx, sexp_flonum_value(a)));
@@ -14568,7 +14490,7 @@ sexp sexp_remainder (sexp ctx, sexp a, sexp b) {
 #if SEXP_USE_RATIOS
   case SEXP_NUM_RAT_FLO:
 #endif
-    if (isinf(sexp_flonum_value(b)) ||
+    if (PUCHI_ISINF(sexp_flonum_value(b)) ||
         sexp_flonum_value(b) != PUCHI_TRUNC(sexp_flonum_value(b))) {
       r = sexp_type_exception(ctx, NULL, SEXP_FIXNUM, b);
     } else {
@@ -14628,9 +14550,9 @@ sexp sexp_compare (sexp ctx, sexp a, sexp b) {
       r = sexp_make_fixnum(sexp_unbox_fixnum(a) - sexp_unbox_fixnum(b));
       break;
     case SEXP_NUM_FIX_FLO:
-      if (isinf(sexp_flonum_value(b))) {
+      if (PUCHI_ISINF(sexp_flonum_value(b))) {
         r = sexp_flonum_value(b) > 0 ? SEXP_NEG_ONE : SEXP_ONE;
-      } else if (isnan(sexp_flonum_value(b))) {
+      } else if (PUCHI_ISNAN(sexp_flonum_value(b))) {
         r = sexp_xtype_exception(ctx, NULL, "can't compare NaN", b);
       } else {
         r = sexp_compare(ctx, a, tmp=sexp_inexact_to_exact(ctx, NULL, 1, b));
@@ -14646,19 +14568,19 @@ sexp sexp_compare (sexp ctx, sexp a, sexp b) {
     case SEXP_NUM_FLO_FLO:
       f = sexp_flonum_value(a);
       g = sexp_flonum_value(b);
-      if (isnan(f))
+      if (PUCHI_ISNAN(f))
         r = sexp_xtype_exception(ctx, NULL, "can't compare NaN", a);
-      else if (isnan(g))
+      else if (PUCHI_ISNAN(g))
         r = sexp_xtype_exception(ctx, NULL, "can't compare NaN", b);
       else
         r = sexp_make_fixnum(f < g ? -1 : f == g ? 0 : 1);
       break;
     case SEXP_NUM_FLO_BIG:
       f = sexp_flonum_value(a);
-      if (isinf(f)) {
+      if (PUCHI_ISINF(f)) {
         r = f > 0 ? SEXP_ONE : SEXP_NEG_ONE;
         break;
-      } else if (isnan(f)) {
+      } else if (PUCHI_ISNAN(f)) {
         r = sexp_xtype_exception(ctx, NULL, "can't compare NaN", a);
         break;
       } else {
@@ -14671,9 +14593,9 @@ sexp sexp_compare (sexp ctx, sexp a, sexp b) {
 #if SEXP_USE_RATIOS
     case SEXP_NUM_FLO_RAT:
       f = sexp_flonum_value(a);
-      if (isinf(f)) {
+      if (PUCHI_ISINF(f)) {
         r = f > 0 ? SEXP_ONE : SEXP_NEG_ONE;
-      } else if (isnan(f)) {
+      } else if (PUCHI_ISNAN(f)) {
         r = sexp_xtype_exception(ctx, NULL, "can't compare NaN", a);
       } else {
         r = sexp_compare(ctx, tmp=sexp_inexact_to_exact(ctx, NULL, 1, a), b);
@@ -16770,18 +16692,21 @@ static sexp puchi_module_load_f(sexp ctx, sexp self, sexp_sint_t n, sexp source,
   size_t len = 0;
   sexp res;
   const char *path;
-  size_t plen, so_len;
   if (!env) env = sexp_context_env(ctx);
   sexp_assert_type(ctx, sexp_envp, SEXP_ENV, env);
   if (sexp_iportp(source))
     return sexp_load_op(ctx, self, n, source, env);
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, source);
   path = sexp_string_data(source);
-  plen = PUCHI_STRLEN(path);
-  so_len = PUCHI_STRLEN(sexp_so_extension);
-  /* STATIC_LIBS: *.so names are not on disk — dispatch to sexp_load_op/binary. */
-  if (plen >= so_len && PUCHI_STRCMP(path + plen - so_len, sexp_so_extension) == 0)
-    return sexp_load_op(ctx, self, n, source, env);
+#if defined(PUCHI_TEST)
+  {
+    size_t plen = PUCHI_STRLEN(path);
+    size_t so_len = PUCHI_STRLEN(sexp_so_extension);
+    /* STATIC_LIBS: *.so names are not on disk — dispatch to sexp_load_op/binary. */
+    if (plen >= so_len && PUCHI_STRCMP(path + plen - so_len, sexp_so_extension) == 0)
+      return sexp_load_op(ctx, self, n, source, env);
+  }
+#endif
   if (!puchi_g_module_ops_set || !puchi_g_module_ops.read || !puchi_g_module_ops.free_buf)
     return sexp_global(ctx, SEXP_G_OOM_ERROR);
   buf = puchi_g_module_ops.read(puchi_g_module_ops.userdata, path, &len);
@@ -16869,14 +16794,17 @@ sexp sexp_enable_modules(sexp ctx, const puchi_module_ops *ops) {
   }
   meta_gc = meta;
 
+#if defined(PUCHI_TEST)
   /* meta-7 include-shared uses *shared-object-extension*; harness STATIC_LIBS
-   * resolves those names without dlopen. Define before evaluating meta-7. */
+   * resolves those names without dlopen. Define before evaluating meta-7.
+   * Product builds leave the name unbound so include-shared errors. */
   {
     sexp so = sexp_c_string(ctx, sexp_so_extension, -1);
     sym = sexp_intern(ctx, "*shared-object-extension*", -1);
     sexp_env_define(ctx, env, sym, so);
     sexp_env_define(ctx, meta, sym, so);
   }
+#endif
 
   puchi_module_install_foreigns(ctx, env);
   puchi_module_install_foreigns(ctx, meta);

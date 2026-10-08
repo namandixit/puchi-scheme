@@ -8,6 +8,14 @@ bash puchi/tools/amalgamate.sh
 
 Requires bash (Git Bash on Windows), `patch` or `git apply`, and Python 3.
 
+## Sandbox contract
+
+The amalgamated header is platform-independent for embeds:
+
+- **Host owns memory and I/O.** Pass a `puchi_host` with `alloc` / `free` at context create. Ports use `puchi_stream_ops`. A null or incomplete host does not fall back to CRT `malloc`.
+- **No OS `#if` or syscalls in the header.** No `_WIN32` / `__APPLE__` / … layout forks, no `close` / `fopen` / `dlopen`. Post-amalgamate assert fails if those tokens return.
+- **No OS names in `*features*`.** `"chibi"` and `"puchi"` stay; `"windows"` does not. A `PUCHI_TEST` harness may use the CRT and may cons `windows` onto `*features*` at runtime so upstream Chibi libs (e.g. `(scheme process-context)`) load.
+
 ## Definition of done (mandatory)
 
 After **any** puchi change (patches, `product/`, tools, tests, feature forces, amalgamation inputs), a change is **not done** until:

@@ -107,6 +107,12 @@ LIBC_REWRITES = [
     ("fabsl", "PUCHI_FABSL"),
     ("fmod", "PUCHI_FMOD"),
     ("trunc", "PUCHI_TRUNC"),
+    ("isfinite", "PUCHI_ISFINITE"),
+    ("isnan", "PUCHI_ISNAN"),
+    ("isinf", "PUCHI_ISINF"),
+    ("round", "PUCHI_ROUND"),
+    ("labs", "PUCHI_LABS"),
+    ("acos", "PUCHI_ACOS"),
 ]
 
 # Scheme opcode names removed from core (harness/host installs via foreigns).
@@ -210,31 +216,22 @@ def brand_puchi_features(src: str) -> str:
     base)) ...))``. Dropping the ``chibi`` feature makes those else-branches
     import (scheme base) while it is still loading → cyclic module error.
 
-    Also keep a compile-time ``windows`` feature on Win32: amalgamate's
-    dead-backend strip tends to drop the stock ``#if defined(_WIN32)`` arm
-    from sexp_initial_features, which breaks ``(cond-expand ((not windows) ...))``.
+    Do not re-inject OS feature strings (``windows``, …). The harness may cons
+    ``windows`` onto ``*features*`` at runtime when needed for upstream libs.
     """
     src = src.replace('"chibi-" sexp_version', '"puchi-" sexp_version')
+    # Drop any leftover OS feature arm before branding.
+    src = re.sub(
+        r"#if defined\(_WIN32\)\n\s*\"windows\",\n#endif\n",
+        "",
+        src,
+    )
     # Keep "chibi" and add "puchi" alongside (do not replace).
     src = re.sub(
         r'^(\s*)"chibi",\s*$',
         r'\1"chibi",\n\1"puchi",',
         src,
         flags=re.MULTILINE,
-    )
-    # Re-anchor windows feature next to r7rs so amalgamation cannot drop it.
-    src = re.sub(
-        r"#if defined\(_WIN32\)\n\s*\"windows\",\n#endif\n",
-        "",
-        src,
-    )
-    src = src.replace(
-        '  "r7rs",\n',
-        '  "r7rs",\n'
-        "#if defined(_WIN32)\n"
-        '  "windows",\n'
-        "#endif\n",
-        1,
     )
     return src
 

@@ -21,6 +21,7 @@ from puchi_host_embed import (
     trim_init7_load_port,
 )
 from puchi_strip_gunk import (
+    assert_no_os_residue,
     assert_no_project_includes,
     scrub_shipped_always_zero_defines,
     trim_init7_dead_arms,
@@ -384,18 +385,98 @@ def scrub_features_h(text: str) -> str:
         "#endif\n"
         "#endif\n"
     )
-    bsd_new = (
-        "/* puchi: no host-OS feature probe; platform is \"puchi\"/\"portable\" */\n"
-        "#define SEXP_BSD 0\n"
-        "#define SEXP_DARWIN 0\n"
-        "#define SEXP_FREEBSD 0\n"
-        "#define SEXP_NETBSD 0\n"
-        "#define SEXP_DRAGONFLY 0\n"
-        "#define SEXP_OPENBSD 0\n"
-    )
+    bsd_new = "/* puchi: no host-OS feature probe; platform is \"puchi\"/\"portable\" */\n"
     if bsd_old not in text:
         raise SystemExit("scrub_features_h: BSD probe block not found")
     text = text.replace(bsd_old, bsd_new, 1)
+
+    bit64_old = (
+        "#ifndef SEXP_64_BIT\n"
+        "#if defined(__amd64) || defined(__x86_64) || defined(_WIN64) || defined(_Wp64) || defined(__LP64__) || defined(__PPC64__) || defined(__mips64__) || defined(__sparc64__) || defined(__arm64)\n"
+        "#define SEXP_64_BIT 1\n"
+        "#else\n"
+        "#define SEXP_64_BIT 0\n"
+        "#endif\n"
+        "#endif\n"
+    )
+    bit64_new = (
+        "#ifndef SEXP_64_BIT\n"
+        "#if UINTPTR_MAX > 0xFFFFFFFFu\n"
+        "#define SEXP_64_BIT 1\n"
+        "#else\n"
+        "#define SEXP_64_BIT 0\n"
+        "#endif\n"
+        "#endif\n"
+    )
+    if bit64_old not in text:
+        raise SystemExit("scrub_features_h: SEXP_64_BIT probe not found")
+    text = text.replace(bit64_old, bit64_new, 1)
+
+    cll_old = (
+        "#ifndef SEXP_USE_CUSTOM_LONG_LONGS\n"
+        "#if SEXP_64_BIT && !defined(__GNUC__)\n"
+        "#define SEXP_USE_CUSTOM_LONG_LONGS 1\n"
+        "#else\n"
+        "#define SEXP_USE_CUSTOM_LONG_LONGS 0\n"
+        "#endif\n"
+        "#endif\n"
+    )
+    cll_new = (
+        "#ifndef SEXP_USE_CUSTOM_LONG_LONGS\n"
+        "#define SEXP_USE_CUSTOM_LONG_LONGS 1\n"
+        "#endif\n"
+    )
+    if cll_old not in text:
+        raise SystemExit("scrub_features_h: CUSTOM_LONG_LONGS block not found")
+    text = text.replace(cll_old, cll_new, 1)
+
+    align_old = (
+        "#ifndef SEXP_USE_ALIGNED_BYTECODE\n"
+        "#if defined(__arm__) || defined(__sparc__) || defined(__sparc64__) || defined(__mips__) || defined(__mips64__) || defined(__riscv)\n"
+        "#define SEXP_USE_ALIGNED_BYTECODE 1\n"
+        "#else\n"
+        "#define SEXP_USE_ALIGNED_BYTECODE 0\n"
+        "#endif\n"
+        "#endif\n"
+    )
+    # Forced on in puchi_features_force.h; drop the CPU probe text.
+    if align_old not in text:
+        raise SystemExit("scrub_features_h: ALIGNED_BYTECODE probe not found")
+    text = text.replace(align_old, "\n", 1)
+
+    # Drop PLAN9 / Win32 libc polyfills and compiler #error (PUCHI_* covers libc).
+    plan9_win = text.find("#ifdef PLAN9\n#define strcasecmp cistrcmp\n")
+    if plan9_win < 0:
+        raise SystemExit("scrub_features_h: PLAN9/Win32 polyfill block not found")
+    win_end = text.find("\n#ifdef _WIN32\n#define sexp_pos_infinity", plan9_win)
+    if win_end < 0:
+        raise SystemExit("scrub_features_h: inf/nan block after polyfills not found")
+    text = text[:plan9_win] + text[win_end + 1 :]
+
+    inf_old = (
+        "#ifdef _WIN32\n"
+        "#define sexp_pos_infinity (DBL_MAX*DBL_MAX)\n"
+        "#define sexp_neg_infinity -sexp_pos_infinity\n"
+        "#define sexp_nan log(-2)\n"
+        "#elif PLAN9\n"
+        "#define sexp_pos_infinity Inf(1)\n"
+        "#define sexp_neg_infinity Inf(-1)\n"
+        "#define sexp_nan NaN()\n"
+        "#else\n"
+        "#define sexp_pos_infinity (1.0/0.0)\n"
+        "#define sexp_neg_infinity -sexp_pos_infinity\n"
+        "#define sexp_nan (0.0/0.0)\n"
+        "#endif\n"
+    )
+    inf_new = (
+        "/* puchi: IEEE-754 bit patterns (no OS / division tricks) */\n"
+        "#define sexp_pos_infinity (puchi_f64_from_bits(0x7FF0000000000000ULL))\n"
+        "#define sexp_neg_infinity (puchi_f64_from_bits(0xFFF0000000000000ULL))\n"
+        "#define sexp_nan          (puchi_f64_from_bits(0x7FF8000000000000ULL))\n"
+    )
+    if inf_old not in text:
+        raise SystemExit("scrub_features_h: inf/nan block not found")
+    text = text.replace(inf_old, inf_new, 1)
 
     for block in (
         "#ifndef sexp_default_user_module_path\n"
@@ -488,6 +569,251 @@ def scrub_gc_host(gc_c: str) -> str:
     if old not in text:
         raise SystemExit("scrub_gc_host: CHIBI_MAX_ALLOC getenv not found")
     return text.replace(old, new, 1)
+
+
+def scrub_sexp_h(text: str) -> str:
+    """Portable ABI layout in sexp.h: no OS/CPU/compiler typedef forks."""
+    text = normalize_newlines(text)
+
+    # Unused-param attribute → empty (call sites may use (void)).
+    gnuc_old = (
+        "#ifdef __GNUC__\n"
+        "#define SEXP_NO_WARN_UNUSED __attribute__((unused))\n"
+        "#else\n"
+        "#define SEXP_NO_WARN_UNUSED\n"
+        "#endif\n"
+    )
+    gnuc_new = "#define SEXP_NO_WARN_UNUSED\n"
+    if gnuc_old not in text:
+        # Already scrubbed or patched variant
+        gnuc_old2 = (
+            "#if defined(__GNUC__)\n"
+            "#define SEXP_NO_WARN_UNUSED __attribute__((unused))\n"
+            "#else\n"
+            "#define SEXP_NO_WARN_UNUSED\n"
+            "#endif\n"
+        )
+        if gnuc_old2 in text:
+            text = text.replace(gnuc_old2, gnuc_new, 1)
+        elif "#define SEXP_NO_WARN_UNUSED\n" not in text:
+            raise SystemExit("scrub_sexp_h: SEXP_NO_WARN_UNUSED block not found")
+    else:
+        text = text.replace(gnuc_old, gnuc_new, 1)
+
+    # Integer typedefs: one stdint layout from UINTPTR_MAX.
+    # Match either stock or already-partially-stripped forms by anchoring on markers.
+    m = re.search(
+        r"#if(?:def)?\s+(?:defined\()?_WIN32.*?/\* procedure flags \*/",
+        text,
+        flags=re.DOTALL,
+    )
+    if not m:
+        # Alternate: starts with #ifdef _WIN32 or #if defined(_WIN32)
+        m = re.search(
+            r"#if defined\(_WIN32\).*?/\* procedure flags \*/",
+            text,
+            flags=re.DOTALL,
+        )
+    if not m:
+        raise SystemExit("scrub_sexp_h: integer typedef block not found")
+    typedef_new = (
+        "#if UINTPTR_MAX > 0xFFFFFFFFu\n"
+        "typedef unsigned int sexp_tag_t;\n"
+        "typedef uint64_t sexp_uint_t;\n"
+        "typedef int64_t sexp_sint_t;\n"
+        '#define SEXP_PRIdFIXNUM "lld"\n'
+        "#else\n"
+        "typedef unsigned short sexp_tag_t;\n"
+        "typedef uint32_t sexp_uint_t;\n"
+        "typedef int32_t sexp_sint_t;\n"
+        '#define SEXP_PRIdFIXNUM "d"\n'
+        "#endif\n"
+        "#define sexp_heap_align(n) sexp_align(n, 5)\n"
+        "#define sexp_heap_chunks(n) (sexp_heap_align(n)>>5)\n"
+        "\n"
+        "/* procedure flags */"
+    )
+    text = text[: m.start()] + typedef_new + text[m.end() :]
+
+    # Always stdint for 8/32-bit lane types; drop ULONG_MAX fallbacks.
+    inttypes_pat = re.compile(
+        r"#if defined\(SEXP_USE_INTTYPES\)|#ifdef SEXP_USE_INTTYPES",
+    )
+    im = inttypes_pat.search(text)
+    if not im:
+        raise SystemExit("scrub_sexp_h: SEXP_USE_INTTYPES block not found")
+    prid_m = re.search(
+        r"#if \(?defined\(__APPLE__\)|#if defined\(__APPLE__\)",
+        text[im.start() :],
+    )
+    if not prid_m:
+        # After typedef scrub, look for PRIdOFF block
+        prid_m = re.search(r"#if defined\(__APPLE__\)", text[im.start() :])
+    if not prid_m:
+        raise SystemExit("scrub_sexp_h: PRIdOFF / inttypes end not found")
+    inttypes_end = im.start() + prid_m.start()
+    inttypes_new = (
+        "#if defined(SEXP_USE_INTTYPES)\n"
+        "/* puchi: stdint.h in banner */\n"
+        "#define SEXP_UINT8_DEFINED 1\n"
+        "typedef uint8_t  sexp_uint8_t;\n"
+        "#define SEXP_UINT32_DEFINED 1\n"
+        "typedef uint32_t sexp_uint32_t;\n"
+        "typedef int32_t sexp_int32_t;\n"
+        "#endif\n"
+        "\n"
+    )
+    # Prefer matching through end of the whole #ifdef SEXP_USE_INTTYPES ... #endif
+    # and the following PRIdOFF block together.
+    prid_block = re.search(
+        r"#if \(defined\(__APPLE__\) \|\| defined\(_WIN64\)\) \|\| \(defined\(__CYGWIN__\) && \(__SIZEOF_POINTER__ == 8\)\)\n"
+        r'#define SEXP_PRIdOFF "lld"\n'
+        r"#else\n"
+        r'#define SEXP_PRIdOFF "ld"\n'
+        r"#endif\n",
+        text,
+    )
+    if not prid_block:
+        prid_block = re.search(
+            r"#if defined\(__APPLE__\) \|\| defined\(_WIN64\) \|\| \(defined\(__CYGWIN__\) && __SIZEOF_POINTER__ == 8\)\n"
+            r'#define SEXP_PRIdOFF "lld"\n'
+            r"#else\n"
+            r'#define SEXP_PRIdOFF "ld"\n'
+            r"#endif\n",
+            text,
+        )
+    if not prid_block:
+        raise SystemExit("scrub_sexp_h: PRIdOFF block not found")
+
+    # Replace from inttypes start through PRIdOFF end.
+    prid_new = (
+        "#if UINTPTR_MAX > 0xFFFFFFFFu\n"
+        '#define SEXP_PRIdOFF "lld"\n'
+        "#else\n"
+        '#define SEXP_PRIdOFF "ld"\n'
+        "#endif\n"
+    )
+    text = text[: im.start()] + inttypes_new + prid_new + text[prid_block.end() :]
+
+    # Fileno: no separate Win32 sock field; sock accessor is the fd.
+    text = re.sub(
+        r"#if defined\(_WIN32\)\n\s*SOCKET_TYPE sock;\n#endif\n",
+        "",
+        text,
+    )
+    text = re.sub(
+        r"#ifdef _WIN32\n\s*SOCKET_TYPE sock;\n#endif\n",
+        "",
+        text,
+    )
+    sock_acc_old = (
+        "#if defined(PUCHI_TEST)\n"
+        "#if defined(_WIN32)\n"
+        "#define sexp_fileno_sock(f)      (sexp_pred_field(f, fileno, sexp_filenop, sock))\n"
+        "#else\n"
+        "#define sexp_fileno_sock(f)      (sexp_fileno_fd(f))\n"
+        "#endif\n"
+        "#endif\n"
+    )
+    sock_acc_new = (
+        "#if defined(PUCHI_TEST)\n"
+        "#define sexp_fileno_sock(f)      (sexp_fileno_fd(f))\n"
+        "#endif\n"
+    )
+    if sock_acc_old in text:
+        text = text.replace(sock_acc_old, sock_acc_new, 1)
+    else:
+        sock_acc_old2 = (
+            "#ifdef _WIN32\n"
+            "#define sexp_fileno_sock(f)      (sexp_pred_field(f, fileno, sexp_filenop, sock))\n"
+            "#else\n"
+            "#define sexp_fileno_sock(f)      (sexp_fileno_fd(f))\n"
+            "#endif\n"
+        )
+        if sock_acc_old2 in text:
+            text = text.replace(
+                sock_acc_old2,
+                "#define sexp_fileno_sock(f)      (sexp_fileno_fd(f))\n",
+                1,
+            )
+
+    return text
+
+
+def scrub_bignum_h(text: str) -> str:
+    """Always use the portable 128-bit struct; delete mode(TI) / long-long arms."""
+    text = normalize_newlines(text)
+    old = (
+        "#if SEXP_USE_CUSTOM_LONG_LONGS\n"
+        "/* puchi: stdint.h in banner */\n"
+        "typedef struct\n"
+        "{\n"
+        "  uint64_t hi;\n"
+        "  uint64_t lo;\n"
+        "} sexp_luint_t;\n"
+        "typedef struct\n"
+        "{\n"
+        "  int64_t  hi;\n"
+        "  uint64_t lo;\n"
+        "} sexp_lsint_t;\n"
+        "#elif SEXP_64_BIT\n"
+        "typedef unsigned int uint128_t __attribute__((mode(TI)));\n"
+        "typedef int sint128_t __attribute__((mode(TI)));\n"
+        "typedef uint128_t sexp_luint_t;\n"
+        "typedef sint128_t sexp_lsint_t;\n"
+        "#else\n"
+        "typedef unsigned long long sexp_luint_t;\n"
+        "typedef long long sexp_lsint_t;\n"
+        "#endif\n"
+    )
+    # Upstream before stdint scrub:
+    old_up = (
+        "#if SEXP_USE_CUSTOM_LONG_LONGS\n"
+        "#ifdef PLAN9\n"
+        "#include <ape/stdint.h>\n"
+        "#else\n"
+        "#include <stdint.h>\n"
+        "#endif\n"
+        "typedef struct\n"
+        "{\n"
+        "  uint64_t hi;\n"
+        "  uint64_t lo;\n"
+        "} sexp_luint_t;\n"
+        "typedef struct\n"
+        "{\n"
+        "  int64_t  hi;\n"
+        "  uint64_t lo;\n"
+        "} sexp_lsint_t;\n"
+        "#elif SEXP_64_BIT\n"
+        "typedef unsigned int uint128_t __attribute__((mode(TI)));\n"
+        "typedef int sint128_t __attribute__((mode(TI)));\n"
+        "typedef uint128_t sexp_luint_t;\n"
+        "typedef sint128_t sexp_lsint_t;\n"
+        "#else\n"
+        "typedef unsigned long long sexp_luint_t;\n"
+        "typedef long long sexp_lsint_t;\n"
+        "#endif\n"
+    )
+    new = (
+        "/* puchi: always portable 128-bit limb pair (SEXP_USE_CUSTOM_LONG_LONGS) */\n"
+        "typedef struct\n"
+        "{\n"
+        "  uint64_t hi;\n"
+        "  uint64_t lo;\n"
+        "} sexp_luint_t;\n"
+        "typedef struct\n"
+        "{\n"
+        "  int64_t  hi;\n"
+        "  uint64_t lo;\n"
+        "} sexp_lsint_t;\n"
+    )
+    if old in text:
+        text = text.replace(old, new, 1)
+    elif old_up in text:
+        text = text.replace(old_up, new, 1)
+    else:
+        raise SystemExit("scrub_bignum_h: long-long typedef block not found")
+    return text
 
 
 def trim_init7(src: str) -> str:
@@ -1110,6 +1436,12 @@ def main() -> None:
     p = sub.add_parser("scrub-features")
     p.add_argument("path")
 
+    p = sub.add_parser("scrub-sexp")
+    p.add_argument("path")
+
+    p = sub.add_parser("scrub-bignum")
+    p.add_argument("path")
+
     p = sub.add_parser("scrub-gc")
     p.add_argument("path")
 
@@ -1152,6 +1484,12 @@ def main() -> None:
     elif args.cmd == "scrub-features":
         path = Path(args.path)
         write_text_lf(path, scrub_features_h(path.read_text(encoding="utf-8")))
+    elif args.cmd == "scrub-sexp":
+        path = Path(args.path)
+        write_text_lf(path, scrub_sexp_h(path.read_text(encoding="utf-8")))
+    elif args.cmd == "scrub-bignum":
+        path = Path(args.path)
+        write_text_lf(path, scrub_bignum_h(path.read_text(encoding="utf-8")))
     elif args.cmd == "scrub-gc":
         path = Path(args.path)
         write_text_lf(path, scrub_gc_host(path.read_text(encoding="utf-8")))
@@ -1172,6 +1510,7 @@ def main() -> None:
         text = normalize_newlines(path.read_text(encoding="utf-8"))
         text = scrub_shipped_always_zero_defines(text)
         assert_no_project_includes(text)
+        assert_no_os_residue(text)
         write_text_lf(path, text)
 
 

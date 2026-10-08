@@ -82,18 +82,21 @@ static sexp puchi_module_load_f(sexp ctx, sexp self, sexp_sint_t n, sexp source,
   size_t len = 0;
   sexp res;
   const char *path;
-  size_t plen, so_len;
   if (!env) env = sexp_context_env(ctx);
   sexp_assert_type(ctx, sexp_envp, SEXP_ENV, env);
   if (sexp_iportp(source))
     return sexp_load_op(ctx, self, n, source, env);
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, source);
   path = sexp_string_data(source);
-  plen = PUCHI_STRLEN(path);
-  so_len = PUCHI_STRLEN(sexp_so_extension);
-  /* STATIC_LIBS: *.so names are not on disk — dispatch to sexp_load_op/binary. */
-  if (plen >= so_len && PUCHI_STRCMP(path + plen - so_len, sexp_so_extension) == 0)
-    return sexp_load_op(ctx, self, n, source, env);
+#if defined(PUCHI_TEST)
+  {
+    size_t plen = PUCHI_STRLEN(path);
+    size_t so_len = PUCHI_STRLEN(sexp_so_extension);
+    /* STATIC_LIBS: *.so names are not on disk — dispatch to sexp_load_op/binary. */
+    if (plen >= so_len && PUCHI_STRCMP(path + plen - so_len, sexp_so_extension) == 0)
+      return sexp_load_op(ctx, self, n, source, env);
+  }
+#endif
   if (!puchi_g_module_ops_set || !puchi_g_module_ops.read || !puchi_g_module_ops.free_buf)
     return sexp_global(ctx, SEXP_G_OOM_ERROR);
   buf = puchi_g_module_ops.read(puchi_g_module_ops.userdata, path, &len);
@@ -181,14 +184,17 @@ sexp sexp_enable_modules(sexp ctx, const puchi_module_ops *ops) {
   }
   meta_gc = meta;
 
+#if defined(PUCHI_TEST)
   /* meta-7 include-shared uses *shared-object-extension*; harness STATIC_LIBS
-   * resolves those names without dlopen. Define before evaluating meta-7. */
+   * resolves those names without dlopen. Define before evaluating meta-7.
+   * Product builds leave the name unbound so include-shared errors. */
   {
     sexp so = sexp_c_string(ctx, sexp_so_extension, -1);
     sym = sexp_intern(ctx, "*shared-object-extension*", -1);
     sexp_env_define(ctx, env, sym, so);
     sexp_env_define(ctx, meta, sym, so);
   }
+#endif
 
   puchi_module_install_foreigns(ctx, env);
   puchi_module_install_foreigns(ctx, meta);

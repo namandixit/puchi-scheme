@@ -1,6 +1,6 @@
 --- sexp.c
 +++ sexp.c
-@@ -193,38 +193,40 @@
+@@ -193,38 +193,37 @@
  }
  #endif
  
@@ -8,11 +8,9 @@
  sexp sexp_finalize_fileno (sexp ctx, sexp self, sexp_sint_t n, sexp fileno) {
    if (sexp_fileno_openp(fileno) && !sexp_fileno_no_closep(fileno)) {
      sexp_fileno_openp(fileno) = 0;
-+    #if defined(PUCHI_TEST)
-     close(sexp_fileno_fd(fileno));
-+#else
+-    close(sexp_fileno_fd(fileno));
++    /* puchi: no close(2); harness FILE* ports close via stream_ops */
 +    (void)fileno;
-+#endif
    }
    return SEXP_VOID;
  }
@@ -52,7 +50,7 @@
      sexp_port_offset(port) = 0;
      sexp_port_size(port) = 0;
    }
-@@ -248,7 +250,7 @@
+@@ -248,7 +249,7 @@
  #if SEXP_USE_UNIFORM_VECTOR_LITERALS
  sexp sexp_finalize_uvector (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
    /* if (sexp_uvector_freep(obj)) */
@@ -61,7 +59,7 @@
    return SEXP_VOID;
  }
  #endif
-@@ -266,7 +268,7 @@
+@@ -266,7 +267,7 @@
  #if SEXP_USE_PACKED_STRINGS
    {(sexp)"String", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_STRING, 0, 0, 0, 0, 0, sexp_sizeof(string)+1, sexp_offsetof(string, length), 1, 0, 0, 0, 0, 0, 0, NULL},
  #else
@@ -70,7 +68,7 @@
  #endif
    {(sexp)"Vector", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_VECTOR, sexp_sizeof(vector), 0, 0, sexp_offsetof(vector, length), 1, sexp_sizeof(vector), sexp_offsetof(vector, length), sizeof(sexp), 0, 0, 0, 0, 0, 0, NULL},
    {(sexp)"Flonum", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_FLONUM, 0, 0, 0, 0, 0, sexp_sizeof(flonum), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
-@@ -282,12 +284,14 @@
+@@ -282,12 +283,14 @@
  #endif
    {(sexp)"Input-Port", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, SEXP_FINALIZE_PORTN, SEXP_IPORT, sexp_offsetof(port, name), 3, 3, 0, 0, sexp_sizeof(port), 0, 0, 0, 0, 0, 0, 0, 0, SEXP_FINALIZE_PORT},
    {(sexp)"Output-Port", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, SEXP_FINALIZE_PORTN, SEXP_OPORT, sexp_offsetof(port, name), 3, 3, 0, 0, sexp_sizeof(port), 0, 0, 0, 0, 0, 0, 0, 0, SEXP_FINALIZE_PORT},

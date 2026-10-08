@@ -2,9 +2,18 @@
  * Scheme libs on disk contain complex literals, so this is a C-side suite
  * against embedded init — same approach as integer-only. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
 #define PUCHI_IMPLEMENTATION
 #include "../puchi.h"
+
+static void *smoke_alloc(void *ud, size_t n) { (void)ud; return malloc(n); }
+static void smoke_free(void *ud, void *p) { (void)ud; free(p); }
+static void smoke_diag(void *ud, int c, const char *m) { (void)ud; (void)c; (void)m; }
+static void smoke_fatal(void *ud, int c, const char *m) {
+  (void)ud; fprintf(stderr, "fatal %d: %s\n", c, m ? m : ""); exit(70);
+}
+static const puchi_host smoke_host = { NULL, smoke_alloc, smoke_free, smoke_diag, smoke_fatal };
 
 static int fail(const char *msg) {
   fprintf(stderr, "FAIL: %s\n", msg);
@@ -40,7 +49,7 @@ static int expect_true(sexp ctx, const char *expr) {
 }
 
 int main(void) {
-  sexp ctx = sexp_create_context(0, 0, NULL);
+  sexp ctx = sexp_create_context(0, 0, &smoke_host);
   sexp res;
   int nfail = 0;
 

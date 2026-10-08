@@ -87,13 +87,15 @@ apply_patches
 # --- mechanical transforms (body forks live in puchi/patches/) ---
 echo "[puchi] mechanical rewrites..."
 "$PYTHON" "$HELPERS" scrub-features "$WORKDIR/features.h"
+"$PYTHON" "$HELPERS" scrub-sexp "$WORKDIR/sexp.h"
+"$PYTHON" "$HELPERS" scrub-bignum "$WORKDIR/bignum.h"
 "$PYTHON" "$HELPERS" scrub-gc "$WORKDIR/gc.c"
 "$PYTHON" "$HELPERS" patch-opcodes "$WORKDIR/opcodes.c"
 "$PYTHON" "$HELPERS" brand-sexp "$WORKDIR/sexp.c"
 # ABI-f splices for bignum.c / eval.c (sexp.h decl runs after bignum.h inject)
 
 # Libc only through PUCHI_* wrappers (defaults in banner)
-for f in sexp.c eval.c gc.c vm.c opcodes.c simplify.c bignum.c sexp.h; do
+for f in sexp.c eval.c gc.c vm.c opcodes.c simplify.c bignum.c sexp.h features.h; do
   if [ -f "$WORKDIR/$f" ]; then
     "$PYTHON" "$HELPERS" rewrite-libc "$WORKDIR/$f"
   fi

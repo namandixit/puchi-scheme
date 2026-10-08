@@ -4,13 +4,15 @@
  * Change puchi/product/, patches/, and tools/ then re-run.
  *
  * Host contract: core is CPU/memory only. The host owns OS I/O, clocks,
- * and process death. Pass puchi_host at context create; install ports with
- * puchi_stream_ops (or string ports). Scheme calls C only via host-registered
- * foreigns (sexp_define_foreign).
+ * and process death. Pass puchi_host at context create (alloc/free required);
+ * install ports with puchi_stream_ops (or string ports). Scheme calls C only
+ * via host-registered foreigns (sexp_define_foreign).
  *
  * True single-header: no #include of opt/, chibi/, or lib/ project files.
  * OS/debug backends (dlopen, Boehm, green threads, mmap, image load, …) are
  * deleted from this amalgamation — not merely forced off. Do not re-enable.
+ * The header has no OS `#if` and no syscalls; a PUCHI_TEST harness may use
+ * the CRT and may add OS names to *features* at runtime.
  *
  * Module path starts empty. sexp_load_default_libs loads embedded init-7 only
  * (idempotent; no disk). sexp_enable_modules(ctx, ops) ensures default libs,
@@ -33,7 +35,7 @@
  *   static void my_fatal(void *ud, int code, const char *msg); // must not return
  *
  *   puchi_host host = { NULL, my_alloc, my_free, my_diag, my_fatal };
- *   sexp ctx = sexp_create_context(0, 0, &host);  // NULL host => CRT defaults
+ *   sexp ctx = sexp_create_context(0, 0, &host);  // host alloc/free required
  *   sexp_load_default_libs(ctx);                 // interaction language only
  *   // Or, for import / define-library (ops = exists/read/free_buf VFS):
  *   //   sexp_enable_modules(ctx, &ops);         // also loads default libs once
@@ -59,18 +61,19 @@ extern "C" {
 #include <ctype.h>
 /* Host: include <stdio.h> before this header when using default
  * PUCHI_SNPRINTF / SPRINTF / SSCANF (sexp.h stdio is scrubbed). */
-/* MSVC: must precede math.h so M_LN10 / M_PI exist (features.h is too late). */
-#if defined(_WIN32) && defined(_MSC_VER)
-#ifndef _USE_MATH_DEFINES
-#define _USE_MATH_DEFINES
-#endif
-#endif
 #include <math.h>
 #include <float.h>
 #include <limits.h>
 #include <stdint.h>
 #ifndef EOF
 #define EOF (-1)
+#endif
+
+#ifndef M_LN10
+#define M_LN10 2.30258509299404568402
+#endif
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
 #endif
 
 /* ---- overridable libc wrappers (core calls only these names) ---- */
@@ -106,21 +109,6 @@ extern "C" {
 #endif
 #ifndef PUCHI_STRCHR
 #define PUCHI_STRCHR strchr
-#endif
-#if defined(_WIN32)
-#ifndef PUCHI_STRCASECMP
-#define PUCHI_STRCASECMP _stricmp
-#endif
-#ifndef PUCHI_STRNCASECMP
-#define PUCHI_STRNCASECMP _strnicmp
-#endif
-#else
-#ifndef PUCHI_STRCASECMP
-#define PUCHI_STRCASECMP strcasecmp
-#endif
-#ifndef PUCHI_STRNCASECMP
-#define PUCHI_STRNCASECMP strncasecmp
-#endif
 #endif
 #ifndef PUCHI_SNPRINTF
 #define PUCHI_SNPRINTF snprintf
@@ -200,6 +188,58 @@ extern "C" {
 #ifndef PUCHI_TRUNC
 #define PUCHI_TRUNC trunc
 #endif
+#ifndef PUCHI_ISNAN
+#define PUCHI_ISNAN isnan
+#endif
+#ifndef PUCHI_ISINF
+#define PUCHI_ISINF isinf
+#endif
+#ifndef PUCHI_ISFINITE
+#define PUCHI_ISFINITE isfinite
+#endif
+#ifndef PUCHI_ROUND
+#define PUCHI_ROUND round
+#endif
+#ifndef PUCHI_LABS
+#define PUCHI_LABS labs
+#endif
+#ifndef PUCHI_ACOS
+#define PUCHI_ACOS acos
+#endif
+
+/* Portable case-insensitive compare (no _stricmp / strcasecmp). */
+static inline int puchi_strcasecmp(const char *a, const char *b) {
+  unsigned char ca, cb;
+  for (;;) {
+    ca = (unsigned char)PUCHI_TOLOWER((unsigned char)*a++);
+    cb = (unsigned char)PUCHI_TOLOWER((unsigned char)*b++);
+    if (ca != cb) return (int)ca - (int)cb;
+    if (ca == 0) return 0;
+  }
+}
+static inline int puchi_strncasecmp(const char *a, const char *b, size_t n) {
+  unsigned char ca, cb;
+  if (n == 0) return 0;
+  do {
+    ca = (unsigned char)PUCHI_TOLOWER((unsigned char)*a++);
+    cb = (unsigned char)PUCHI_TOLOWER((unsigned char)*b++);
+    if (ca != cb) return (int)ca - (int)cb;
+    if (ca == 0) return 0;
+  } while (--n != 0);
+  return 0;
+}
+#ifndef PUCHI_STRCASECMP
+#define PUCHI_STRCASECMP puchi_strcasecmp
+#endif
+#ifndef PUCHI_STRNCASECMP
+#define PUCHI_STRNCASECMP puchi_strncasecmp
+#endif
+
+static inline double puchi_f64_from_bits(uint64_t u) {
+  double d;
+  PUCHI_MEMCPY(&d, &u, sizeof(d));
+  return d;
+}
 
 /* ---- host callbacks (context create) ---- */
 enum {
@@ -243,14 +283,6 @@ typedef struct puchi_module_ops {
 static puchi_host puchi_g_host;
 static int puchi_g_host_set;
 
-static void *puchi_default_alloc(void *ud, size_t n) {
-  (void)ud;
-  return PUCHI_MALLOC(n);
-}
-static void puchi_default_free(void *ud, void *p) {
-  (void)ud;
-  PUCHI_FREE(p);
-}
 static void puchi_default_diagnose(void *ud, int code, const char *msg) {
   (void)ud;
   (void)code;
@@ -265,17 +297,17 @@ static void puchi_default_fatal(void *ud, int code, const char *msg) {
 }
 
 static void puchi_host_init(const puchi_host *host) {
-  if (host) {
-    puchi_g_host = *host;
-  } else {
+  if (!host || !host->alloc || !host->free) {
     puchi_g_host.userdata = NULL;
-    puchi_g_host.alloc = puchi_default_alloc;
-    puchi_g_host.free = puchi_default_free;
+    puchi_g_host.alloc = NULL;
+    puchi_g_host.free = NULL;
     puchi_g_host.diagnose = puchi_default_diagnose;
     puchi_g_host.fatal = puchi_default_fatal;
+    puchi_g_host_set = 0;
+    puchi_default_fatal(NULL, PUCHI_FATAL_INTERNAL, "puchi_host alloc/free required");
+    return;
   }
-  if (!puchi_g_host.alloc) puchi_g_host.alloc = puchi_default_alloc;
-  if (!puchi_g_host.free) puchi_g_host.free = puchi_default_free;
+  puchi_g_host = *host;
   if (!puchi_g_host.diagnose) puchi_g_host.diagnose = puchi_default_diagnose;
   if (!puchi_g_host.fatal) puchi_g_host.fatal = puchi_default_fatal;
   puchi_g_host_set = 1;
@@ -283,32 +315,36 @@ static void puchi_host_init(const puchi_host *host) {
 
 static void puchi_diagnose(void *ctx, int code, const char *msg) {
   (void)ctx;
-  if (!puchi_g_host_set) puchi_host_init(NULL);
+  if (!puchi_g_host_set) {
+    puchi_default_fatal(NULL, PUCHI_FATAL_INTERNAL, "puchi_host required");
+  }
   puchi_g_host.diagnose(puchi_g_host.userdata, code, msg ? msg : "");
 }
 
 static void puchi_fatal(void *ctx, int code, const char *msg) {
   (void)ctx;
-  if (!puchi_g_host_set) puchi_host_init(NULL);
+  if (!puchi_g_host_set) {
+    puchi_default_fatal(NULL, code, msg ? msg : "");
+  }
   puchi_g_host.fatal(puchi_g_host.userdata, code, msg ? msg : "");
   for (;;) {
   }
 }
 #endif /* PUCHI_IMPLEMENTATION */
 
-/* ---- allocator hooks (prefer host callbacks) ---- */
+/* ---- allocator hooks (host only; no silent CRT malloc) ---- */
 #ifndef SEXP_MALLOC
 #if defined(PUCHI_IMPLEMENTATION)
-#define SEXP_MALLOC(ctx, size) ((void)(ctx), (puchi_g_host_set ? puchi_g_host.alloc(puchi_g_host.userdata, (size)) : PUCHI_MALLOC(size)))
+#define SEXP_MALLOC(ctx, size) ((void)(ctx), (puchi_g_host_set ? puchi_g_host.alloc(puchi_g_host.userdata, (size)) : (puchi_fatal(NULL, PUCHI_FATAL_INTERNAL, "no host alloc"), (void *)0)))
 #else
-#define SEXP_MALLOC(ctx, size) ((void)(ctx), PUCHI_MALLOC(size))
+#define SEXP_MALLOC(ctx, size) ((void)(ctx), (void)(size), (void *)0)
 #endif
 #endif
 #ifndef SEXP_FREE
 #if defined(PUCHI_IMPLEMENTATION)
-#define SEXP_FREE(ctx, ptr) ((void)(ctx), (puchi_g_host_set ? puchi_g_host.free(puchi_g_host.userdata, (ptr)) : PUCHI_FREE(ptr)))
+#define SEXP_FREE(ctx, ptr) ((void)(ctx), (puchi_g_host_set ? puchi_g_host.free(puchi_g_host.userdata, (ptr)) : (void)(puchi_fatal(NULL, PUCHI_FATAL_INTERNAL, "no host free"), 0)))
 #else
-#define SEXP_FREE(ctx, ptr) ((void)(ctx), PUCHI_FREE(ptr))
+#define SEXP_FREE(ctx, ptr) ((void)(ctx), (void)(ptr))
 #endif
 #endif
 
@@ -320,10 +356,12 @@ static void puchi_fatal(void *ctx, int code, const char *msg) {
 #endif
 
 /* ---- install.h replacements (amalgamate inlines these) ---- */
-/* Always defined: meta-7 include-shared / STATIC_LIBS matching need it.
- * Harness resolves *.so via sexp_static_libraries (no dlopen). */
+#if defined(PUCHI_TEST)
+/* Harness STATIC_LIBS matching / meta-7 include-shared need the suffix.
+ * Product builds leave the name unbound so include-shared errors. */
 #ifndef sexp_so_extension
 #define sexp_so_extension ".so"
+#endif
 #endif
 #define sexp_default_module_path ""
 #define sexp_platform "puchi"
