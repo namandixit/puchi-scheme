@@ -278,6 +278,10 @@ echo "[puchi] embedding trimmed init-7.scm..."
 "$PYTHON" "$HELPERS" trim-init "$CHIBI/lib/init-7.scm" "$WORKDIR/init-7-trimmed.scm"
 "$PYTHON" "$HELPERS" embed puchi_init7_scm "$WORKDIR/init-7-trimmed.scm" "$WORKDIR/init7_embed.c"
 
+echo "[puchi] embedding trimmed meta-7.scm..."
+"$PYTHON" "$HELPERS" trim-meta "$CHIBI/lib/meta-7.scm" "$WORKDIR/meta-7-trimmed.scm"
+"$PYTHON" "$HELPERS" embed puchi_meta7_scm "$WORKDIR/meta-7-trimmed.scm" "$WORKDIR/meta7_embed.c"
+
 echo "[puchi] writing puchi.h..."
 {
   cat "$TOOLS/puchi_banner.h.in"
@@ -318,6 +322,7 @@ SEXP_API sexp sexp_exact_sqrt(sexp ctx, sexp self, sexp_sint_t n, sexp z);
 SEXP_API sexp sexp_create_context(sexp_uint_t heap_size, sexp_uint_t heap_max_size, const puchi_host *host);
 SEXP_API sexp sexp_delete_context(sexp ctx);
 SEXP_API sexp sexp_load_default_libs(sexp ctx);
+SEXP_API sexp sexp_enable_modules(sexp ctx, const puchi_module_ops *ops);
 
 #ifdef __cplusplus
 } /* extern "C" declarations */
@@ -480,6 +485,7 @@ sexp sexp_exact_sqrt(sexp ctx, sexp self, sexp_sint_t n, sexp z) {
 EOF
 
   cat "$WORKDIR/init7_embed.c"
+  cat "$WORKDIR/meta7_embed.c"
 
   cat <<'EOF'
 
@@ -518,6 +524,10 @@ static sexp puchi_load_init7_into_env(sexp ctx, sexp env) {
     sexp_global(ctx, SEXP_G_ERR_HANDLER) = sexp_env_ref(ctx, env, sym, SEXP_FALSE);
   }
   sexp_set_parameter(ctx, env, sexp_global(ctx, SEXP_G_INTERACTION_ENV_SYMBOL), env);
+  {
+    sexp sym = sexp_intern(ctx, "*puchi-default-libs*", -1);
+    sexp_env_define(ctx, env, sym, SEXP_TRUE);
+  }
   return env;
 }
 
@@ -532,9 +542,20 @@ sexp sexp_delete_context(sexp ctx) {
 }
 
 sexp sexp_load_default_libs(sexp ctx) {
+  sexp env, sym;
   if (!ctx || sexp_exceptionp(ctx)) return ctx;
-  return puchi_load_init7_into_env(ctx, sexp_context_env(ctx));
+  env = sexp_context_env(ctx);
+  sym = sexp_intern(ctx, "*puchi-default-libs*", -1);
+  if (sexp_env_ref(ctx, env, sym, SEXP_FALSE) != SEXP_FALSE)
+    return env;
+  return puchi_load_init7_into_env(ctx, env);
 }
+
+EOF
+
+  cat "$TOOLS/puchi_enable_modules.inc"
+
+  cat <<'EOF'
 
 #ifdef __cplusplus
 } /* extern "C" implementation */

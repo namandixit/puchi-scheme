@@ -12,9 +12,10 @@
  * OS/debug backends (dlopen, Boehm, green threads, mmap, image load, …) are
  * deleted from this amalgamation — not merely forced off. Do not re-enable.
  *
- * Module path starts empty; host/harness calls add-module-directory and may
- * boot meta-7. sexp_load_default_libs / sexp_load_standard_env load embedded
- * init-7 only (no disk). STATIC_LIBS / include-shared is harness-only
+ * Module path starts empty. sexp_load_default_libs loads embedded init-7 only
+ * (idempotent; no disk). sexp_enable_modules(ctx, ops) ensures default libs,
+ * installs host module I/O callbacks, and boots embedded meta-7 (import /
+ * define-library). No include-shared / DLLs. STATIC_LIBS is harness-only
  * (define PUCHI_TEST in the test harness).
  *
  * ----------------------------------------------------------------------
@@ -32,7 +33,9 @@
  *
  *   puchi_host host = { NULL, my_alloc, my_free, my_diag, my_fatal };
  *   sexp ctx = sexp_create_context(0, 0, &host);  // NULL host => CRT defaults
- *   sexp_load_default_libs(ctx);
+ *   sexp_load_default_libs(ctx);                 // interaction language only
+ *   // Or, for import / define-library (ops = exists/read/free_buf VFS):
+ *   //   sexp_enable_modules(ctx, &ops);         // also loads default libs once
  *   sexp res = sexp_eval_string(ctx, "(+ 1 2)", -1, NULL);
  *   sexp_delete_context(ctx);
  *
@@ -223,6 +226,15 @@ typedef struct puchi_stream_ops {
   int (*error_p)(void *udata);
   void (*clear_error)(void *udata);
 } puchi_stream_ops;
+
+/* Host VFS for sexp_enable_modules — disk, zip, or embedded string table.
+ * One ops config per process; call enable once after context create. */
+typedef struct puchi_module_ops {
+  void *userdata;
+  int (*exists)(void *userdata, const char *name); /* 1 if readable */
+  char *(*read)(void *userdata, const char *name, size_t *len); /* NULL if missing */
+  void (*free_buf)(void *userdata, char *buf);
+} puchi_module_ops;
 
 #if defined(PUCHI_IMPLEMENTATION)
 static puchi_host puchi_g_host;
@@ -3338,6 +3350,7 @@ SEXP_API sexp sexp_exact_sqrt(sexp ctx, sexp self, sexp_sint_t n, sexp z);
 SEXP_API sexp sexp_create_context(sexp_uint_t heap_size, sexp_uint_t heap_max_size, const puchi_host *host);
 SEXP_API sexp sexp_delete_context(sexp ctx);
 SEXP_API sexp sexp_load_default_libs(sexp ctx);
+SEXP_API sexp sexp_enable_modules(sexp ctx, const puchi_module_ops *ops);
 
 #if defined(__cplusplus)
 } /* extern "C" declarations */
@@ -10311,6 +10324,10 @@ sexp sexp_make_synclo_op (sexp ctx, sexp self, sexp_sint_t n, sexp env, sexp fv,
   if (! (sexp_symbolp(expr) || sexp_pairp(expr) || sexp_synclop(expr)))
     return expr;
   res = sexp_alloc_type(ctx, synclo, SEXP_SYNCLO);
+  sexp_synclo_env(res) = env;
+  sexp_synclo_free_vars(res) = fv;
+  sexp_synclo_expr(res) = expr;
+  sexp_synclo_rename(res) = SEXP_FALSE;
   return res;
 }
 
@@ -14851,22 +14868,23 @@ static const char puchi_init7_scm[] =
   "\n"
   "(define make-renamer\n"
   "  (lambda (mac-env)\n"
-  "    (define rename\n"
-  "      ((lambda (renames)\n"
-  "         (lambda (identifier)\n"
-  "           ((lambda (cell)\n"
-  "              (if cell\n"
-  "                  (cdr cell)\n"
-  "                  ((lambda (name)\n"
-  "                     (set! renames (cons (cons identifier name) renames))\n"
-  "                     name)\n"
-  "                   ((lambda (id)\n"
-  "                      (syntactic-closure-set-rename! id rename)\n"
-  "                      id)\n"
-  "                    (close-syntax identifier mac-env)))))\n"
-  "            (assq identifier renames))))\n"
-  "       '()))\n"
-  "    rename))\n"
+  "    ((lambda (box)\n"
+  "       ((lambda (rename)\n"
+  "          (set-car! (cdr box) rename)\n"
+  "          rename)\n"
+  "        (lambda (identifier)\n"
+  "          ((lambda (found)\n"
+  "             (if found\n"
+  "                 (cdr found)\n"
+  "                 ((lambda (name)\n"
+  "                    (set-car! box (cons (cons identifier name) (car box)))\n"
+  "                    name)\n"
+  "                  ((lambda (id)\n"
+  "                     (syntactic-closure-set-rename! id (car (cdr box)))\n"
+  "                     id)\n"
+  "                   (close-syntax identifier mac-env)))))\n"
+  "           (assq identifier (car box))))))\n"
+  "     (cons '() (cons #f '())))))\n"
   "\n"
   "(define sc-macro-transformer\n"
   "  (lambda (f)\n"
@@ -14912,22 +14930,32 @@ static const char puchi_init7_scm[] =
   "(define-syntax or\n"
   "  (er-macro-transformer\n"
   "   (lambda (expr rename compare)\n"
-  "     (cond ((null? (cdr expr)) #f)\n"
-  "           ((null? (cddr expr)) (cadr expr))\n"
-  "           (else\n"
-  "            (list (rename 'let) (list (list (rename 'tmp) (cadr expr)))\n"
-  "                  (list (rename 'if) (rename 'tmp)\n"
-  "                        (rename 'tmp)\n"
-  "                        (cons (rename 'or) (cddr expr)))))))))\n"
+  "     (if (null? (cdr expr))\n"
+  "         #f\n"
+  "         (if (null? (cddr expr))\n"
+  "             (cadr expr)\n"
+  "             (list (rename 'let) (list (list (rename 'tmp) (cadr expr)))\n"
+  "                   (list (rename 'if) (rename 'tmp)\n"
+  "                         (rename 'tmp)\n"
+  "                         (cons (rename 'or) (cddr expr)))))))))\n"
   "\n"
   "(define-syntax and\n"
   "  (er-macro-transformer\n"
   "   (lambda (expr rename compare)\n"
-  "     (cond ((null? (cdr expr)))\n"
-  "           ((null? (cddr expr)) (cadr expr))\n"
-  "           (else (list (rename 'if) (cadr expr)\n"
-  "                       (cons (rename 'and) (cddr expr))\n"
-  "                       #f))))))\n"
+  "     (if (null? (cdr expr))\n"
+  "         #t\n"
+  "         (if (null? (cddr expr))\n"
+  "             (cadr expr)\n"
+  "             (list (rename 'if) (cadr expr)\n"
+  "                   (cons (rename 'and) (cddr expr))\n"
+  "                   #f))))))\n"
+  "\n"
+  "(define-syntax letrec\n"
+  "  (er-macro-transformer\n"
+  "   (lambda (expr rename compare)\n"
+  "     ((lambda (defs)\n"
+  "        (list (cons (rename 'lambda) (cons '() (append defs (cddr expr))))))\n"
+  "      (map (lambda (x) (cons (rename 'define) x)) (cadr expr))))))\n"
   "\n"
   "(define-syntax quasiquote\n"
   "  (er-macro-transformer\n"
@@ -14962,13 +14990,6 @@ static const char puchi_init7_scm[] =
   "        ((if (identifier? x) #t (null? x)) (list (rename 'quote) x))\n"
   "        (else x)))\n"
   "     (qq (cadr expr) 0))))\n"
-  "\n"
-  "(define-syntax letrec\n"
-  "  (er-macro-transformer\n"
-  "   (lambda (expr rename compare)\n"
-  "     ((lambda (defs)\n"
-  "        `((,(rename 'lambda) () ,@defs ,@(cddr expr))))\n"
-  "      (map (lambda (x) (cons (rename 'define) x)) (cadr expr))))))\n"
   "\n"
   "(define-syntax let\n"
   "  (er-macro-transformer\n"
@@ -16167,6 +16188,486 @@ static const char puchi_init7_scm[] =
   "                       (if (eqv? x -0.0) 3.141592653589793 x))\n"
   "                    (atan1 (/ y x))))))))\n"
 ;
+static const char puchi_meta7_scm[] =
+  ";; trimmed for puchi amalgamation - no include-shared / DLLs\n"
+  ";; meta.scm -- meta language for describing modules\n"
+  ";; Copyright (c) 2009-2014 Alex Shinn.  All rights reserved.\n"
+  ";; BSD-style license: http://synthcode.com/license.txt\n"
+  "\n"
+  ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;\n"
+  ";; modules\n"
+  "\n"
+  "(define *this-module* '())\n"
+  "(define *this-path* '())\n"
+  "\n"
+  "(define (make-module exports env meta) (vector exports env meta #f))\n"
+  "(define (%module-exports mod) (vector-ref mod 0))\n"
+  "(define (module-env mod) (vector-ref mod 1))\n"
+  "(define (module-env-set! mod env) (vector-set! mod 1 env))\n"
+  "(define (module-meta-data mod) (vector-ref mod 2))\n"
+  "(define (module-meta-data-set! mod x) (vector-set! mod 2 x))\n"
+  "\n"
+  "(define (module-exports mod)\n"
+  "  (or (%module-exports mod)\n"
+  "      (if (module-env mod)\n"
+  "          (env-exports (module-env mod))\n"
+  "          '())))\n"
+  "\n"
+  "(define (module-name->strings ls res)\n"
+  "  (if (null? ls)\n"
+  "      res\n"
+  "      (let ((str (cond ((symbol? (car ls)) (symbol->string (car ls)))\n"
+  "                       ((number? (car ls)) (number->string (car ls)))\n"
+  "                       ((string? (car ls)) (car ls))\n"
+  "                       (else (error \"invalid module name\" (car ls))))))\n"
+  "        (module-name->strings (cdr ls) (cons \"/\" (cons str res))))))\n"
+  "\n"
+  "(define (module-name->file name)\n"
+  "  (string-concatenate\n"
+  "   (reverse (cons \".sld\" (cdr (module-name->strings name '()))))))\n"
+  "\n"
+  "(define (module-name-prefix name)\n"
+  "  (string-concatenate (reverse (cdr (cdr (module-name->strings name '()))))))\n"
+  "\n"
+  "(define load-module-definition\n"
+  "  (let ((meta-env (current-environment)))\n"
+  "    (lambda (name)\n"
+  "      (let* ((file (module-name->file name))\n"
+  "             (path (find-module-file file)))\n"
+  "        (if path (load path meta-env))))))\n"
+  "\n"
+  "(define (find-module name)\n"
+  "  (cond\n"
+  "   ((assoc name *modules*) => cdr)\n"
+  "   (else\n"
+  "    (load-module-definition name)\n"
+  "    (cond ((assoc name *modules*) => cdr)\n"
+  "          (else #f)))))\n"
+  "\n"
+  "(define (add-module! name module)\n"
+  "  (set! *modules* (cons (cons name module) *modules*)))\n"
+  "\n"
+  "(define (delete-module! name)\n"
+  "  (let lp ((ls *modules*) (prev #f))\n"
+  "    (cond ((null? ls))\n"
+  "          ((equal? name (car (car ls)))\n"
+  "           (if prev\n"
+  "               (set-cdr! prev (cdr ls))\n"
+  "               (set! *modules* (cdr ls))))\n"
+  "          (else (lp (cdr ls) ls)))))\n"
+  "\n"
+  "(define (symbol-append a b)\n"
+  "  (string->symbol (string-append (symbol->string a) (symbol->string b))))\n"
+  "\n"
+  "(define (symbol-drop a b)\n"
+  "  (let ((as (symbol->string a))\n"
+  "        (bs (symbol->string b)))\n"
+  "    (if (and (> (string-length bs) (string-length as))\n"
+  "             (string=? as (substring bs 0 (string-length as))))\n"
+  "        (string->symbol (substring bs (string-length as)))\n"
+  "        b)))\n"
+  "\n"
+  "(define (warn msg . args)\n"
+  "  (display msg (current-error-port))\n"
+  "  (display \":\" (current-error-port))\n"
+  "  (for-each (lambda (a)\n"
+  "              (display \" \" (current-error-port))\n"
+  "              (write a (current-error-port)))\n"
+  "            args)\n"
+  "  (newline (current-error-port)))\n"
+  "\n"
+  "(define (to-id id) (if (pair? id) (car id) id))\n"
+  "(define (from-id id) (if (pair? id) (cdr id) id))\n"
+  "(define (id-filter pred ls)\n"
+  "  (cond ((null? ls) '())\n"
+  "        ((pred (to-id (car ls))) (cons (car ls) (id-filter pred (cdr ls))))\n"
+  "        (else (id-filter pred (cdr ls)))))\n"
+  "\n"
+  "(define (%resolve-import x)\n"
+  "  (cond\n"
+  "   ((not (and (pair? x) (list? x)))\n"
+  "    (error \"invalid import syntax\" x))\n"
+  "   ((and (memq (car x) '(prefix drop-prefix))\n"
+  "         (symbol? (car (cddr x))) (list? (cadr x)))\n"
+  "    (let ((mod-name+imports (%resolve-import (cadr x))))\n"
+  "      (cons (car mod-name+imports)\n"
+  "            (map (lambda (i)\n"
+  "                   (cons ((if (eq? (car x) 'drop-prefix)\n"
+  "                              symbol-drop\n"
+  "                              symbol-append)\n"
+  "                          (car (cddr x))\n"
+  "                          (to-id i))\n"
+  "                         (from-id i)))\n"
+  "                 (or (cdr mod-name+imports)\n"
+  "                     (module-exports (find-module (car mod-name+imports))))))))\n"
+  "   ((and (pair? (cdr x)) (pair? (cadr x)))\n"
+  "    (if (memq (car x) '(only except rename))\n"
+  "        (let* ((mod-name+imports (%resolve-import (cadr x)))\n"
+  "               (imp-ids (or (cdr mod-name+imports)\n"
+  "                            (module-exports (find-module (car mod-name+imports))))))\n"
+  "          (cons (car mod-name+imports)\n"
+  "                (case (car x)\n"
+  "                  ((only)\n"
+  "                   (map (lambda (imp)\n"
+  "                          (cond\n"
+  "                           ((or (boolean? imp-ids) (memq imp imp-ids))\n"
+  "                            imp)\n"
+  "                           ((assq imp imp-ids))\n"
+  "                           (else\n"
+  "                            (error \"importing unknown binding\" imp imp-ids))))\n"
+  "                        (cddr x)))\n"
+  "                  ((except)\n"
+  "                   (id-filter (lambda (i) (not (memq i (cddr x)))) imp-ids))\n"
+  "                  ((rename)\n"
+  "                   ;; TODO: warn about renaming an unimported id\n"
+  "                   (map (lambda (i)\n"
+  "                          (let ((rename (assq (to-id i) (cddr x))))\n"
+  "                            (if rename (cons (cadr rename) (from-id i)) i)))\n"
+  "                        imp-ids)))))\n"
+  "        (error \"invalid import modifier\" x)))\n"
+  "   ((find-module x)\n"
+  "    => (lambda (mod) (cons x (%module-exports mod))))\n"
+  "   (else\n"
+  "    (error \"couldn't find import\" x))))\n"
+  "\n"
+  ";; slightly roundabout, using eval since we don't have env-define! here\n"
+  "(define (auto-generate-bindings ls)\n"
+  "  (let ((bound (env-exports *auto-env*))\n"
+  "        (def-aux\n"
+  "          (make-syntactic-closure *chibi-env* '() 'define-auxiliary-syntax)))\n"
+  "    (let lp ((ls ls) (new '()))\n"
+  "      (cond\n"
+  "       ((null? ls)\n"
+  "        (if (pair? new)\n"
+  "            (eval `(,(make-syntactic-closure *chibi-env* '() 'begin) ,@new)\n"
+  "                  *auto-env*)))\n"
+  "       (else\n"
+  "        (let ((from-id (if (pair? (car ls)) (cdar ls) (car ls))))\n"
+  "          (if (memq from-id bound)\n"
+  "              (lp (cdr ls) new)\n"
+  "              (lp (cdr ls) `((,def-aux ,from-id) ,@new)))))))))\n"
+  "\n"
+  "(define (resolve-import x)\n"
+  "  (let ((x (%resolve-import x)))\n"
+  "    (if (equal? '(auto) (car x))\n"
+  "        (auto-generate-bindings (cdr x)))\n"
+  "    x))\n"
+  "\n"
+  "(define (resolve-module-imports env meta)\n"
+  "  (for-each\n"
+  "   (lambda (x)\n"
+  "     (case (and (pair? x) (car x))\n"
+  "       ((import import-immutable)\n"
+  "        (for-each\n"
+  "         (lambda (m)\n"
+  "           (let* ((mod2-name+imports (resolve-import m))\n"
+  "                  (mod2 (load-module (car mod2-name+imports))))\n"
+  "             (%import env (module-env mod2) (cdr mod2-name+imports) #t)))\n"
+  "         (cdr x)))))\n"
+  "   meta))\n"
+  "\n"
+  "(define (eval-module name mod . o)\n"
+  "  (let ((env (if (pair? o) (car o) (make-environment)))\n"
+  "        (meta (module-meta-data mod))\n"
+  "        (dir (module-name-prefix name)))\n"
+  "    (define (load-modules files extension fold? . o)\n"
+  "      (for-each\n"
+  "       (lambda (f)\n"
+  "         (let ((f (string-append dir f extension)))\n"
+  "           (cond\n"
+  "            ((find-module-file f)\n"
+  "             => (lambda (path)\n"
+  "                  (cond (fold?\n"
+  "                         (let ((in (open-input-file path)))\n"
+  "                           (set-port-fold-case! in #t)\n"
+  "                           (load in env)))\n"
+  "                        (else\n"
+  "                         (load path env)))))\n"
+  "            ((and (pair? o) (car o)) ((car o)))\n"
+  "            (else (error \"couldn't find include\" f)))))\n"
+  "       files))\n"
+  "    ;; catch cyclic references\n"
+  "    (cond\n"
+  "     ((procedure? meta)\n"
+  "      (meta env))\n"
+  "     (else\n"
+  "      (module-meta-data-set!\n"
+  "       mod\n"
+  "       `((error \"module attempted to reference itself while loading\" ,name)))\n"
+  "      (resolve-module-imports env meta)\n"
+  "      (protect\n"
+  "          (exn (else\n"
+  "                (module-meta-data-set! mod meta)\n"
+  "                (if (not (any (lambda (x)\n"
+  "                                (and (pair? x)\n"
+  "                                     (memq (car x) '(import import-immutable))))\n"
+  "                              meta))\n"
+  "                    (warn \"WARNING: exception inside module with no imports - did you forget to (import (scheme base)) in\" name))\n"
+  "                (raise-continuable exn)))\n"
+  "        (for-each\n"
+  "         (lambda (x)\n"
+  "           (case (and (pair? x) (car x))\n"
+  "             ((include)\n"
+  "              (load-modules (cdr x) \"\" #f))\n"
+  "             ((include-ci)\n"
+  "              (load-modules (cdr x) \"\" #t))\n"
+  "             ((include-shared)\n"
+  "              (error \"include-shared: not available in puchi\" x))\n"
+  "             ((include-shared-optionally)\n"
+  "              (load-modules (cddr x) \"\" #f))\n"
+  "             ((body begin)\n"
+  "              (for-each (lambda (expr) (eval expr env)) (cdr x)))\n"
+  "             ((error)\n"
+  "              (apply error (cdr x)))))\n"
+  "         meta))\n"
+  "      (module-meta-data-set! mod meta)\n"
+  "      (warn-undefs env #f)\n"
+  "      env))))\n"
+  "\n"
+  "(define (mutable-environment . ls)\n"
+  "  (let ((env (make-environment)))\n"
+  "    (for-each\n"
+  "     (lambda (m)\n"
+  "       (let* ((mod2-name+imports (resolve-import m))\n"
+  "              (mod2 (load-module (car mod2-name+imports))))\n"
+  "         (%import env (module-env mod2) (cdr mod2-name+imports) #t)))\n"
+  "     ls)\n"
+  "    env))\n"
+  "\n"
+  "(define (environment . ls)\n"
+  "  (let ((env (apply mutable-environment ls)))\n"
+  "    (make-immutable! env)\n"
+  "    env))\n"
+  "\n"
+  "(define (load-module name)\n"
+  "  (let ((mod (find-module name)))\n"
+  "    (if (and mod (not (module-env mod)))\n"
+  "        (module-env-set! mod (eval-module name mod)))\n"
+  "    mod))\n"
+  "\n"
+  "(define-syntax meta-begin begin)\n"
+  "(define-syntax meta-define define)\n"
+  "\n"
+  "(define define-library-transformer\n"
+  "  (er-macro-transformer\n"
+  "   (lambda (expr rename compare)\n"
+  "     (cond\n"
+  "      ((find (lambda (x) (and (pair? x) (compare (car x) (rename 'alias-for))))\n"
+  "             (cddr expr))\n"
+  "       => (lambda (alias)\n"
+  "            (if (not (= 1 (length (cddr expr))))\n"
+  "                (error \"alias must be the only library declaration\" expr))\n"
+  "            ;; we need to load the original module first, not just find it,\n"
+  "            ;; or else the includes would happen relative to the alias\n"
+  "            (let ((name (cadr expr))\n"
+  "                  (orig (load-module (cadr alias))))\n"
+  "              (if (not orig)\n"
+  "                  (error \"couldn't find library to alias\" (cadr alias))\n"
+  "                  `(,(rename 'add-module!) (,(rename 'quote) ,name)\n"
+  "                    (,(rename 'quote) ,orig))))))\n"
+  "      (else\n"
+  "       (let ((name (cadr expr))\n"
+  "             (body (cddr expr))\n"
+  "             (tmp (rename 'tmp))\n"
+  "             (this-module (rename '*this-module*))\n"
+  "             (_add-module! (rename 'add-module!))\n"
+  "             (_make-module (rename 'make-module))\n"
+  "             (_define (rename 'meta-define))\n"
+  "             (_lambda (rename 'lambda))\n"
+  "             (_let (rename 'let))\n"
+  "             (_map (rename 'map))\n"
+  "             (_if (rename 'if))\n"
+  "             (_cond (rename 'cond))\n"
+  "             (_set! (rename 'set!))\n"
+  "             (_quote (rename 'quote))\n"
+  "             (_and (rename 'and))\n"
+  "             (_= (rename '=))\n"
+  "             (_eq? (rename 'eq?))\n"
+  "             (_pair? (rename 'pair?))\n"
+  "             (_null? (rename 'null?))\n"
+  "             (_reverse (rename 'reverse))\n"
+  "             (_append (rename 'append))\n"
+  "             (_assq (rename 'assq))\n"
+  "             (_=> (rename '=>))\n"
+  "             (_else (rename 'else))\n"
+  "             (_length (rename 'length))\n"
+  "             (_identifier->symbol (rename 'identifier->symbol))\n"
+  "             (_error (rename 'error))\n"
+  "             (_cons (rename 'cons))\n"
+  "             (_car (rename 'car))\n"
+  "             (_cdr (rename 'cdr))\n"
+  "             (_caar (rename 'caar))\n"
+  "             (_cadr (rename 'cadr))\n"
+  "             (_cdar (rename 'cdar))\n"
+  "             (_cddr (rename 'cddr)))\n"
+  "         ;; Check for suspicious defines.\n"
+  "         (for-each\n"
+  "          (lambda (x)\n"
+  "            (if (and (pair? x) (memq (strip-syntactic-closures (car x))\n"
+  "                                     '(define define-syntax)))\n"
+  "                (warn \"suspicious use of define in library declarations - did you forget to wrap it in begin?\" x)))\n"
+  "          (cdr expr))\n"
+  "         ;; Generate the library wrapper.\n"
+  "         (set! *this-path*\n"
+  "               (cons (string-concatenate\n"
+  "                      (module-name->strings (cdr (reverse name)) '()))\n"
+  "                     *this-path*))\n"
+  "         `(,_let ((,tmp ,this-module))\n"
+  "            (,_define (rewrite-export x)\n"
+  "              (,_if (,_pair? x)\n"
+  "                  (,_if (,_and (,_= 3 (,_length x))\n"
+  "                               (,_eq? (,_quote rename)\n"
+  "                                      (,_identifier->symbol (,_car x))))\n"
+  "                      (,_cons (,_car (,_cddr x)) (,_cadr x))\n"
+  "                      (,_error \"invalid module export\" x))\n"
+  "                  x))\n"
+  "            (,_define (extract-exports)\n"
+  "              (,_cond\n"
+  "               ((,_assq (,_quote export-all) ,this-module)\n"
+  "                ,_=> (,_lambda (x)\n"
+  "                       (,_if (,_pair? (,_cdr x))\n"
+  "                           (,_error \"export-all takes no parameters\" x))\n"
+  "                       #f))\n"
+  "               (,_else\n"
+  "                (,_let lp ((ls ,this-module) (res (,_quote ())))\n"
+  "                  (,_cond\n"
+  "                   ((,_null? ls) res)\n"
+  "                   ((,_and (,_pair? (,_car ls))\n"
+  "                           (,_eq? (,_quote export) (,_caar ls)))\n"
+  "                    (lp (,_cdr ls)\n"
+  "                        (,_append (,_map rewrite-export (,_cdar ls)) res)))\n"
+  "                   (,_else (lp (,_cdr ls) res)))))))\n"
+  "            (,_set! ,this-module (,_quote ()))\n"
+  "            ,@body\n"
+  "            (,_add-module! (,_quote ,name)\n"
+  "                           (,_make-module (extract-exports)\n"
+  "                                          #f\n"
+  "                                          (,_reverse ,this-module)))\n"
+  "            (,_set! ,this-module ,tmp)\n"
+  "            (,(rename 'pop-this-path)))))))))\n"
+  "\n"
+  "(define-syntax define-library define-library-transformer)\n"
+  "(define-syntax module define-library-transformer)\n"
+  "\n"
+  "(define-syntax pop-this-path\n"
+  "  (er-macro-transformer\n"
+  "   (lambda (expr rename compare)\n"
+  "     (if (pair? *this-path*)\n"
+  "         (set! *this-path* (cdr *this-path*)))\n"
+  "     #f)))\n"
+  "\n"
+  "(define-syntax include-library-declarations\n"
+  "  (er-macro-transformer\n"
+  "   (lambda (expr rename compare)\n"
+  "     (let lp1 ((ls (cdr expr)) (res '()))\n"
+  "       (cond\n"
+  "        ((pair? ls)\n"
+  "         (let* ((file (car ls))\n"
+  "                (rel-path (if (pair? *this-path*)\n"
+  "                              (string-append (car *this-path*) \"/\" file)\n"
+  "                              file)))\n"
+  "           (cond\n"
+  "            ((find-module-file rel-path)\n"
+  "             => (lambda (path)\n"
+  "                  (call-with-input-file path\n"
+  "                    (lambda (in)\n"
+  "                      (let lp2 ((res res))\n"
+  "                        (let ((x (read in)))\n"
+  "                          (if (eof-object? x)\n"
+  "                              (lp1 (cdr ls) res)\n"
+  "                              (lp2 (cons x res)))))))))\n"
+  "            (else\n"
+  "             (error \"couldn't find include-library-declarations file\" file)))))\n"
+  "        (else\n"
+  "         `(,(rename 'meta-begin)\n"
+  "           ,@(reverse res)\n"
+  "           (,(rename 'set!) ,(rename '*this-module*)\n"
+  "            (,(rename 'cons) (,(rename 'quote)\n"
+  "                              ,(cons 'include-library-declarations (cdr expr)))\n"
+  "             ,(rename '*this-module*))))))))))\n"
+  "\n"
+  "(define-syntax define-meta-primitive\n"
+  "  (er-macro-transformer\n"
+  "   (lambda (expr rename compare)\n"
+  "     (let ((name (cadr expr)))\n"
+  "       `(define-syntax ,name\n"
+  "          (er-macro-transformer\n"
+  "           (lambda (expr rename compare)\n"
+  "             (let ((this-module (rename '*this-module*))\n"
+  "                   (_set! (rename 'set!))\n"
+  "                   (_cons (rename 'cons))\n"
+  "                   (_quote (rename 'syntax-quote)))\n"
+  "               `(,_set! ,this-module\n"
+  "                        (,_cons (,_quote ,(cons ',name (cdr expr)))\n"
+  "                                ,this-module))))))))))\n"
+  "\n"
+  "(define-meta-primitive import)\n"
+  "(define-meta-primitive import-immutable)\n"
+  "(define-meta-primitive export)\n"
+  "(define-meta-primitive export-all)\n"
+  "(define-meta-primitive include)\n"
+  "(define-meta-primitive include-ci)\n"
+  "(define-meta-primitive include-shared)\n"
+  "(define-meta-primitive include-shared-optionally)\n"
+  "(define-meta-primitive body)\n"
+  "(define-meta-primitive begin)\n"
+  "\n"
+  ";; The `import' binding used by (chibi) and (scheme base), etc.\n"
+  "(define-syntax repl-import\n"
+  "  (er-macro-transformer\n"
+  "   (let ((meta-env (current-environment)))\n"
+  "     (lambda (expr rename compare)\n"
+  "       (let lp ((ls (cdr expr)) (res '()))\n"
+  "         (cond\n"
+  "          ((null? ls)\n"
+  "           (cons (rename 'meta-begin) (reverse res)))\n"
+  "          (else\n"
+  "           (let ((mod+imps (resolve-import (car ls))))\n"
+  "             (cond\n"
+  "              ((pair? mod+imps)\n"
+  "               (lp (cdr ls)\n"
+  "                   (cons `(,(rename '%import)\n"
+  "                           #f\n"
+  "                           (,(rename 'module-env)\n"
+  "                            (,(rename 'load-module)\n"
+  "                             (,(rename 'quote) ,(car mod+imps))))\n"
+  "                           (,(rename 'quote) ,(cdr mod+imps))\n"
+  "                           #f)\n"
+  "                         res)))\n"
+  "              (else\n"
+  "               (error \"couldn't find module\" (car ls))))))))))))\n"
+  "\n"
+  ";; This will be redefined in main.c.\n"
+  "(define raw-script-file #f)\n"
+  "\n"
+  ";; capture a static copy of the current environment to serve\n"
+  ";; as the (chibi) module\n"
+  "(define *chibi-env*\n"
+  "  (let ((env (make-environment)))\n"
+  "    (%import env (interaction-environment) #f #t)\n"
+  "    (env-parent env)))\n"
+  "\n"
+  "(define *auto-env*\n"
+  "  (let ((env (make-environment)))\n"
+  "    (%import env (interaction-environment)\n"
+  "             '(_ => ... else unquote unquote-splicing) #t)\n"
+  "    (env-parent env)))\n"
+  "\n"
+  "(define *modules*\n"
+  "  (list\n"
+  "   (cons '(chibi)\n"
+  "         (make-module #f *chibi-env* '((include \"init-7.scm\"))))\n"
+  "   (cons '(chibi primitive)\n"
+  "         (make-module #f #f (lambda (env) (primitive-environment 7))))\n"
+  "   (cons '(meta)\n"
+  "         (make-module #f (current-environment) '((include \"meta-7.scm\"))))\n"
+  "   (cons '(auto)\n"
+  "         (make-module #f *auto-env* '()))\n"
+  "   (cons '(srfi 0)\n"
+  "         (make-module (list 'cond-expand)\n"
+  "                      (current-environment)\n"
+  "                      (list (list 'export 'cond-expand))))))\n"
+;
 
 static sexp puchi_load_init7_into_env(sexp ctx, sexp env) {
   sexp res;
@@ -16203,6 +16704,10 @@ static sexp puchi_load_init7_into_env(sexp ctx, sexp env) {
     sexp_global(ctx, SEXP_G_ERR_HANDLER) = sexp_env_ref(ctx, env, sym, SEXP_FALSE);
   }
   sexp_set_parameter(ctx, env, sexp_global(ctx, SEXP_G_INTERACTION_ENV_SYMBOL), env);
+  {
+    sexp sym = sexp_intern(ctx, "*puchi-default-libs*", -1);
+    sexp_env_define(ctx, env, sym, SEXP_TRUE);
+  }
   return env;
 }
 
@@ -16217,8 +16722,242 @@ sexp sexp_delete_context(sexp ctx) {
 }
 
 sexp sexp_load_default_libs(sexp ctx) {
+  sexp env, sym;
   if (!ctx || sexp_exceptionp(ctx)) return ctx;
-  return puchi_load_init7_into_env(ctx, sexp_context_env(ctx));
+  env = sexp_context_env(ctx);
+  sym = sexp_intern(ctx, "*puchi-default-libs*", -1);
+  if (sexp_env_ref(ctx, env, sym, SEXP_FALSE) != SEXP_FALSE)
+    return env;
+  return puchi_load_init7_into_env(ctx, env);
+}
+
+/* ---- module ops + sexp_enable_modules (host-owned I/O) ---- */
+static puchi_module_ops puchi_g_module_ops;
+static int puchi_g_module_ops_set;
+
+static int puchi_module_join_path(char *out, size_t out_sz, const char *dir, const char *file) {
+  size_t dlen, flen, need;
+  int slash;
+  if (!dir || !file) return -1;
+  dlen = PUCHI_STRLEN(dir);
+  flen = PUCHI_STRLEN(file);
+  slash = (dlen > 0 && (dir[dlen - 1] == '/' || dir[dlen - 1] == '\\')) ? 1 : 0;
+  need = dlen + flen + (slash ? 1 : 2);
+  if (need > out_sz) return -1;
+  PUCHI_MEMCPY(out, dir, dlen);
+  if (!slash) out[dlen++] = '/';
+  PUCHI_MEMCPY(out + dlen, file, flen + 1);
+  return 0;
+}
+
+static sexp puchi_module_eval_source(sexp ctx, const char *text, size_t len, sexp env) {
+  sexp_gc_var5(ctx2, x, in, res, s);
+  sexp_gc_preserve5(ctx, ctx2, x, in, res, s);
+  res = SEXP_VOID;
+  s = sexp_c_string(ctx, text, (sexp_sint_t)len);
+  in = sexp_open_input_string(ctx, s);
+  if (sexp_exceptionp(in)) {
+    res = in;
+  } else {
+    sexp_port_sourcep(in) = 1;
+    ctx2 = sexp_make_eval_context(ctx, NULL, env, 0, 0);
+    sexp_context_parent(ctx2) = ctx;
+    sexp_context_tailp(ctx2) = 0;
+    while ((x = sexp_read(ctx2, in)) != (sexp)SEXP_EOF) {
+      res = sexp_exceptionp(x) ? x : sexp_eval(ctx2, x, env);
+      if (sexp_exceptionp(res)) break;
+    }
+    if (x == SEXP_EOF) res = SEXP_VOID;
+    sexp_close_port(ctx, in);
+  }
+  sexp_gc_release5(ctx);
+  return res;
+}
+
+static sexp puchi_module_find_file_f(sexp ctx, sexp self, sexp_sint_t n, sexp file) {
+  sexp ls;
+  char path[4096];
+  const char *fname;
+  (void)n;
+  if (!puchi_g_module_ops_set || !puchi_g_module_ops.exists)
+    return sexp_global(ctx, SEXP_G_OOM_ERROR);
+  sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, file);
+  fname = sexp_string_data(file);
+  if (puchi_g_module_ops.exists(puchi_g_module_ops.userdata, fname))
+    return sexp_c_string(ctx, fname, -1);
+  ls = sexp_global(ctx, SEXP_G_MODULE_PATH);
+  for (; sexp_pairp(ls); ls = sexp_cdr(ls)) {
+    if (!sexp_stringp(sexp_car(ls))) continue;
+    if (puchi_module_join_path(path, sizeof path, sexp_string_data(sexp_car(ls)), fname) != 0)
+      continue;
+    if (puchi_g_module_ops.exists(puchi_g_module_ops.userdata, path))
+      return sexp_c_string(ctx, path, -1);
+  }
+  return SEXP_FALSE;
+}
+
+static sexp puchi_module_open_input_f(sexp ctx, sexp self, sexp_sint_t n, sexp path) {
+  char *buf;
+  size_t len = 0;
+  sexp res;
+  (void)n;
+  if (!puchi_g_module_ops_set || !puchi_g_module_ops.read || !puchi_g_module_ops.free_buf)
+    return sexp_global(ctx, SEXP_G_OOM_ERROR);
+  sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, path);
+  buf = puchi_g_module_ops.read(puchi_g_module_ops.userdata, sexp_string_data(path), &len);
+  if (!buf)
+    return sexp_file_exception(ctx, self, "couldn't open input file", path);
+  {
+    sexp_gc_var1(s);
+    sexp_gc_preserve1(ctx, s);
+    s = sexp_c_string(ctx, buf, (sexp_sint_t)len);
+    puchi_g_module_ops.free_buf(puchi_g_module_ops.userdata, buf);
+    res = sexp_open_input_string(ctx, s);
+    sexp_gc_release1(ctx);
+  }
+  if (sexp_portp(res)) {
+    sexp_port_name(res) = path;
+    sexp_port_sourcep(res) = 1;
+  }
+  return res;
+}
+
+static sexp puchi_module_load_f(sexp ctx, sexp self, sexp_sint_t n, sexp source, sexp env) {
+  char *buf;
+  size_t len = 0;
+  sexp res;
+  if (!env) env = sexp_context_env(ctx);
+  sexp_assert_type(ctx, sexp_envp, SEXP_ENV, env);
+  if (sexp_iportp(source))
+    return sexp_load_op(ctx, self, n, source, env);
+  if (!puchi_g_module_ops_set || !puchi_g_module_ops.read || !puchi_g_module_ops.free_buf)
+    return sexp_global(ctx, SEXP_G_OOM_ERROR);
+  sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, source);
+  buf = puchi_g_module_ops.read(puchi_g_module_ops.userdata, sexp_string_data(source), &len);
+  if (!buf)
+    return sexp_file_exception(ctx, self, "couldn't open input file", source);
+  res = puchi_module_eval_source(ctx, buf, len, env);
+  puchi_g_module_ops.free_buf(puchi_g_module_ops.userdata, buf);
+  return res;
+}
+
+static void puchi_module_install_foreigns(sexp ctx, sexp env) {
+  sexp_define_foreign(ctx, env, "find-module-file", 1, puchi_module_find_file_f);
+  sexp_define_foreign(ctx, env, "open-input-file", 1, puchi_module_open_input_f);
+  sexp_define_foreign(ctx, env, "open-binary-input-file", 1, puchi_module_open_input_f);
+  sexp_define_foreign_opt(ctx, env, "load", 2, puchi_module_load_f, SEXP_FALSE);
+  sexp_define_foreign_opt(ctx, env, "%load", 2, puchi_module_load_f, SEXP_FALSE);
+#if SEXP_USE_MODULES
+  sexp_define_foreign_opt(ctx, env, "current-module-path", 1, sexp_current_module_path_op, SEXP_FALSE);
+  sexp_define_foreign(ctx, env, "load-module-file", 2, sexp_load_module_file_op);
+  sexp_define_foreign(ctx, env, "add-module-directory", 2, sexp_add_module_directory_op);
+#endif
+}
+
+static sexp puchi_module_restore_library_cond_expand(sexp ctx, sexp env) {
+  static const char restore_library_ce[] =
+    "(define-syntax cond-expand"
+    "  (er-macro-transformer"
+    "   (lambda (expr rename compare)"
+    "     (define (check x)"
+    "       (if (pair? x)"
+    "           (case (car x)"
+    "             ((and) (every check (cdr x)))"
+    "             ((or) (any check (cdr x)))"
+    "             ((not) (not (check (cadr x))))"
+    "             ((library) (eval `(find-module ',(cadr x)) (%meta-env)))"
+    "             (else (error \"cond-expand: bad feature\" x)))"
+    "           (memq (identifier->symbol x) *features*)))"
+    "     (let expand ((ls (cdr expr)))"
+    "       (cond"
+    "        ((null? ls))"
+    "        ((not (pair? (car ls))) (error \"cond-expand: bad clause\" (car ls)))"
+    "        ((eq? 'else (identifier->symbol (caar ls)))"
+    "         (if (pair? (cdr ls))"
+    "             (error \"cond-expand: else in non-final position\")"
+    "             `(,(rename 'begin) ,@(cdar ls))))"
+    "        ((check (caar ls)) `(,(rename 'begin) ,@(cdar ls)))"
+    "        (else (expand (cdr ls))))))))";
+  return sexp_eval_string(ctx, restore_library_ce, -1, env);
+}
+
+static int puchi_modules_enabled_p(sexp ctx) {
+  sexp meta, sym, tmp;
+  meta = sexp_global(ctx, SEXP_G_META_ENV);
+  if (!sexp_envp(meta)) return 0;
+  sym = sexp_intern(ctx, "repl-import", -1);
+  tmp = sexp_env_ref(ctx, meta, sym, SEXP_VOID);
+  return tmp != SEXP_VOID;
+}
+
+sexp sexp_enable_modules(sexp ctx, const puchi_module_ops *ops) {
+  sexp env, meta, tmp, sym;
+  sexp_gc_var3(meta_gc, tmp_gc, sym_gc);
+  if (!ctx || sexp_exceptionp(ctx)) return ctx;
+  if (!ops || !ops->exists || !ops->read || !ops->free_buf)
+    return sexp_user_exception(ctx, NULL, "sexp_enable_modules: incomplete puchi_module_ops", SEXP_FALSE);
+
+  puchi_g_module_ops = *ops;
+  puchi_g_module_ops_set = 1;
+
+  tmp = sexp_load_default_libs(ctx);
+  if (sexp_exceptionp(tmp)) return tmp;
+  env = sexp_context_env(ctx);
+
+  sexp_gc_preserve3(ctx, meta_gc, tmp_gc, sym_gc);
+
+  meta = sexp_global(ctx, SEXP_G_META_ENV);
+  if (!sexp_envp(meta)) {
+    meta = sexp_make_env(ctx);
+    if (sexp_exceptionp(meta)) {
+      sexp_gc_release3(ctx);
+      return meta;
+    }
+    sexp_global(ctx, SEXP_G_META_ENV) = meta;
+    sexp_env_parent(meta) = env;
+  }
+  meta_gc = meta;
+
+  puchi_module_install_foreigns(ctx, env);
+  puchi_module_install_foreigns(ctx, meta);
+
+  if (puchi_modules_enabled_p(ctx)) {
+    sexp_gc_release3(ctx);
+    return ctx;
+  }
+
+  {
+    sexp old = sexp_context_env(ctx);
+    sexp_context_env(ctx) = meta;
+    tmp = puchi_module_eval_source(ctx, puchi_meta7_scm, PUCHI_STRLEN(puchi_meta7_scm), meta);
+    sexp_context_env(ctx) = old;
+  }
+  tmp_gc = tmp;
+  if (sexp_exceptionp(tmp)) {
+    sexp_gc_release3(ctx);
+    return tmp;
+  }
+
+  /* Splice import from repl-import into interaction env */
+  sym = sexp_intern(ctx, "repl-import", -1);
+  tmp = sexp_env_ref(ctx, meta, sym, SEXP_VOID);
+  if (tmp != SEXP_VOID) {
+    sym = sexp_intern(ctx, "import", -1);
+    tmp = sexp_cons(ctx, sym, tmp);
+    sexp_env_next_cell(tmp) = sexp_env_next_cell(sexp_env_bindings(env));
+    sexp_env_next_cell(sexp_env_bindings(env)) = tmp;
+  }
+
+  {
+    sexp old = sexp_context_env(ctx);
+    sexp_context_env(ctx) = env;
+    tmp = puchi_module_restore_library_cond_expand(ctx, env);
+    sexp_context_env(ctx) = old;
+    (void)tmp; /* non-fatal if some libs fall back */
+  }
+
+  sexp_gc_release3(ctx);
+  return ctx;
 }
 
 #if defined(__cplusplus)

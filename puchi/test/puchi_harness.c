@@ -1,7 +1,8 @@
 /* puchi_harness.c — OS-facing test runner for amalgamated puchi.h
  *
- * Owns CRT file I/O, module path search, meta-7 boot, and static
- * include-shared stubs (see puchi_harness_clibs.c).
+ * Owns CRT file I/O via puchi_module_ops (sexp_enable_modules), plus
+ * harness-only extras: output ports, delete-file, static include-shared
+ * stubs (see puchi_harness_clibs.c).
  *
  * Usage:
  *   puchi_harness.exe [-I dir] <script.scm> [args...]
@@ -128,6 +129,27 @@ static int puchi_ends_with(const char *s, const char *suf) {
 static int puchi_path_exists(const char *path) {
   return puchi_access(path, F_OK) == 0;
 }
+
+/* ---- puchi_module_ops (CRT-backed VFS for sexp_enable_modules) ---- */
+
+static int puchi_mod_exists(void *ud, const char *name) {
+  (void)ud;
+  return name && puchi_path_exists(name);
+}
+
+static char *puchi_mod_read(void *ud, const char *name, size_t *len) {
+  (void)ud;
+  return puchi_read_file(name, len);
+}
+
+static void puchi_mod_free(void *ud, char *buf) {
+  (void)ud;
+  free(buf);
+}
+
+static const puchi_module_ops puchi_crt_module_ops = {
+  NULL, puchi_mod_exists, puchi_mod_read, puchi_mod_free
+};
 
 /* Build dir/file into out (out_sz). Returns 0 on success. */
 static int puchi_join_path(char *out, size_t out_sz, const char *dir, const char *file) {
@@ -337,89 +359,6 @@ static sexp puchi_check(sexp ctx, sexp x) {
   return x;
 }
 
-static sexp puchi_boot_meta(sexp ctx, sexp env) {
-  sexp_gc_var3(meta, tmp, sym);
-  char *buf;
-  size_t len;
-  sexp_gc_preserve3(ctx, meta, tmp, sym);
-
-  meta = sexp_global(ctx, SEXP_G_META_ENV);
-  if (!sexp_envp(meta)) {
-    meta = sexp_make_env(ctx);
-    puchi_check(ctx, meta);
-    sexp_global(ctx, SEXP_G_META_ENV) = meta;
-    sexp_env_parent(meta) = env;
-  }
-
-  buf = puchi_read_file("lib/meta-7.scm", &len);
-  if (!buf) {
-    fprintf(stderr, "puchi_harness: cannot read lib/meta-7.scm (run from repo root)\n");
-    exit(1);
-  }
-  /* Evaluate meta-7 with context env = meta so current-environment is correct
-   * and macros resolve in the meta/interaction chain. */
-  {
-    sexp old = sexp_context_env(ctx);
-    sexp_context_env(ctx) = meta;
-    tmp = puchi_load_source_string(ctx, buf, len, meta);
-    sexp_context_env(ctx) = old;
-  }
-  free(buf);
-  puchi_check(ctx, tmp);
-
-  /* Also install foreigns into meta env */
-  puchi_install_foreigns(ctx, meta);
-
-  /* Splice import from repl-import into interaction env (like load_standard_env) */
-  sym = sexp_intern(ctx, "repl-import", -1);
-  tmp = sexp_env_ref(ctx, meta, sym, SEXP_VOID);
-  if (tmp != SEXP_VOID) {
-    sym = sexp_intern(ctx, "import", -1);
-    tmp = sexp_cons(ctx, sym, tmp);
-    sexp_env_next_cell(tmp) = sexp_env_next_cell(sexp_env_bindings(env));
-    sexp_env_next_cell(sexp_env_bindings(env)) = tmp;
-  }
-
-  /* Restore cond-expand (library …) now that meta/find-module exist.
-   * Embedded init stubs that clause to #f so the core stays diskless. */
-  {
-    static const char restore_library_ce[] =
-      "(define-syntax cond-expand"
-      "  (er-macro-transformer"
-      "   (lambda (expr rename compare)"
-      "     (define (check x)"
-      "       (if (pair? x)"
-      "           (case (car x)"
-      "             ((and) (every check (cdr x)))"
-      "             ((or) (any check (cdr x)))"
-      "             ((not) (not (check (cadr x))))"
-      "             ((library) (eval `(find-module ',(cadr x)) (%meta-env)))"
-      "             (else (error \"cond-expand: bad feature\" x)))"
-      "           (memq (identifier->symbol x) *features*)))"
-      "     (let expand ((ls (cdr expr)))"
-      "       (cond"
-      "        ((null? ls))"
-      "        ((not (pair? (car ls))) (error \"cond-expand: bad clause\" (car ls)))"
-      "        ((eq? 'else (identifier->symbol (caar ls)))"
-      "         (if (pair? (cdr ls))"
-      "             (error \"cond-expand: else in non-final position\")"
-      "             `(,(rename 'begin) ,@(cdar ls))))"
-      "        ((check (caar ls)) `(,(rename 'begin) ,@(cdar ls)))"
-      "        (else (expand (cdr ls))))))))";
-    sexp old = sexp_context_env(ctx);
-    sexp_context_env(ctx) = env;
-    tmp = sexp_eval_string(ctx, restore_library_ce, -1, env);
-    sexp_context_env(ctx) = old;
-    if (sexp_exceptionp(tmp)) {
-      sexp_print_exception(ctx, tmp, sexp_current_error_port(ctx));
-      /* non-fatal: some libraries fall back to (srfi 60) */
-    }
-  }
-
-  sexp_gc_release3(ctx);
-  return meta;
-}
-
 static void usage(void) {
   fprintf(stderr, "usage: puchi_harness [-I dir] [-x module] <script.scm> [args...]\n");
   exit(1);
@@ -442,7 +381,7 @@ static char *puchi_make_environment(const char *mod) {
 }
 
 int main(int argc, char **argv) {
-  sexp ctx, env, meta, tmp, sym, args;
+  sexp ctx, env, tmp, sym, args;
   int i, script_i = -1;
   const char *script;
   const char *x_module = NULL;
@@ -459,10 +398,17 @@ int main(int argc, char **argv) {
 
   sexp_add_static_libraries(puchi_harness_static_libraries);
 
-  tmp = sexp_load_default_libs(ctx);
+  /* Boots init-7 (once) + embedded meta-7 via CRT module ops. */
+  tmp = sexp_enable_modules(ctx, &puchi_crt_module_ops);
   puchi_check(ctx, tmp);
+  env = sexp_context_env(ctx);
 
+  /* Harness extras: output/delete + static-lib-aware find/load (overrides core). */
   puchi_install_foreigns(ctx, env);
+  {
+    sexp meta = sexp_global(ctx, SEXP_G_META_ENV);
+    if (sexp_envp(meta)) puchi_install_foreigns(ctx, meta);
+  }
 
   /* Default module path includes ./lib */
   sexp_add_module_directory(ctx, sexp_c_string(ctx, "lib", -1), SEXP_FALSE);
@@ -489,9 +435,6 @@ int main(int argc, char **argv) {
   }
   if (script_i < 0) usage();
   script = argv[script_i];
-
-  meta = puchi_boot_meta(ctx, env);
-  (void)meta;
 
   puchi_install_stdio_ports(ctx, env);
 

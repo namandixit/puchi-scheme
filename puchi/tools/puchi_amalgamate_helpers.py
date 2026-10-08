@@ -86,6 +86,32 @@ def embed_c_string(name: str, text: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def trim_meta7(src: str) -> str:
+    """Stub include-shared arms so meta-7 never touches DLLs / .so files."""
+    out = normalize_newlines(src)
+    replacements = [
+        (
+            "((include-shared)\n"
+            "              (load-modules (cdr x) *shared-object-extension* #f))",
+            "((include-shared)\n"
+            '              (error "include-shared: not available in puchi" x))',
+        ),
+        (
+            "((include-shared-optionally)\n"
+            "              (load-modules (list (cadr x)) *shared-object-extension* #f\n"
+            "                            (lambda () (load-modules (cddr x) \"\" #f))))",
+            "((include-shared-optionally)\n"
+            "              (load-modules (cddr x) \"\" #f))",
+        ),
+    ]
+    for old, new in replacements:
+        if old not in out:
+            print(f"warning: trim_meta7 pattern not matched:\n{old[:60]}...", file=sys.stderr)
+        else:
+            out = out.replace(old, new, 1)
+    return ";; trimmed for puchi amalgamation - no include-shared / DLLs\n" + out
+
+
 def trim_init7(src: str) -> str:
     """Remove file/load helpers and stub (library) in cond-expand."""
     # Delete call-with-*-file / with-*-file (no error stubs).
@@ -153,10 +179,136 @@ def trim_init7(src: str) -> str:
         else:
             print("warning: (library) cond-expand clause not found", file=sys.stderr)
 
+    out = bootstrap_fix_init7(out)
     out = (
         ";; trimmed for puchi amalgamation - file/load/library stubs\n" + out
     )
     return trim_init7_dead_arms(trim_init7_load_port(out))
+
+
+def bootstrap_fix_init7(src: str) -> str:
+    """Rewrite early syntax expanders so bootstrap does not crash on Windows.
+
+    ``or``/``and`` using ``cond`` in expanders AV during compile — use ``if``.
+    ``make-renamer`` internal define + set! circular rename mutates badly on
+    first macro use — rewrite without internal define.
+    Insert list-based ``letrec`` before ``quasiquote`` so qq's internal define
+    can compile; drop the later quasiquote-based upstream ``letrec``.
+    """
+    out = src
+    renamer_old = """(define make-renamer
+  (lambda (mac-env)
+    (define rename
+      ((lambda (renames)
+         (lambda (identifier)
+           ((lambda (cell)
+              (if cell
+                  (cdr cell)
+                  ((lambda (name)
+                     (set! renames (cons (cons identifier name) renames))
+                     name)
+                   ((lambda (id)
+                      (syntactic-closure-set-rename! id rename)
+                      id)
+                    (close-syntax identifier mac-env)))))
+            (assq identifier renames))))
+       '()))
+    rename))"""
+    # Box the alist + self-ref so we need no internal define / set! of a local.
+    renamer_new = """(define make-renamer
+  (lambda (mac-env)
+    ((lambda (box)
+       ((lambda (rename)
+          (set-car! (cdr box) rename)
+          rename)
+        (lambda (identifier)
+          ((lambda (found)
+             (if found
+                 (cdr found)
+                 ((lambda (name)
+                    (set-car! box (cons (cons identifier name) (car box)))
+                    name)
+                  ((lambda (id)
+                     (syntactic-closure-set-rename! id (car (cdr box)))
+                     id)
+                   (close-syntax identifier mac-env)))))
+           (assq identifier (car box))))))
+     (cons '() (cons #f '())))))"""
+    or_old = """(define-syntax or
+  (er-macro-transformer
+   (lambda (expr rename compare)
+     (cond ((null? (cdr expr)) #f)
+           ((null? (cddr expr)) (cadr expr))
+           (else
+            (list (rename 'let) (list (list (rename 'tmp) (cadr expr)))
+                  (list (rename 'if) (rename 'tmp)
+                        (rename 'tmp)
+                        (cons (rename 'or) (cddr expr)))))))))"""
+    or_new = """(define-syntax or
+  (er-macro-transformer
+   (lambda (expr rename compare)
+     (if (null? (cdr expr))
+         #f
+         (if (null? (cddr expr))
+             (cadr expr)
+             (list (rename 'let) (list (list (rename 'tmp) (cadr expr)))
+                   (list (rename 'if) (rename 'tmp)
+                         (rename 'tmp)
+                         (cons (rename 'or) (cddr expr)))))))))"""
+    and_old = """(define-syntax and
+  (er-macro-transformer
+   (lambda (expr rename compare)
+     (cond ((null? (cdr expr)))
+           ((null? (cddr expr)) (cadr expr))
+           (else (list (rename 'if) (cadr expr)
+                       (cons (rename 'and) (cddr expr))
+                       #f))))))"""
+    and_new = """(define-syntax and
+  (er-macro-transformer
+   (lambda (expr rename compare)
+     (if (null? (cdr expr))
+         #t
+         (if (null? (cddr expr))
+             (cadr expr)
+             (list (rename 'if) (cadr expr)
+                   (cons (rename 'and) (cddr expr))
+                   #f))))))"""
+    letrec_boot = """(define-syntax letrec
+  (er-macro-transformer
+   (lambda (expr rename compare)
+     ((lambda (defs)
+        (list (cons (rename 'lambda) (cons '() (append defs (cddr expr))))))
+      (map (lambda (x) (cons (rename 'define) x)) (cadr expr))))))
+
+"""
+    for label, old, new in (
+        ("make-renamer", renamer_old, renamer_new),
+        ("or", or_old, or_new),
+        ("and", and_old, and_new),
+    ):
+        if old not in out:
+            print(f"warning: bootstrap_fix_init7 {label} pattern not matched", file=sys.stderr)
+        else:
+            out = out.replace(old, new, 1)
+
+    qq_mark = "(define-syntax quasiquote\n"
+    if qq_mark not in out:
+        print("warning: bootstrap_fix_init7 quasiquote marker not found", file=sys.stderr)
+    else:
+        out = out.replace(qq_mark, letrec_boot + qq_mark, 1)
+        letrec_up = """(define-syntax letrec
+  (er-macro-transformer
+   (lambda (expr rename compare)
+     ((lambda (defs)
+        `((,(rename 'lambda) () ,@defs ,@(cddr expr))))
+      (map (lambda (x) (cons (rename 'define) x)) (cadr expr))))))
+
+"""
+        if letrec_up in out:
+            out = out.replace(letrec_up, "", 1)
+        else:
+            print("warning: bootstrap_fix_init7 upstream letrec not removed", file=sys.stderr)
+    return out
 
 
 def patch_features_host(features_h: str) -> str:
@@ -922,6 +1074,10 @@ def main() -> None:
     p.add_argument("input")
     p.add_argument("output")
 
+    p = sub.add_parser("trim-meta")
+    p.add_argument("input")
+    p.add_argument("output")
+
     p = sub.add_parser("embed")
     p.add_argument("name")
     p.add_argument("input")
@@ -969,6 +1125,9 @@ def main() -> None:
     if args.cmd == "trim-init":
         text = Path(args.input).read_text(encoding="utf-8")
         write_text_lf(Path(args.output), trim_init7(text))
+    elif args.cmd == "trim-meta":
+        text = Path(args.input).read_text(encoding="utf-8")
+        write_text_lf(Path(args.output), trim_meta7(text))
     elif args.cmd == "embed":
         text = Path(args.input).read_text(encoding="utf-8")
         write_text_lf(Path(args.output), embed_c_string(args.name, text))

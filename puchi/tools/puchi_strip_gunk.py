@@ -562,10 +562,18 @@ def scrub_eval_c_disk_boot(eval_c: str) -> str:
         flags=re.DOTALL,
     )
 
-    # Residual ALWAYS_ZERO C
+    # Residual ALWAYS_ZERO: keep non-flat synclo field init (do not drop the else arm).
     eval_c = re.sub(
-        r"  if \(SEXP_USE_FLAT_SYNTACTIC_CLOSURES && sexp_synclop\(expr\)\) \{.*?\n  \}\n",
-        "",
+        r"  if \(SEXP_USE_FLAT_SYNTACTIC_CLOSURES && sexp_synclop\(expr\)\) \{.*?\n  \} else \{\n"
+        r"    sexp_synclo_env\(res\) = env;\n"
+        r"    sexp_synclo_free_vars\(res\) = fv;\n"
+        r"    sexp_synclo_expr\(res\) = expr;\n"
+        r"    sexp_synclo_rename\(res\) = SEXP_FALSE;\n"
+        r"  \}\n",
+        "  sexp_synclo_env(res) = env;\n"
+        "  sexp_synclo_free_vars(res) = fv;\n"
+        "  sexp_synclo_expr(res) = expr;\n"
+        "  sexp_synclo_rename(res) = SEXP_FALSE;\n",
         eval_c,
         count=1,
         flags=re.DOTALL,

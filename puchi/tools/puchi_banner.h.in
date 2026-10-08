@@ -12,9 +12,10 @@
  * OS/debug backends (dlopen, Boehm, green threads, mmap, image load, …) are
  * deleted from this amalgamation — not merely forced off. Do not re-enable.
  *
- * Module path starts empty; host/harness calls add-module-directory and may
- * boot meta-7. sexp_load_default_libs / sexp_load_standard_env load embedded
- * init-7 only (no disk). STATIC_LIBS / include-shared is harness-only
+ * Module path starts empty. sexp_load_default_libs loads embedded init-7 only
+ * (idempotent; no disk). sexp_enable_modules(ctx, ops) ensures default libs,
+ * installs host module I/O callbacks, and boots embedded meta-7 (import /
+ * define-library). No include-shared / DLLs. STATIC_LIBS is harness-only
  * (define PUCHI_TEST in the test harness).
  *
  * ----------------------------------------------------------------------
@@ -32,7 +33,9 @@
  *
  *   puchi_host host = { NULL, my_alloc, my_free, my_diag, my_fatal };
  *   sexp ctx = sexp_create_context(0, 0, &host);  // NULL host => CRT defaults
- *   sexp_load_default_libs(ctx);
+ *   sexp_load_default_libs(ctx);                 // interaction language only
+ *   // Or, for import / define-library (ops = exists/read/free_buf VFS):
+ *   //   sexp_enable_modules(ctx, &ops);         // also loads default libs once
  *   sexp res = sexp_eval_string(ctx, "(+ 1 2)", -1, NULL);
  *   sexp_delete_context(ctx);
  *
@@ -223,6 +226,15 @@ typedef struct puchi_stream_ops {
   int (*error_p)(void *udata);
   void (*clear_error)(void *udata);
 } puchi_stream_ops;
+
+/* Host VFS for sexp_enable_modules — disk, zip, or embedded string table.
+ * One ops config per process; call enable once after context create. */
+typedef struct puchi_module_ops {
+  void *userdata;
+  int (*exists)(void *userdata, const char *name); /* 1 if readable */
+  char *(*read)(void *userdata, const char *name, size_t *len); /* NULL if missing */
+  void (*free_buf)(void *userdata, char *buf);
+} puchi_module_ops;
 
 #if defined(PUCHI_IMPLEMENTATION)
 static puchi_host puchi_g_host;
