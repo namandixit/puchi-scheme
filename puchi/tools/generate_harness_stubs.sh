@@ -48,3 +48,5 @@ for stub in "${stubs[@]}"; do
   fi
 done
 echo "[puchi] stub generation done."
+echo "[puchi] next: bash puchi/tools/prep_harness_clibs.sh"
+echo "  (applies puchi/test/clibs/*.ubsan.diff; fails if stubs drifted)."

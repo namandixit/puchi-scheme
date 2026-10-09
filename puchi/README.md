@@ -34,11 +34,20 @@ Puchi keeps those checks honest on x86: `SEXP_USE_ALIGNED_BYTECODE` is forced on
 
 Linking without running is not enough. `check_amalgamate.sh` only checks drift — it does **not** replace this bat.
 
-| Config | Macro | What runs |
-|--------|-------|-----------|
-| Integer only | `PUCHI_INTEGER_ONLY` | `puchi_integer_smoke.c` (execute) |
-| Int + float (default) | *(none)* | `puchi_slim_smoke.c` (execute) |
-| Full tower | `PUCHI_ENABLE_NUMERICAL_TOWER` | `puchi_smoke.c` + Scheme harness (`r7rs` / `syntax` / `division` / `unicode`) |
+| Suite | Integer (`PUCHI_INTEGER_ONLY`) | Default (flonums) | Tower (`PUCHI_ENABLE_NUMERICAL_TOWER`) |
+|-------|--------------------------------|-------------------|----------------------------------------|
+| C preflight | yes | yes | yes (+ two-host) |
+| `tests/r5rs-tests.scm` | yes (skinny gate) | yes (`BIGNUMS=0` gate) | yes |
+| `tests/basic/*.scm` | yes (`--expect` vs `.res`) | yes | yes |
+| `tests/r7rs-tests.scm` | no — needs tower/complex | no — same | yes |
+| `tests/syntax-tests.scm` | no — `Complex` / digitless `+i` | no — same | yes |
+| `tests/division-tests.scm` | no — same | no — same | yes |
+| `tests/unicode-tests.scm` | no — same | no — same | yes |
+| `puchi/test/lib-tests-embed.scm` | no — Complex / digitless `+i` on import | no — same | yes (curated SRFI/chibi minus OS + missing FFI) |
+
+Every harness script: single-threaded first, then 64 parallel contexts.
+
+**Permanently out of scope** (all configs): `tests/ffi/`, `tests/snow/`, `tests/net-tests.scm`, `tests/memory/`, install/CLI (`tests/install/`, `tests/run/`), `tests/build/build-tests.sh`, and `(chibi process)` / `(chibi system)` / `(chibi tar)` / filesystem lib tests (no dlopen, process spawn, sockets, or disk VFS in the amalgamation).
 
 Sanitizer pass needs the Clang ASan runtime DLL on PATH (the bat adds `$(clang -print-resource-dir)/lib/windows` automatically).
 

@@ -1,0 +1,19 @@
+--- srfi_151_bit.c
++++ srfi_151_bit.c
+@@ -226,10 +226,12 @@
+ }
+ 
+ static int log2i(sexp_uint_t v) {
+-  int i;
+-  for (i = 0; i < sizeof(v)*8; i++)
+-    if (((sexp_uint_t)1<<(i+1)) > v)
+-      break;
++  /* Avoid 1<<(i+1) when i+1 == bitwidth (UBSan: shift exponent too large). */
++  int i = 0;
++  while (v > 1) {
++    v >>= 1;
++    i++;
++  }
+   return i;
+ }
+ 

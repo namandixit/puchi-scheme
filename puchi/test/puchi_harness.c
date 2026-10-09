@@ -9,7 +9,7 @@
  * the script top to bottom.
  *
  * Usage:
- *   puchi_harness.exe [-I dir] <script.scm> [args...]
+ *   puchi_harness.exe [-I dir] [-x module] [--expect|-e file] <script.scm> [args...]
  */
 /* Numeric mode comes from the compiler: (default) / PUCHI_INTEGER_ONLY /
  * PUCHI_ENABLE_NUMERICAL_TOWER — see build_puchi_tests.bat. */
@@ -49,6 +49,7 @@ typedef struct {
   char **argv;
   const char *script;
   const char *x_module;
+  const char *expect_path;
   int argc;
   int script_i;
 } puchi_harness_args;
@@ -558,8 +559,75 @@ static int puchi_check(puchi ctx, puchi x) {
 }
 
 static PUCHI_NORETURN void usage(void) {
-  fprintf(stderr, "usage: puchi_harness [-I dir] [-x module] <script.scm> [args...]\n");
+  fprintf(stderr,
+          "usage: puchi_harness [-I dir] [-x module] [--expect|-e file] "
+          "<script.scm> [args...]\n");
   exit(1);
+}
+
+/* Normalize CRLF → LF in place; returns new length. */
+static size_t puchi_normalize_newlines(char *s, size_t n) {
+  size_t i, o = 0;
+  for (i = 0; i < n; i++) {
+    if (s[i] == '\r' && i + 1 < n && s[i + 1] == '\n')
+      continue;
+    s[o++] = s[i];
+  }
+  s[o] = '\0';
+  return o;
+}
+
+/* 0 = match, nonzero = mismatch or I/O error. */
+static int puchi_expect_match(const puchi_membuf *cap, const char *path, int worker) {
+  char *want;
+  size_t want_len = 0, got_len;
+  char *got = NULL;
+  int rc = 1;
+
+  want = puchi_read_file(path, &want_len);
+  if (!want) {
+    fprintf(stderr, "[worker %d] --expect: cannot read %s\n", worker, path);
+    return 1;
+  }
+  want_len = puchi_normalize_newlines(want, want_len);
+
+  got_len = cap->data ? cap->len : 0;
+  if (got_len) {
+    got = (char *)malloc(got_len + 1);
+    if (!got) {
+      free(want);
+      fprintf(stderr, "[worker %d] --expect: out of memory\n", worker);
+      return 1;
+    }
+    memcpy(got, cap->data, got_len);
+    got[got_len] = '\0';
+    got_len = puchi_normalize_newlines(got, got_len);
+  } else {
+    got = (char *)malloc(1);
+    if (!got) {
+      free(want);
+      return 1;
+    }
+    got[0] = '\0';
+    got_len = 0;
+  }
+
+  if (got_len == want_len && memcmp(got, want, want_len) == 0)
+    rc = 0;
+  else {
+    fprintf(stderr, "[worker %d] --expect mismatch vs %s\n", worker, path);
+    fprintf(stderr, "----- expected (%zu bytes) -----\n", want_len);
+    fwrite(want, 1, want_len, stderr);
+    if (want_len && want[want_len - 1] != '\n') fputc('\n', stderr);
+    fprintf(stderr, "----- got (%zu bytes) -----\n", got_len);
+    fwrite(got, 1, got_len, stderr);
+    if (got_len && got[got_len - 1] != '\n') fputc('\n', stderr);
+    fprintf(stderr, "----- end -----\n");
+  }
+
+  free(want);
+  free(got);
+  return rc;
 }
 
 /* Convert dotted module name "chibi.foo" to "(mutable-environment '(chibi foo))" */
@@ -580,7 +648,11 @@ static char *puchi_make_environment(const char *mod) {
 
 static int puchi_capture_failed(const puchi_membuf *b) {
   if (!b->data || !b->len) return 0;
-  return strstr(b->data, " failure") != NULL || strstr(b->data, " error") != NULL;
+  /* (chibi test) summaries: "N failure(s)"; r5rs-tests.scm: " [FAIL]". */
+  return strstr(b->data, " failure") != NULL
+      || strstr(b->data, " error") != NULL
+      || strstr(b->data, "[FAIL]") != NULL
+      || strstr(b->data, "[ERROR]") != NULL;
 }
 
 /* One script run on a fresh root context. No exit(). */
@@ -706,6 +778,11 @@ static int puchi_harness_run(puchi_worker *w) {
   if (puchi_capture_failed(&w->capture))
     status = 70;
 
+  if (status == 0 && a->expect_path) {
+    if (puchi_expect_match(&w->capture, a->expect_path, w->index) != 0)
+      status = 70;
+  }
+
 done:
   if (status != 0 && w->capture.data && w->capture.len) {
     fprintf(stderr, "===== [worker %d] begin capture =====\n", w->index);
@@ -730,6 +807,7 @@ int main(int argc, char **argv) {
   puchi_thread threads[PUCHI_HARNESS_THREADS];
   int i, script_i = -1, passed = 0, failed = 0;
   const char *x_module = NULL;
+  const char *expect_path = NULL;
 
   if (argc < 2) usage();
 
@@ -744,6 +822,9 @@ int main(int argc, char **argv) {
       } else {
         x_module = argv[i] + 2;
       }
+    } else if (strcmp(argv[i], "--expect") == 0 || strcmp(argv[i], "-e") == 0) {
+      if (++i >= argc) usage();
+      expect_path = argv[i];
     } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
       fprintf(stderr, "unknown option: %s\n", argv[i]);
       usage();
@@ -759,6 +840,7 @@ int main(int argc, char **argv) {
   args.script_i = script_i;
   args.script = argv[script_i];
   args.x_module = x_module;
+  args.expect_path = expect_path;
 
   /* Single-threaded first: easier to debug; skip parallel on failure. */
   {

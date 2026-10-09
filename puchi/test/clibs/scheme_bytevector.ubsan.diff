@@ -1,0 +1,41 @@
+--- scheme_bytevector.c
++++ scheme_bytevector.c
+@@ -4,24 +4,31 @@
+ 
+ #include "stdint.h"
+ 
++/* Byte-swap via unsigned to avoid UBSan "left shift of negative value". */
+ static int16_t sexp_swap_s16(int16_t n) {
+-  return (n << 8) | ((n >> 8) & 0xFF);
++  uint16_t u = (uint16_t)n;
++  u = (uint16_t)((u << 8) | (u >> 8));
++  return (int16_t)u;
+ }
+ static uint16_t sexp_swap_u16(uint16_t n) {
+-  return (n >> 8) | ((n & 0xFF) << 8);
++  return (uint16_t)((n >> 8) | ((n & 0xFF) << 8));
+ }
+ static int32_t sexp_swap_s32(int32_t n) {
+-  n = ((n << 8) & 0xFF00FF00) | ((n >> 8) & 0xFF00FF);
+-  return (n << 16) | ((n >> 16) & 0xFFFF);
++  uint32_t u = (uint32_t)n;
++  u = ((u << 8) & 0xFF00FF00u) | ((u >> 8) & 0x00FF00FFu);
++  u = (u << 16) | (u >> 16);
++  return (int32_t)u;
+ }
+ static uint32_t sexp_swap_u32(uint32_t n) {
+   return ((n>>24)&0xff)  | ((n<<8)&0xff0000) |
+          ((n>>8)&0xff00) | ((n<<24)&0xff000000);
+ }
+ static int64_t sexp_swap_s64(int64_t n) {
+-  n = ((n << 8) & 0xFF00FF00FF00FF00ULL) | ((n >> 8) & 0x00FF00FF00FF00FFULL);
+-  n = ((n << 16) & 0xFFFF0000FFFF0000ULL) | ((n >> 16) & 0x0000FFFF0000FFFFULL);
+-  return (n << 32) | ((n >> 32) & 0xFFFFFFFFULL);
++  uint64_t u = (uint64_t)n;
++  u = ((u << 8) & 0xFF00FF00FF00FF00ULL) | ((u >> 8) & 0x00FF00FF00FF00FFULL);
++  u = ((u << 16) & 0xFFFF0000FFFF0000ULL) | ((u >> 16) & 0x0000FFFF0000FFFFULL);
++  u = (u << 32) | (u >> 32);
++  return (int64_t)u;
+ }
+ static uint64_t sexp_swap_u64(uint64_t n) {
+   n = ((n << 8) & 0xFF00FF00FF00FF00ULL) | ((n >> 8) & 0x00FF00FF00FF00FFULL);

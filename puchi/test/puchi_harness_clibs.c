@@ -41,18 +41,18 @@
 #include "../../lib/srfi/39/param.c"
 #undef sexp_init_library
 
+/* UBSan-patched copies from prep_harness_clibs.sh (never edit upstream lib/). */
 #define sexp_init_library sexp_init_lib_srfi_151
-#include "../../lib/srfi/151/bit.c"
+#include "build/clibs/srfi_151_bit.c"
 #undef sexp_init_library
 
 #define sexp_init_library sexp_init_lib_scheme_time
 #include "../../lib/scheme/time.c"
 #undef sexp_init_library
 
-/* These four are generated into lib/ from *.stub by chibi-ffi (gitignored).
- * Regenerate with: puchi/tools/generate_harness_stubs.sh <chibi-scheme> */
+/* Other stubs still generated into lib/ via generate_harness_stubs.sh. */
 #define sexp_init_library sexp_init_lib_scheme_bytevector
-#include "../../lib/scheme/bytevector.c"
+#include "build/clibs/scheme_bytevector.c"
 #undef sexp_init_library
 
 #define sexp_init_library sexp_init_lib_chibi_win32_process_win32
