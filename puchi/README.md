@@ -7,7 +7,7 @@ bash puchi/tools/amalgamate.sh
 ```
 
 Requires bash (Git Bash on Windows), `patch` or `git apply`, and Python 3.
-Output is byte-identical on Windows and Linux (and across `PYTHONHASHSEED`s).
+Output is deterministic: identical across runs and across `PYTHONHASHSEED`s on Linux. It should match on Windows too; to confirm, run `amalgamate.sh` there and check that `git status puchi/puchi.h` is clean.
 
 ## Edit only inside `puchi/` (mandatory)
 
@@ -61,7 +61,9 @@ The ASan pass also enables `-fsanitize=local-bounds`. The other non-UB UBSan che
 
 Both scripts need the generated FFI stubs under `lib/` (gitignored). Build
 Chibi normally once (`make`), or point `generate_harness_stubs.sh` at any
-`chibi-scheme` binary.
+`chibi-scheme` binary. A binary built inside the repo (not installed) must be
+able to find its shared library and modules, e.g.
+`LD_LIBRARY_PATH=. CHIBI_MODULE_PATH=lib bash puchi/tools/generate_harness_stubs.sh ./chibi-scheme`.
 
 Puchi keeps those checks honest on x86: `SEXP_USE_ALIGNED_BYTECODE` is forced on, and patch `005-sexp-c-safe-fixnum-read.diff` avoids signed overflow UB in `sexp_read_number`.
 

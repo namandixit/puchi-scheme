@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Definition of done for any puchi change on Linux/macOS: this script exits 0.
+# Definition of done for any puchi change on Linux: this script exits 0.
+# (Only tested on Linux; not macOS: different sanitizer runtimes, older bash.)
 # POSIX counterpart of build_puchi_tests.bat (same suite, same matrix):
 #   1) amalgamate
 #   2) full suite under GCC + Clang (all three numeric configs, execute)
@@ -231,5 +232,17 @@ fi
 for tag in "$@"; do
   do_suite "$tag"
 done
+
+# README "Order of operations", step 4: the gate's own amalgamation must have
+# reproduced the committed header byte for byte. Compared against HEAD, so a
+# regenerated-but-uncommitted (or only staged) puchi.h fails too.
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
+   ! git diff --quiet HEAD -- puchi/puchi.h; then
+  echo "error: puchi/puchi.h differs from HEAD after the gate." >&2
+  git --no-pager diff --stat HEAD -- puchi/puchi.h >&2
+  echo "  Commit and push the regenerated header, then rerun (see README," >&2
+  echo "  'Order of operations')." >&2
+  exit 1
+fi
 
 echo "=== puchi suites passed: $* ==="
