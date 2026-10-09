@@ -54,7 +54,7 @@ bash puchi/tools/build_puchi_tests.sh
 1. **Amalgamates** (`amalgamate.sh` → regenerates `puchi.h`)
 2. Runs the **full suite** under **MSVC** and **Clang** — **GCC** and **Clang** on Linux (all three numeric configs; binaries are **executed**, not only linked)
 3. Re-runs the **same suite** under **Clang ASan + UBSan** with `-fno-sanitize-recover=all` (any sanitizer hit fails the script).
-4. **Linux only:** re-runs it once more under **Clang ThreadSanitizer** (`halt_on_error=1`), which checks the 64 parallel contexts for data races. TSan has no Windows runtime, so `build_puchi_tests.bat` has no such pass, and it cannot be combined with ASan, hence a separate pass. GCC also supports `-fsanitize=thread`; clang is used to match the ASan pass.
+4. **Linux only:** re-runs it once more under **Clang ThreadSanitizer** (`halt_on_error=1`), which checks the parallel contexts for data races. TSan uses 16 contexts instead of 64 (`PUCHI_HARNESS_THREADS=n`, 1–64; unset means 64): 64 contexts of `lib-tests-embed` under TSan exceed 16 GB and get OOM-killed. TSan has no Windows runtime, so `build_puchi_tests.bat` has no such pass, and it cannot be combined with ASan, hence a separate pass. GCC also supports `-fsanitize=thread`; clang is used to match the ASan pass.
 
 Both scripts need the generated FFI stubs under `lib/` (gitignored). Build
 Chibi normally once (`make`), or point `generate_harness_stubs.sh` at any

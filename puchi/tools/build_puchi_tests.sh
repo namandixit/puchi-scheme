@@ -135,6 +135,9 @@ do_suite() {
       # its own pass. Clang, to match the ASan pass.
       cc="$CC_CLANG"
       cf=(-O1 -g -fno-omit-frame-pointer -fsanitize=thread)
+      # TSan multiplies memory: 64 contexts of lib-tests-embed exceed 16 GB
+      # (OOM-killed). 16 contexts still exercise cross-context races.
+      local -x PUCHI_HARNESS_THREADS="${PUCHI_HARNESS_THREADS:-16}"
       ;;
     *)
       echo "unknown compiler tag: $tag" >&2

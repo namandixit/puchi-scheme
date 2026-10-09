@@ -34,7 +34,7 @@
 /* puchi.h API + idiomatic C paths under -Weverything (see header). */
 PUCHI_DIAG_HARNESS_PEDANTIC_OFF
 
-#define PUCHI_HARNESS_THREADS 64
+#define PUCHI_HARNESS_THREADS 64 /* default and maximum */
 
 /* ---- capture buffer (per-worker stdout/stderr; no tmpfile) ---- */
 
@@ -810,6 +810,7 @@ int main(int argc, char **argv) {
   puchi_thread threads[PUCHI_HARNESS_THREADS];
   /* pthread_t has no null value: track creation separately. */
   int started[PUCHI_HARNESS_THREADS];
+  int nthreads = PUCHI_HARNESS_THREADS;
   int i, script_i = -1, passed = 0, failed = 0;
   const char *x_module = NULL;
   const char *expect_path = NULL;
@@ -864,17 +865,25 @@ int main(int argc, char **argv) {
     fprintf(stderr, "puchi_harness: single-threaded run passed\n");
   }
 
-  fprintf(stderr, "puchi_harness: %d parallel contexts on %s\n",
-          PUCHI_HARNESS_THREADS, args.script);
+  /* Optional override for memory-hungry runs (TSan: 64 contexts of
+   * lib-tests-embed exceed 16 GB). Unset = 64, as on Windows. */
+  {
+    const char *e = getenv("PUCHI_HARNESS_THREADS");
+    int n = e ? atoi(e) : 0;
+    if (n >= 1 && n <= PUCHI_HARNESS_THREADS) nthreads = n;
+  }
 
-  for (i = 0; i < PUCHI_HARNESS_THREADS; i++) {
+  fprintf(stderr, "puchi_harness: %d parallel contexts on %s\n",
+          nthreads, args.script);
+
+  for (i = 0; i < nthreads; i++) {
     memset(&workers[i], 0, sizeof(workers[i]));
     workers[i].index = i;
     workers[i].args = &args;
     started[i] = 0;
   }
 
-  for (i = 0; i < PUCHI_HARNESS_THREADS; i++) {
+  for (i = 0; i < nthreads; i++) {
     if (puchi_thread_create(&threads[i], puchi_worker_main, &workers[i]) != 0) {
       fprintf(stderr, "puchi_harness: failed to create worker %d\n", i);
       workers[i].status = 1;
@@ -883,7 +892,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  for (i = 0; i < PUCHI_HARNESS_THREADS; i++) {
+  for (i = 0; i < nthreads; i++) {
     int st = 1;
     if (started[i]) {
       if (puchi_thread_join(threads[i], &st) != 0)
@@ -896,6 +905,6 @@ int main(int argc, char **argv) {
   }
 
   fprintf(stderr, "puchi_harness: %d/%d workers passed\n",
-          passed, PUCHI_HARNESS_THREADS);
+          passed, nthreads);
   return failed ? 1 : 0;
 }
