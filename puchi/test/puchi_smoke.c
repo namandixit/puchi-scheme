@@ -19,24 +19,24 @@ static PUCHI_NORETURN void smoke_fatal(void *ud, int c, const char *m) {
 static const puchi_host smoke_host = { NULL, smoke_alloc, smoke_free, smoke_diag, smoke_fatal };
 
 int main(void) {
-  sexp ctx, res;
-  ctx = sexp_create_context((size_t)0, (size_t)0, &smoke_host);
-  if (!ctx || sexp_exceptionp(ctx)) {
+  puchi ctx, res;
+  ctx = puchi_create_context((size_t)0, (size_t)0, &smoke_host);
+  if (!ctx || puchi_exceptionp(ctx)) {
     fprintf(stderr, "create_context failed\n");
     return 1;
   }
-  res = sexp_load_default_libs(ctx);
-  if (sexp_exceptionp(res)) {
+  res = puchi_load_default_libs(ctx);
+  if (puchi_exceptionp(res)) {
     fprintf(stderr, "load_default_libs failed\n");
-    sexp_print_exception(ctx, res, sexp_current_error_port(ctx));
+    puchi_print_exception(ctx, res, puchi_current_error_port(ctx));
     return 2;
   }
-  res = sexp_eval_string(ctx, "(+ 1 2 3)", (sexp_sint_t)-1, NULL);
-  if (sexp_exceptionp(res)) {
+  res = puchi_eval_string(ctx, "(+ 1 2 3)", (puchi_sint_t)-1, NULL);
+  if (puchi_exceptionp(res)) {
     fprintf(stderr, "eval failed\n");
     return 3;
   }
-  printf("ok %ld\n", (long)sexp_unbox_fixnum(res));
-  sexp_delete_context(ctx);
+  printf("ok %ld\n", (long)puchi_unbox_fixnum(res));
+  puchi_delete_context(ctx);
   return 0;
 }

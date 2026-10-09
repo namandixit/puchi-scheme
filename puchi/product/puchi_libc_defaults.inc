@@ -1,5 +1,5 @@
 /* Portable strcasecmp / strncasecmp (not ISO C). Emitted under
- * PUCHI_IMPLEMENTATION || PUCHI_TEST after diag push. Uses PUCHI_TOLOWER. */
+ * PUCHI_IMPLEMENTATION || PUCHI_TEST (clibs is TEST without IMPL). */
 static inline int puchi_strcasecmp(const char *a, const char *b) {
   unsigned char ca, cb;
   for (;;) {

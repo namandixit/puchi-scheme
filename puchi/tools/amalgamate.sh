@@ -244,36 +244,81 @@ echo "[puchi] embedding trimmed meta-7.scm..."
 "$PYTHON" "$HELPERS" trim-meta "$CHIBI/lib/meta-7.scm" "$WORKDIR/meta-7-trimmed.scm"
 "$PYTHON" "$HELPERS" embed puchi_meta7_scm "$WORKDIR/meta-7-trimmed.scm" "$WORKDIR/meta7_embed.c"
 
+echo "[puchi] generating host API fragments (puchi_* façade)..."
+"$PYTHON" "$TOOLS/puchi_gen_host_api.py" "$WORKDIR"
+
 echo "[puchi] writing puchi.h..."
 {
+  # ---- 1) Banner (PUCHI_* libc hooks + puchi_host types) ----
   cat "$PRODUCT/puchi_banner.h.in"
 
-  # Silence /W4 and -Weverything on amalgamated Chibi only when compiling the
-  # implementation TU or the PUCHI_TEST harness/stubs (not bare API includes).
-  echo "#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)"
-  cat "$PRODUCT/puchi_diag_push.inc"
-  echo "#endif /* PUCHI_IMPLEMENTATION || PUCHI_TEST (diag push) */"
-
+  # ---- 2) Always-visible host API (stb declarations) ----
   echo "/* ==== puchi feature forces ==== */"
   cat "$WORKDIR/puchi_features_force.h"
-
-  echo "/* ==== resolved feature flags (from features.h; manual omitted) ==== */"
-  cat "$WORKDIR/features.h"
-
-  echo "/* ==== sexp.h (bignum.h inlined mid-file under PUCHI_ENABLE_NUMERICAL_TOWER) ==== */"
-  cat "$WORKDIR/sexp.h"
-
-  echo "/* ==== eval.h ==== */"
-  cat "$WORKDIR/eval.h"
-
-  # Portable strcasecmp bodies (not ISO C): after diag push; impl + TEST TUs.
-  echo "#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)"
-  echo "/* ==== puchi libc defaults (strcasecmp) ==== */"
-  cat "$PRODUCT/puchi_libc_defaults.inc"
-  echo "#endif /* PUCHI_IMPLEMENTATION || PUCHI_TEST (libc defaults) */"
+  echo
+  echo "/* ==== puchi host tunables (from features.h) ==== */"
+  cat "$WORKDIR/features_host.inc"
   echo
 
-  cat "$PRODUCT/puchi_api_decls.inc"
+  # ---- 3) PUCHI_TEST types needed by host ABI (abi_identifier / init_proc) ----
+  echo "#if defined(PUCHI_TEST)"
+  echo "/* ==== puchi_TEST_* harness API ==== */"
+  cat "$PRODUCT/puchi_test_api.inc"
+  echo "#endif /* PUCHI_TEST */"
+  echo
+
+  echo "/* ==== puchi host ABI (types/macros) ==== */"
+  cat "$WORKDIR/host_api_abi.inc"
+  echo
+  echo "/* ==== puchi host API decls ==== */"
+  cat "$WORKDIR/host_api_decls.inc"
+  echo
+
+  # Diag push / CRT: impl or test TUs only
+  echo "#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)"
+  cat "$PRODUCT/puchi_diag_push.inc"
+  echo "/* ==== puchi CRT includes ==== */"
+  cat "$PRODUCT/puchi_crt_includes.inc"
+  echo "/* ==== puchi libc defaults (strcasecmp) ==== */"
+  cat "$PRODUCT/puchi_libc_defaults.inc"
+  echo "#endif /* PUCHI_IMPLEMENTATION || PUCHI_TEST */"
+  echo
+
+  # ---- 4) sexp compatibility surface (TEST stub TUs + IMPLEMENTATION) ----
+  echo "/* ========================================================================== */"
+  echo "#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)"
+  echo "/* ========================================================================== */"
+  echo
+  echo "/* ==== sexp_* / SEXP_* aliases -> puchi_* / PUCHI_* ==== */"
+  cat "$WORKDIR/host_api_aliases.inc"
+  echo
+
+  echo "/* ==== resolved feature flags (Chibi features.h; knobs via PUCHI_*) ==== */"
+  cat "$WORKDIR/features.h"
+  echo
+
+  echo "/* ==== sexp.h (stripped ABI; SEXP_API decls; bignum inlined) ==== */"
+  cat "$WORKDIR/sexp.h"
+  echo
+
+  echo "/* ==== eval.h (stripped ABI; SEXP_API decls) ==== */"
+  cat "$WORKDIR/eval.h"
+  echo
+
+  echo "#endif /* PUCHI_IMPLEMENTATION || PUCHI_TEST (sexp decl surface) */"
+  echo
+
+  # ---- 5) PUCHI_IMPLEMENTATION (Chibi .c bodies + puchi wrappers only) ----
+  echo "/* ========================================================================== */"
+  echo "#if defined(PUCHI_IMPLEMENTATION)"
+  echo "/* ========================================================================== */"
+  echo
+
+  echo "/* ==== puchi impl helpers ==== */"
+  cat "$PRODUCT/puchi_impl_helpers.inc"
+  echo
+  echo "/* ==== puchi impl host ==== */"
+  cat "$PRODUCT/puchi_impl_host.inc"
   echo
 
   echo "/* ==== gc.c ==== */"
@@ -309,6 +354,10 @@ echo "[puchi] writing puchi.h..."
   echo
 
   cat "$PRODUCT/puchi_enable_modules.inc"
+  echo
+
+  echo "/* ==== puchi_* wrappers -> sexp_* ==== */"
+  cat "$WORKDIR/host_api_wrappers.inc"
   echo
 
   cat <<'EOF'

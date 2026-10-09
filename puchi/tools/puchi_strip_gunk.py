@@ -273,11 +273,56 @@ def assert_no_os_residue(puchi_h: str) -> None:
     if re.search(r'"windows"\s*,', code):
         hits.append('"windows" feature')
     without_test = _drop_gated_regions(code, ("PUCHI_TEST",))
-    if '".so"' in without_test or "sexp_so_extension" in without_test:
+    if '".so"' in without_test or "puchi_TEST_so_extension" in without_test:
         hits.append('".so" outside PUCHI_TEST')
     if hits:
         raise SystemExit(
             "puchi.h still has platform residue: " + ", ".join(sorted(set(hits)))
+        )
+
+
+def assert_no_chibi_api_leak(puchi_h: str) -> None:
+    """Always-visible section must not export Chibi SEXP_API or typedef … sexp."""
+    gate = "#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)"
+    idx = puchi_h.find(gate)
+    if idx < 0:
+        raise SystemExit("puchi.h missing PUCHI_IMPLEMENTATION || PUCHI_TEST gate")
+    pre = puchi_h[:idx]
+    code = _strip_c_comments(pre)
+    hits = []
+    if "SEXP_API" in code:
+        hits.append("SEXP_API")
+    if re.search(r"\btypedef\b[^;]*\bsexp\b", code):
+        hits.append("typedef … sexp")
+    if hits:
+        raise SystemExit(
+            "puchi.h always-visible section leaks Chibi API: "
+            + ", ".join(hits)
+        )
+
+
+def assert_finalize_fileno_macro(puchi_h: str) -> None:
+    """PUCHI_FINALIZE_FILENO must keep the Chibi callee name when non-NULL."""
+    if re.search(r"#define\s+PUCHI_FINALIZE_FILENO\s+puchi_finalize_fileno\b", puchi_h):
+        raise SystemExit(
+            "puchi.h: PUCHI_FINALIZE_FILENO must reference sexp_finalize_fileno, "
+            "not puchi_finalize_fileno"
+        )
+
+
+def assert_no_enum_tag_typedef_aliases(puchi_h: str) -> None:
+    """Enum-tag typedef aliases collide with globals (e.g. sexp_opcode_names)."""
+    gate = "#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)"
+    i = puchi_h.find(gate)
+    if i < 0:
+        return
+    j = puchi_h.find("#endif /* PUCHI_IMPLEMENTATION || PUCHI_TEST (sexp decl surface) */", i)
+    if j < 0:
+        return
+    block = puchi_h[i:j]
+    if re.search(r"^\s*typedef\s+enum\b", block, re.M):
+        raise SystemExit(
+            "puchi.h sexp surface: typedef enum … sexp_* aliases are forbidden"
         )
 
 
@@ -317,35 +362,53 @@ def _drop_empty_macro_calls(src: str, names: tuple[str, ...]) -> str:
 
 def _scrub_dl_fields(src: str) -> str:
     """Remove dl members from type/opcode structs and matching initializer slots."""
-    old_type = (
-        "struct sexp_type_struct {\n"
-        "  sexp name, cpl, slots, getters, setters, id, print, dl, finalize_name;\n"
-    )
-    new_type = (
-        "struct sexp_type_struct {\n"
-        "  sexp name, cpl, slots, getters, setters, id, print, finalize_name;\n"
-    )
-    if old_type not in src:
+    # Host ABI may use puchi_* names; .c bodies still use sexp_*/SEXP_*.
+    replaced_type = False
+    for st, ty in (("puchi_type_struct", "puchi"), ("sexp_type_struct", "sexp")):
+        old_type = (
+            f"struct {st} {{\n"
+            f"  {ty} name, cpl, slots, getters, setters, id, print, dl, finalize_name;\n"
+        )
+        new_type = (
+            f"struct {st} {{\n"
+            f"  {ty} name, cpl, slots, getters, setters, id, print, finalize_name;\n"
+        )
+        if old_type in src:
+            src = src.replace(old_type, new_type, 1)
+            replaced_type = True
+            break
+    if not replaced_type:
         raise SystemExit("scrub_amalgamation_residue: type_struct dl field not found")
-    src = src.replace(old_type, new_type, 1)
 
-    old_op = (
-        "struct sexp_opcode_struct {\n"
-        "  sexp name, data, data2, proc, ret_type, arg1_type, arg2_type, arg3_type,\n"
-        "    argn_type, methods, dl;\n"
-    )
-    new_op = (
-        "struct sexp_opcode_struct {\n"
-        "  sexp name, data, data2, proc, ret_type, arg1_type, arg2_type, arg3_type,\n"
-        "    argn_type, methods;\n"
-    )
-    if old_op not in src:
+    replaced_op = False
+    for st, ty in (("puchi_opcode_struct", "puchi"), ("sexp_opcode_struct", "sexp")):
+        old_op = (
+            f"struct {st} {{\n"
+            f"  {ty} name, data, data2, proc, ret_type, arg1_type, arg2_type, arg3_type,\n"
+            f"    argn_type, methods, dl;\n"
+        )
+        new_op = (
+            f"struct {st} {{\n"
+            f"  {ty} name, data, data2, proc, ret_type, arg1_type, arg2_type, arg3_type,\n"
+            f"    argn_type, methods;\n"
+        )
+        if old_op in src:
+            src = src.replace(old_op, new_op, 1)
+            replaced_op = True
+            break
+    if not replaced_op:
         raise SystemExit("scrub_amalgamation_residue: opcode_struct dl field not found")
-    src = src.replace(old_op, new_op, 1)
 
     src = _drop_define_lines(
         src,
-        ("sexp_opcode_dl", "sexp_type_dl", "sexp_context_dl"),
+        (
+            "sexp_opcode_dl",
+            "sexp_type_dl",
+            "sexp_context_dl",
+            "puchi_opcode_dl",
+            "puchi_type_dl",
+            "puchi_context_dl",
+        ),
     )
 
     src = src.replace(
@@ -370,13 +433,25 @@ def _scrub_dl_fields(src: str) -> str:
         "SEXP_TYPE, sexp_offsetof(type, name), 8, 8,",
     )
     src = src.replace(
+        "PUCHI_TYPE, puchi_offsetof(type, name), 9, 9,",
+        "PUCHI_TYPE, puchi_offsetof(type, name), 8, 8,",
+    )
+    src = src.replace(
         "SEXP_OPCODE, sexp_offsetof(opcode, name), 11, 11,",
         "SEXP_OPCODE, sexp_offsetof(opcode, name), 10, 10,",
+    )
+    src = src.replace(
+        "PUCHI_OPCODE, puchi_offsetof(opcode, name), 11, 11,",
+        "PUCHI_OPCODE, puchi_offsetof(opcode, name), 10, 10,",
     )
 
     src = src.replace(
         "SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_",
         "SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, SEXP_",
+    )
+    src = src.replace(
+        "PUCHI_FALSE, PUCHI_FALSE, PUCHI_FALSE, PUCHI_FALSE, PUCHI_FALSE, NULL, NULL, NULL, PUCHI_",
+        "PUCHI_FALSE, PUCHI_FALSE, PUCHI_FALSE, PUCHI_FALSE, PUCHI_FALSE, NULL, NULL, PUCHI_",
     )
     src = re.sub(
         r"(SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, "
@@ -384,9 +459,19 @@ def _scrub_dl_fields(src: str) -> str:
         r"\1, \2, \3",
         src,
     )
+    src = re.sub(
+        r"(PUCHI_FALSE, PUCHI_FALSE, PUCHI_FALSE, PUCHI_FALSE, PUCHI_FALSE, "
+        r"\(puchi\)[A-Za-z0-9_]+), NULL, (NULL|(?:puchi)?\"[^\"]*\"|PUCHI_FINALIZE_[A-Z0-9_]+), (PUCHI_[A-Z0-9_]+)",
+        r"\1, \2, \3",
+        src,
+    )
     src = src.replace(
         "SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, SEXP_FINALIZE_",
         "SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, SEXP_FINALIZE_",
+    )
+    src = src.replace(
+        "PUCHI_FALSE, PUCHI_FALSE, PUCHI_FALSE, PUCHI_FALSE, PUCHI_FALSE, NULL, NULL, PUCHI_FINALIZE_",
+        "PUCHI_FALSE, PUCHI_FALSE, PUCHI_FALSE, PUCHI_FALSE, PUCHI_FALSE, NULL, PUCHI_FINALIZE_",
     )
     src = re.sub(
         r"(SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, "
@@ -474,29 +559,38 @@ def _scrub_nested_guards_and_banners(src: str) -> str:
     for guard in ("SEXP_H", "SEXP_EVAL_H", "SEXP_BIGNUM_H", "SEXP_FEATURES_H"):
         src = _unwrap_include_guard(src, guard)
 
-    # sexp.h opens extern "C" with FLEXIBLE_ARRAY. Keep only the array branch;
-    # banner / api_decls / footer own the linkage braces.
-    flex_pat = re.compile(
+    # Old layout: sexp.h bundled extern "C" with FLEXIBLE_ARRAY.
+    # New stb layout: host ABI already has PUCHI_FLEXIBLE_ARRAY without extern.
+    flex_bundled = re.compile(
         r"#\s*if(?:def|\s+defined\s*\(\s*__cplusplus\s*\))\s*\n"
         r"extern\s+\"C\"\s*\{\s*\n"
-        r"(#\s*define\s+SEXP_FLEXIBLE_ARRAY\s+\[SEXP_FLEXIBLE_ARRAY_SIZE\]\s*\n)"
+        r"(#\s*define\s+(?:SEXP|PUCHI)_FLEXIBLE_ARRAY\s+\[[A-Z_]+_FLEXIBLE_ARRAY_SIZE\]\s*\n)"
         r"#\s*else\s*\n"
-        r"(#\s*define\s+SEXP_FLEXIBLE_ARRAY\s+\[\]\s*\n)"
+        r"(#\s*define\s+(?:SEXP|PUCHI)_FLEXIBLE_ARRAY\s+\[\]\s*\n)"
         r"#\s*endif\s*\n",
     )
-    src, n_flex = flex_pat.subn(
+    src, n_flex = flex_bundled.subn(
         r"#if defined(__cplusplus)\n\1#else\n\2#endif\n",
         src,
         count=1,
     )
-    if n_flex != 1:
+    if n_flex == 0:
+        if not re.search(
+            r"#\s*define\s+PUCHI_FLEXIBLE_ARRAY\s+\[",
+            src,
+        ):
+            raise SystemExit(
+                "scrub: sexp.h extern+FLEXIBLE_ARRAY block not found "
+                f"(matches={n_flex})"
+            )
+    elif n_flex != 1:
         raise SystemExit(
             "scrub: sexp.h extern+FLEXIBLE_ARRAY block not found "
             f"(matches={n_flex})"
         )
 
     # Drop amalgamated-header closes: "} /* extern \"C\" */" only.
-    # Keep product closes: declarations / implementation.
+    # Keep product close: "} /* extern \"C\" implementation */".
     close_inner = re.compile(
         r"#\s*if(?:def|\s+defined\s*\(\s*__cplusplus\s*\))\s*\n"
         r"\}\s*/\*\s*extern\s+\"C\"\s*\*/\s*\n"
@@ -508,46 +602,52 @@ def _scrub_nested_guards_and_banners(src: str) -> str:
             f"scrub: inner extern \"C\" close not found (matches={n_close})"
         )
 
-    # Drop inner empty opens (eval.h); keep banner (first) and the
-    # re-open after "} /* extern \"C\" declarations */".
+    # Drop broken/empty inner opens left after ABI extraction, e.g.
+    #   #if defined(__cplusplus)\nextern "C" {\n#else\n#endif
+    # and plain empty opens from eval.h. Keep the banner open (first).
+    broken_open = re.compile(
+        r"#\s*if(?:def|\s+defined\s*\(\s*__cplusplus\s*\))\s*\n"
+        r"extern\s+\"C\"\s*\{\s*\n"
+        r"(?:#\s*else\s*\n)?"
+        r"#\s*endif\s*\n",
+    )
+    matches = list(broken_open.finditer(src))
+    if not matches:
+        raise SystemExit("scrub: banner extern \"C\" open missing")
+    # Keep first (banner); remove the rest that are empty/broken opens.
+    for m in reversed(matches[1:]):
+        # Only remove if the match has no real body (already constrained by regex)
+        src = src[: m.start()] + src[m.end() :]
+
+    # Banner open is `#if __cplusplus / extern "C" { / #endif` (close at footer).
+    # Remove any additional empty opens (eval.h / leftover stripped sexp.h).
     empty_open = re.compile(
         r"#\s*if(?:def|\s+defined\s*\(\s*__cplusplus\s*\))\s*\n"
         r"extern\s+\"C\"\s*\{\s*\n"
         r"#\s*endif\s*\n",
     )
-    decl_close = re.search(
-        r"\}\s*/\*\s*extern\s+\"C\"\s+declarations\s*\*/",
-        src,
-    )
-    decl_pos = decl_close.start() if decl_close else len(src)
-    matches = list(empty_open.finditer(src))
-    if not matches:
+    ms = list(empty_open.finditer(src))
+    if not ms:
         raise SystemExit("scrub: banner extern \"C\" open missing")
-    remove = [m for i, m in enumerate(matches) if i != 0 and m.start() < decl_pos]
-    for m in reversed(remove):
+    for m in reversed(ms[1:]):
         src = src[: m.start()] + src[m.end() :]
 
-    if not re.search(
-        r"\}\s*/\*\s*extern\s+\"C\"\s+declarations\s*\*/",
-        src,
-    ):
-        raise SystemExit("scrub: api_decls extern \"C\" close missing")
     if not re.search(
         r"\}\s*/\*\s*extern\s+\"C\"\s+implementation\s*\*/",
         src,
     ):
         raise SystemExit("scrub: footer extern \"C\" close missing")
     if re.search(
-        r'extern\s+"C"\s*\{\s*\n#\s*define\s+SEXP_FLEXIBLE_ARRAY',
+        r'extern\s+"C"\s*\{\s*\n#\s*define\s+(?:SEXP|PUCHI)_FLEXIBLE_ARRAY',
         src,
     ):
         raise SystemExit("scrub: FLEXIBLE_ARRAY still bundled with extern \"C\"")
     if close_inner.search(src):
         raise SystemExit("scrub: inner extern \"C\" close still present")
-    n_empty_open = len(empty_open.findall(src))
-    if n_empty_open != 2:
+    n_banner_open = len(empty_open.findall(src))
+    if n_banner_open != 1:
         raise SystemExit(
-            f"scrub: expected 2 product extern \"C\" opens, got {n_empty_open}"
+            f"scrub: expected 1 product extern \"C\" open, got {n_banner_open}"
         )
 
     src = re.sub(
@@ -636,21 +736,23 @@ def scrub_amalgamation_residue(src: str) -> str:
         src = re.sub(rf"^[ \t]*{name}\s*\([^;]*\);\n", "", src, flags=re.M)
     src = _drop_empty_macro_calls(src, empty_macros_drop)
 
-    # Ensure harness-facing empty stubs exist.
-    if "#define sexp_context_gc_usecs" not in src:
+    # Ensure harness-facing empty stubs exist (puchi_* body and/or sexp_* alias).
+    if "#define puchi_context_gc_usecs" not in src and "#define sexp_context_gc_usecs" not in src:
+        anchor = "#define puchi_context_params(x)" if "#define puchi_context_params(x)" in src else "#define sexp_context_params(x)"
         src = src.replace(
-            "#define sexp_context_params(x)",
-            "#define sexp_context_gc_usecs(x) 0\n#define sexp_context_params(x)",
+            anchor,
+            "#define puchi_context_gc_usecs(x) 0\n#define sexp_context_gc_usecs puchi_context_gc_usecs\n"
+            + anchor,
             1,
         )
-    for name, args in (
-        ("sexp_maybe_block_port", "(ctx, in, forcep)"),
-        ("sexp_maybe_unblock_port", "(ctx, in)"),
-        ("sexp_check_block_port", "(ctx, in, forcep)"),
+    for pname, sname in (
+        ("puchi_maybe_block_port", "sexp_maybe_block_port"),
+        ("puchi_maybe_unblock_port", "sexp_maybe_unblock_port"),
+        ("puchi_check_block_port", "sexp_check_block_port"),
     ):
-        if f"#define {name}" not in src:
+        if f"#define {pname}" not in src and f"#define {sname}" not in src:
             raise SystemExit(
-                f"scrub_amalgamation_residue: missing harness stub #{name}"
+                f"scrub_amalgamation_residue: missing harness stub #{pname}"
             )
 
     src = re.sub(r"^[ \t]*sexp_gc_init\s*\(\s*\)\s*;\n", "", src, flags=re.M)
@@ -716,14 +818,14 @@ def scrub_amalgamation_residue(src: str) -> str:
 
     # Hard-fail if deleted surfaces reappear.
     for pat, label in (
-        (r"struct\s+sexp_huff_entry", "sexp_huff_entry"),
-        (r"\bsexp_isymbolp\b", "sexp_isymbolp"),
-        (r"\bSEXP_ISYMBOL_TAG\b", "SEXP_ISYMBOL_TAG"),
-        (r"\bSEXP_IFLONUM_TAG\b", "SEXP_IFLONUM_TAG"),
-        (r"\bSEXP_F8\b", "SEXP_F8"),
-        (r"\bSEXP_F16\b", "SEXP_F16"),
-        (r"\bsexp_f8vectorp\b", "sexp_f8vectorp"),
-        (r"\bsexp_f16vectorp\b", "sexp_f16vectorp"),
+        (r"struct\s+(?:sexp|puchi)_huff_entry", "sexp_huff_entry"),
+        (r"\b(?:sexp|puchi)_isymbolp\b", "sexp_isymbolp"),
+        (r"\b(?:SEXP|PUCHI)_ISYMBOL_TAG\b", "SEXP_ISYMBOL_TAG"),
+        (r"\b(?:SEXP|PUCHI)_IFLONUM_TAG\b", "SEXP_IFLONUM_TAG"),
+        (r"\b(?:SEXP|PUCHI)_F8\b", "SEXP_F8"),
+        (r"\b(?:SEXP|PUCHI)_F16\b", "SEXP_F16"),
+        (r"\b(?:sexp|puchi)_f8vectorp\b", "sexp_f8vectorp"),
+        (r"\b(?:sexp|puchi)_f16vectorp\b", "sexp_f16vectorp"),
         (r'clibs\.c', "clibs.c mention"),
         (r'"RESERVE"', "opcode name RESERVE"),
         (r'"YIELD"', "opcode name YIELD"),
@@ -762,68 +864,70 @@ def _scrub_vm_reserved_macros(src: str) -> str:
 
 def _scrub_statement_macros_extra_semi(src: str) -> str:
     """Wrap statement macros in do-while(0) so caller ';' is not empty."""
+
+    def _wrap_or_die(src: str, old: str, new: str, label: str) -> str:
+        if old in src:
+            return src.replace(old, new, 1)
+        raise SystemExit(f"scrub_amalgamation_residue: {label} macro not found")
+
+    # Prefer puchi_* host ABI names; fall back to sexp_* if present.
+    if "#define puchi_negate_exact" in src:
+        pref = "puchi"
+    else:
+        pref = "sexp"
+
     exact_old = (
-        "#define sexp_negate_exact(x)                            \\\n"
-        "  if (sexp_bignump(x))                                  \\\n"
-        "    sexp_bignum_sign(x) = -sexp_bignum_sign(x);         \\\n"
-        "  else if (sexp_fixnump(x))                             \\\n"
-        "    x = sexp_fx_neg(x);\n"
+        f"#define {pref}_negate_exact(x)                            \\\n"
+        f"  if ({pref}_bignump(x))                                  \\\n"
+        f"    {pref}_bignum_sign(x) = -{pref}_bignum_sign(x);         \\\n"
+        f"  else if ({pref}_fixnump(x))                             \\\n"
+        f"    x = {pref}_fx_neg(x);\n"
     )
     exact_new = (
-        "#define sexp_negate_exact(x) do {                       \\\n"
-        "  if (sexp_bignump(x))                                  \\\n"
-        "    sexp_bignum_sign(x) = -sexp_bignum_sign(x);         \\\n"
-        "  else if (sexp_fixnump(x))                             \\\n"
-        "    x = sexp_fx_neg(x);                                 \\\n"
-        "} while (0)\n"
+        f"#define {pref}_negate_exact(x) do {{                       \\\n"
+        f"  if ({pref}_bignump(x))                                  \\\n"
+        f"    {pref}_bignum_sign(x) = -{pref}_bignum_sign(x);         \\\n"
+        f"  else if ({pref}_fixnump(x))                             \\\n"
+        f"    x = {pref}_fx_neg(x);                                 \\\n"
+        f"}} while (0)\n"
     )
-    if exact_old not in src:
-        raise SystemExit(
-            "scrub_amalgamation_residue: sexp_negate_exact macro not found"
-        )
-    src = src.replace(exact_old, exact_new, 1)
+    src = _wrap_or_die(src, exact_old, exact_new, f"{pref}_negate_exact")
 
     neg_old = (
-        "#define sexp_negate(x)                                  \\\n"
-        "  if (sexp_flonump(x))                                  \\\n"
-        "    sexp_negate_flonum(x);                              \\\n"
-        "  else                                                  \\\n"
-        "    sexp_negate_exact(x)\n"
+        f"#define {pref}_negate(x)                                  \\\n"
+        f"  if ({pref}_flonump(x))                                  \\\n"
+        f"    {pref}_negate_flonum(x);                              \\\n"
+        f"  else                                                  \\\n"
+        f"    {pref}_negate_exact(x)\n"
     )
     neg_new = (
-        "#define sexp_negate(x) do {                             \\\n"
-        "  if (sexp_flonump(x))                                  \\\n"
-        "    sexp_negate_flonum(x);                              \\\n"
-        "  else                                                  \\\n"
-        "    sexp_negate_exact(x);                               \\\n"
-        "} while (0)\n"
+        f"#define {pref}_negate(x) do {{                             \\\n"
+        f"  if ({pref}_flonump(x))                                  \\\n"
+        f"    {pref}_negate_flonum(x);                              \\\n"
+        f"  else                                                  \\\n"
+        f"    {pref}_negate_exact(x);                               \\\n"
+        f"}} while (0)\n"
     )
-    if neg_old not in src:
-        raise SystemExit("scrub_amalgamation_residue: sexp_negate macro not found")
-    src = src.replace(neg_old, neg_new, 1)
+    src = _wrap_or_die(src, neg_old, neg_new, f"{pref}_negate")
 
     ratio_old = (
-        "#define sexp_negate_maybe_ratio(x)                      \\\n"
-        "  if (sexp_ratiop(x)) {                                 \\\n"
-        "    sexp_negate_exact(sexp_ratio_numerator(x));         \\\n"
-        "  } else {                                              \\\n"
-        "    sexp_negate(x);                                     \\\n"
-        "  }\n"
+        f"#define {pref}_negate_maybe_ratio(x)                      \\\n"
+        f"  if ({pref}_ratiop(x)) {{                                 \\\n"
+        f"    {pref}_negate_exact({pref}_ratio_numerator(x));         \\\n"
+        f"  }} else {{                                              \\\n"
+        f"    {pref}_negate(x);                                     \\\n"
+        f"  }}\n"
     )
     ratio_new = (
-        "#define sexp_negate_maybe_ratio(x) do {                 \\\n"
-        "  if (sexp_ratiop(x)) {                                 \\\n"
-        "    sexp_negate_exact(sexp_ratio_numerator(x));         \\\n"
-        "  } else {                                              \\\n"
-        "    sexp_negate(x);                                     \\\n"
-        "  }                                                     \\\n"
-        "} while (0)\n"
+        f"#define {pref}_negate_maybe_ratio(x) do {{                 \\\n"
+        f"  if ({pref}_ratiop(x)) {{                                 \\\n"
+        f"    {pref}_negate_exact({pref}_ratio_numerator(x));         \\\n"
+        f"  }} else {{                                              \\\n"
+        f"    {pref}_negate(x);                                     \\\n"
+        f"  }}                                                     \\\n"
+        f"}} while (0)\n"
     )
-    if ratio_old not in src:
-        raise SystemExit(
-            "scrub_amalgamation_residue: sexp_negate_maybe_ratio macro not found"
-        )
-    src = src.replace(ratio_old, ratio_new, 1)
+    src = _wrap_or_die(src, ratio_old, ratio_new, f"{pref}_negate_maybe_ratio")
 
     # sexp_ensure_stack: ends with '}' then caller ';' → empty statement.
     # Runs after _scrub_vm_reserved_macros so _ARG1 is already PUCHI_ARG1.
@@ -884,67 +988,67 @@ def _scrub_statement_macros_extra_semi(src: str) -> str:
 
 def _scrub_huff_isymbol_minifloat(src: str) -> str:
     """Remove ungated HUFF / immediate-symbol / mini-float declarations."""
-    huff = (
-        "/* optional huffman-compressed immediate symbols */\n"
-        "struct sexp_huff_entry {\n"
-        "  unsigned char len;\n"
-        "  unsigned short bits;\n"
-        "};\n"
+    huff_re = re.compile(
+        r"/\* optional huffman-compressed immediate symbols \*/\n"
+        r"struct (?:sexp|puchi)_huff_entry \{\n"
+        r"  unsigned char len;\n"
+        r"  unsigned short bits;\n"
+        r"\};\n",
     )
-    if huff not in src:
-        # Allow already-scrubbed or whitespace variants
-        huff_re = re.compile(
-            r"/\* optional huffman-compressed immediate symbols \*/\n"
-            r"struct sexp_huff_entry \{\n"
-            r"  unsigned char len;\n"
-            r"  unsigned short bits;\n"
-            r"\};\n",
-        )
-        src2, n = huff_re.subn("", src, count=1)
-        if n != 1:
-            raise SystemExit("scrub: sexp_huff_entry block not found")
-        src = src2
-    else:
-        src = src.replace(huff, "", 1)
+    src2, n = huff_re.subn("", src, count=1)
+    if n != 1:
+        raise SystemExit("scrub: sexp_huff_entry block not found")
+    src = src2
 
     src = src.replace(
         " *                0110:  immediate symbol (optional)\n"
         " *            00001110:  immediate flonum (optional)\n",
         "",
     )
-    src = re.sub(r"#\s*define\s+SEXP_ISYMBOL_TAG\s+\d+\n", "", src)
-    src = re.sub(r"#\s*define\s+SEXP_IFLONUM_TAG\s+\d+\n", "", src)
+    src = re.sub(r"#\s*define\s+(?:SEXP|PUCHI)_ISYMBOL_TAG\s+\d+\n", "", src)
+    src = re.sub(r"#\s*define\s+(?:SEXP|PUCHI)_IFLONUM_TAG\s+\d+\n", "", src)
     src = re.sub(
-        r"#\s*define\s+sexp_isymbolp\(x\)\s+[^\n]+\n",
+        r"#\s*define\s+(?:sexp|puchi)_isymbolp\(x\)\s+[^\n]+\n",
         "",
         src,
     )
+    # Drop aliases that pointed at removed tags/predicates.
+    src = re.sub(r"#\s*define\s+SEXP_ISYMBOL_TAG\s+PUCHI_ISYMBOL_TAG\n", "", src)
+    src = re.sub(r"#\s*define\s+SEXP_IFLONUM_TAG\s+PUCHI_IFLONUM_TAG\n", "", src)
+    src = re.sub(r"#\s*define\s+sexp_isymbolp\s+puchi_isymbolp\n", "", src)
 
     # Mini-float uniform vector surface (always-off).
     src = re.sub(
-        r"#\s*define\s+sexp_f8vectorp\(x\)\s+[^\n]+\n",
+        r"#\s*define\s+(?:sexp|puchi)_f8vectorp\(x\)\s+[^\n]+\n",
         "",
         src,
     )
     src = re.sub(
-        r"#\s*define\s+sexp_f16vectorp\(x\)\s+[^\n]+\n",
+        r"#\s*define\s+(?:sexp|puchi)_f16vectorp\(x\)\s+[^\n]+\n",
         "",
         src,
     )
+    src = re.sub(r"#\s*define\s+sexp_f8vectorp\s+puchi_f8vectorp\n", "", src)
+    src = re.sub(r"#\s*define\s+sexp_f16vectorp\s+puchi_f16vectorp\n", "", src)
     old_sizes = (
         "static const unsigned char sexp_uvector_sizes[] = {\n"
         "  0, 1, 8, 8, 16, 16, 32, 32, 64, 64, 32, 64, 64, 128, 8, 16};\n"
         'static const unsigned char sexp_uvector_chars[] = "#ususususuffccff";\n'
     )
     new_sizes = (
-        "static const unsigned char sexp_uvector_sizes[] = {\n"
+        "static const unsigned char puchi_uvector_sizes[] = {\n"
         "  0, 1, 8, 8, 16, 16, 32, 32, 64, 64, 32, 64, 64, 128};\n"
-        'static const unsigned char sexp_uvector_chars[] = "#ususususuffcc";\n'
+        'static const unsigned char puchi_uvector_chars[] = "#ususususuffcc";\n'
+        "#define sexp_uvector_sizes puchi_uvector_sizes\n"
+        "#define sexp_uvector_chars puchi_uvector_chars\n"
     )
     if old_sizes not in src:
         raise SystemExit("scrub: uvector sizes/chars (with f8/f16) not found")
     src = src.replace(old_sizes, new_sizes, 1)
     src = src.replace("  SEXP_C128,\n  SEXP_F8,\n  SEXP_F16,\n", "  SEXP_C128,\n")
+    src = src.replace("  PUCHI_C128,\n  PUCHI_F8,\n  PUCHI_F16,\n", "  PUCHI_C128,\n")
+    src = re.sub(r"#\s*define\s+SEXP_F8\s+PUCHI_F8\n", "", src)
+    src = re.sub(r"#\s*define\s+SEXP_F16\s+PUCHI_F16\n", "", src)
 
     return src
 

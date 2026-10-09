@@ -23,29 +23,29 @@ static int fail(const char *msg) {
   return 1;
 }
 
-static int expect_fix(sexp ctx, const char *expr, long want) {
-  sexp res = sexp_eval_string(ctx, expr, (sexp_sint_t)-1, NULL);
-  if (sexp_exceptionp(res) || !sexp_fixnump(res) ||
-      (long)sexp_unbox_fixnum(res) != want) {
+static int expect_fix(puchi ctx, const char *expr, long want) {
+  puchi res = puchi_eval_string(ctx, expr, (puchi_sint_t)-1, NULL);
+  if (puchi_exceptionp(res) || !puchi_fixnump(res) ||
+      (long)puchi_unbox_fixnum(res) != want) {
     fprintf(stderr, "FAIL fixnum %s\n", expr);
     return 1;
   }
   return 0;
 }
 
-static int expect_flo(sexp ctx, const char *expr, double want) {
-  sexp res = sexp_eval_string(ctx, expr, (sexp_sint_t)-1, NULL);
-  if (sexp_exceptionp(res) || !sexp_flonump(res) ||
-      fabs(sexp_flonum_value(res) - want) > 1e-9) {
+static int expect_flo(puchi ctx, const char *expr, double want) {
+  puchi res = puchi_eval_string(ctx, expr, (puchi_sint_t)-1, NULL);
+  if (puchi_exceptionp(res) || !puchi_flonump(res) ||
+      fabs(puchi_flonum_value(res) - want) > 1e-9) {
     fprintf(stderr, "FAIL flonum %s\n", expr);
     return 1;
   }
   return 0;
 }
 
-static int expect_true(sexp ctx, const char *expr) {
-  sexp res = sexp_eval_string(ctx, expr, (sexp_sint_t)-1, NULL);
-  if (sexp_exceptionp(res) || res == SEXP_FALSE) {
+static int expect_true(puchi ctx, const char *expr) {
+  puchi res = puchi_eval_string(ctx, expr, (puchi_sint_t)-1, NULL);
+  if (puchi_exceptionp(res) || res == PUCHI_FALSE) {
     fprintf(stderr, "FAIL true %s\n", expr);
     return 1;
   }
@@ -53,13 +53,13 @@ static int expect_true(sexp ctx, const char *expr) {
 }
 
 int main(void) {
-  sexp ctx = sexp_create_context((size_t)0, (size_t)0, &smoke_host);
-  sexp res;
+  puchi ctx = puchi_create_context((size_t)0, (size_t)0, &smoke_host);
+  puchi res;
   int nfail = 0;
 
-  if (!ctx || sexp_exceptionp(ctx)) return fail("create_context");
-  res = sexp_load_default_libs(ctx);
-  if (sexp_exceptionp(res)) return fail("load_default_libs");
+  if (!ctx || puchi_exceptionp(ctx)) return fail("create_context");
+  res = puchi_load_default_libs(ctx);
+  if (puchi_exceptionp(res)) return fail("load_default_libs");
 
 #if defined(PUCHI_INTEGER_ONLY)
   return fail("default config should not be INTEGER_ONLY");
@@ -86,6 +86,6 @@ int main(void) {
     return 1;
   }
   printf("default ok (%d checks)\n", 12);
-  sexp_delete_context(ctx);
+  puchi_delete_context(ctx);
   return 0;
 }

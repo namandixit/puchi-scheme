@@ -26,23 +26,23 @@ static int fail(const char *msg) {
   return 1;
 }
 
-static int expect_fix(sexp ctx, const char *expr, long want) {
-  sexp res = sexp_eval_string(ctx, expr, (sexp_sint_t)-1, NULL);
-  if (sexp_exceptionp(res)) {
+static int expect_fix(puchi ctx, const char *expr, long want) {
+  puchi res = puchi_eval_string(ctx, expr, (puchi_sint_t)-1, NULL);
+  if (puchi_exceptionp(res)) {
     fprintf(stderr, "FAIL eval %s: exception\n", expr);
-    sexp_print_exception(ctx, res, sexp_current_error_port(ctx));
+    puchi_print_exception(ctx, res, puchi_current_error_port(ctx));
     return 1;
   }
-  if (!sexp_fixnump(res) || (long)sexp_unbox_fixnum(res) != want) {
+  if (!puchi_fixnump(res) || (long)puchi_unbox_fixnum(res) != want) {
     fprintf(stderr, "FAIL %s => expected %ld\n", expr, want);
     return 1;
   }
   return 0;
 }
 
-static int expect_true(sexp ctx, const char *expr) {
-  sexp res = sexp_eval_string(ctx, expr, (sexp_sint_t)-1, NULL);
-  if (sexp_exceptionp(res) || res == SEXP_FALSE) {
+static int expect_true(puchi ctx, const char *expr) {
+  puchi res = puchi_eval_string(ctx, expr, (puchi_sint_t)-1, NULL);
+  if (puchi_exceptionp(res) || res == PUCHI_FALSE) {
     fprintf(stderr, "FAIL expect true: %s\n", expr);
     return 1;
   }
@@ -50,13 +50,13 @@ static int expect_true(sexp ctx, const char *expr) {
 }
 
 int main(void) {
-  sexp ctx = sexp_create_context((size_t)0, (size_t)0, &smoke_host);
-  sexp res;
+  puchi ctx = puchi_create_context((size_t)0, (size_t)0, &smoke_host);
+  puchi res;
   int nfail = 0;
 
-  if (!ctx || sexp_exceptionp(ctx)) return fail("create_context");
-  res = sexp_load_default_libs(ctx);
-  if (sexp_exceptionp(res)) return fail("load_default_libs");
+  if (!ctx || puchi_exceptionp(ctx)) return fail("create_context");
+  res = puchi_load_default_libs(ctx);
+  if (puchi_exceptionp(res)) return fail("load_default_libs");
 
 #if !defined(PUCHI_INTEGER_ONLY)
   return fail("PUCHI_INTEGER_ONLY should be set");
@@ -87,6 +87,6 @@ int main(void) {
     return 1;
   }
   printf("integer-only ok (%d checks)\n", 14);
-  sexp_delete_context(ctx);
+  puchi_delete_context(ctx);
   return 0;
 }

@@ -80,8 +80,8 @@
 #include "../../lib/chibi/ast.c"
 #undef sexp_init_library
 
-extern struct sexp_library_entry_t puchi_harness_static_libraries[];
-struct sexp_library_entry_t puchi_harness_static_libraries[] = {
+extern struct puchi_library_entry_t puchi_harness_static_libraries[];
+struct puchi_library_entry_t puchi_harness_static_libraries[] = {
   { "lib/srfi/98/env", sexp_init_lib_srfi_98 },
   { "lib/srfi/69/hash", sexp_init_lib_srfi_69 },
   { "lib/srfi/39/param", sexp_init_lib_srfi_39 },

@@ -27,6 +27,9 @@ from puchi_host_embed import (
     trim_init7_load_port,
 )
 from puchi_strip_gunk import (
+    assert_no_chibi_api_leak,
+    assert_finalize_fileno_macro,
+    assert_no_enum_tag_typedef_aliases,
     assert_no_os_residue,
     assert_no_process_globals,
     assert_no_project_includes,
@@ -489,10 +492,12 @@ def scrub_features_h(text: str) -> str:
         "#endif\n"
     )
     inf_new = (
-        "/* puchi: IEEE-754 bit patterns (no OS / division tricks) */\n"
+        "/* puchi: IEEE-754 bit patterns under IMPLEMENTATION (puchi_f64_from_bits) */\n"
+        "#if defined(PUCHI_IMPLEMENTATION)\n"
         "#define sexp_pos_infinity (puchi_f64_from_bits(0x7FF0000000000000ULL))\n"
         "#define sexp_neg_infinity (puchi_f64_from_bits(0xFFF0000000000000ULL))\n"
         "#define sexp_nan          (puchi_f64_from_bits(0x7FF8000000000000ULL))\n"
+        "#endif\n"
     )
     if inf_old not in text:
         raise SystemExit("scrub_features_h: inf/nan block not found")
@@ -567,15 +572,10 @@ def scrub_features_h(text: str) -> str:
                           "/* Feature signature.")
     if abi_start < 0:
         raise SystemExit("scrub_features_h: ABI signature section not found")
+    # Harness ABI types live in product/puchi_test_api.inc (before sexp.h).
     abi_new = (
         "\n"
-        "/* puchi: no shared-lib / image ABI fingerprint. Harness clibs only. */\n"
-        "#if defined(PUCHI_TEST)\n"
-        "typedef char sexp_abi_identifier_t[8];\n"
-        '#define SEXP_ABI_IDENTIFIER "--------"\n'
-        "#define sexp_version_compatible(ctx, subver, genver) 1\n"
-        "#define sexp_abi_compatible(ctx, subabi, genabi) 1\n"
-        "#endif\n"
+        "/* puchi: ABI fingerprint omitted; see puchi_test_api.inc under PUCHI_TEST */\n"
     )
     text = text[:abi_start] + abi_new
 
@@ -1172,6 +1172,9 @@ def main() -> None:
         assert_no_os_residue(text)
         assert_no_sexp_use(text)
         assert_no_process_globals(text)
+        assert_no_chibi_api_leak(text)
+        assert_finalize_fileno_macro(text)
+        assert_no_enum_tag_typedef_aliases(text)
         write_text_lf(path, text)
 
 

@@ -55,6 +55,10 @@ echo === amalgamating ===
 "C:\Program Files\Git\bin\bash.exe" -lc "./puchi/tools/amalgamate.sh"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 
+echo === compile clibs surface probe ^(PUCHI_TEST, no IMPLEMENTATION^) ===
+cl /nologo /W4 /O2 /D_CRT_SECURE_NO_WARNINGS /DPUCHI_ENABLE_NUMERICAL_TOWER /Fo%OUT%\clibs_surface_probe.obj /c %TEST%\test_clibs_surface_probe.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
+
 call :do_suite msvc
 if %ERRORLEVEL% NEQ 0 exit /b 1
 call :do_suite clang

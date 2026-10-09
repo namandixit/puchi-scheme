@@ -39,10 +39,10 @@ static PUCHI_NORETURN void stats_fatal(void *ud, int c, const char *m) {
 
 static int run_ctx(host_stats *st, const char *expr, long expect) {
   puchi_host host = { st, stats_alloc, stats_free, stats_diag, stats_fatal };
-  sexp ctx, res;
+  puchi ctx, res;
   size_t before = st->allocs;
-  ctx = sexp_create_context((size_t)0, (size_t)0, &host);
-  if (!ctx || sexp_exceptionp(ctx)) {
+  ctx = puchi_create_context((size_t)0, (size_t)0, &host);
+  if (!ctx || puchi_exceptionp(ctx)) {
     fprintf(stderr, "[%s] create_context failed\n", st->tag);
     return 1;
   }
@@ -50,18 +50,18 @@ static int run_ctx(host_stats *st, const char *expr, long expect) {
     fprintf(stderr, "[%s] create did not use host alloc\n", st->tag);
     return 2;
   }
-  res = sexp_load_default_libs(ctx);
-  if (sexp_exceptionp(res)) {
+  res = puchi_load_default_libs(ctx);
+  if (puchi_exceptionp(res)) {
     fprintf(stderr, "[%s] load_default_libs failed\n", st->tag);
     return 3;
   }
-  res = sexp_eval_string(ctx, expr, (sexp_sint_t)-1, NULL);
-  if (sexp_exceptionp(res) || !sexp_fixnump(res) ||
-      (long)sexp_unbox_fixnum(res) != expect) {
+  res = puchi_eval_string(ctx, expr, (puchi_sint_t)-1, NULL);
+  if (puchi_exceptionp(res) || !puchi_fixnump(res) ||
+      (long)puchi_unbox_fixnum(res) != expect) {
     fprintf(stderr, "[%s] eval failed\n", st->tag);
     return 4;
   }
-  sexp_delete_context(ctx);
+  puchi_delete_context(ctx);
   return 0;
 }
 

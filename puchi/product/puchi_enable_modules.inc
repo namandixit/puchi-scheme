@@ -164,21 +164,21 @@ static int puchi_modules_enabled_p(sexp ctx) {
   return tmp != SEXP_VOID;
 }
 
-sexp sexp_enable_modules(sexp ctx, const puchi_module_ops *ops) {
+puchi puchi_enable_modules(puchi ctx, const puchi_module_ops *ops) {
   sexp env, meta, tmp, sym;
   sexp_heap h;
   sexp_gc_var3(meta_gc, tmp_gc, sym_gc);
   if (!ctx || sexp_exceptionp(ctx)) return ctx;
   if (!ops || !ops->exists || !ops->read || !ops->free_buf)
-    return sexp_user_exception(ctx, NULL, "sexp_enable_modules: incomplete puchi_module_ops", SEXP_FALSE);
+    return sexp_user_exception(ctx, NULL, "puchi_enable_modules: incomplete puchi_module_ops", SEXP_FALSE);
 
   h = sexp_context_heap(ctx);
   if (!h)
-    return sexp_user_exception(ctx, NULL, "sexp_enable_modules: no heap", SEXP_FALSE);
+    return sexp_user_exception(ctx, NULL, "puchi_enable_modules: no heap", SEXP_FALSE);
   h->modules = *ops;
   h->modules_set = 1;
 
-  tmp = sexp_load_default_libs(ctx);
+  tmp = puchi_load_default_libs(ctx);
   if (sexp_exceptionp(tmp)) return tmp;
   env = sexp_context_env(ctx);
 

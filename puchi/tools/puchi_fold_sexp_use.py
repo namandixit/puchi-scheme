@@ -460,7 +460,26 @@ def fix_sexp_use_c_rvalues(src: str) -> str:
         raise SystemExit("fix_sexp_use_c_rvalues: SEXP_NUM_NUMBER_TYPES not found")
     src = src.replace(old_num, new_num, 1)
 
-    # exact_negativep / exact_positivep
+    # exact_negativep / exact_positivep (host ABI uses puchi_*; aliases keep sexp_*)
+    old_neg_puchi = (
+        "#define puchi_exact_negativep(x) (puchi_fixnump(x) ? (puchi_unbox_fixnum(x) < 0) \\\n"
+        "                                 : ((SEXP_USE_BIGNUMS && puchi_bignump(x)) \\\n"
+        "                                    && (puchi_bignum_sign(x) < 0)))\n"
+        "#define puchi_exact_positivep(x) (puchi_fixnump(x) ? (puchi_unbox_fixnum(x) > 0) \\\n"
+        "                                 : ((SEXP_USE_BIGNUMS && puchi_bignump(x)) \\\n"
+        "                                    && (puchi_bignum_sign(x) > 0)))\n"
+    )
+    new_neg_puchi = (
+        "#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)\n"
+        "#define puchi_exact_negativep(x) (puchi_fixnump(x) ? (puchi_unbox_fixnum(x) < 0) \\\n"
+        "                                 : (puchi_bignump(x) && (puchi_bignum_sign(x) < 0)))\n"
+        "#define puchi_exact_positivep(x) (puchi_fixnump(x) ? (puchi_unbox_fixnum(x) > 0) \\\n"
+        "                                 : (puchi_bignump(x) && (puchi_bignum_sign(x) > 0)))\n"
+        "#else\n"
+        "#define puchi_exact_negativep(x) (puchi_fixnump(x) && (puchi_unbox_fixnum(x) < 0))\n"
+        "#define puchi_exact_positivep(x) (puchi_fixnump(x) && (puchi_unbox_fixnum(x) > 0))\n"
+        "#endif\n"
+    )
     old_neg = (
         "#define sexp_exact_negativep(x) (sexp_fixnump(x) ? (sexp_unbox_fixnum(x) < 0) \\\n"
         "                                 : ((SEXP_USE_BIGNUMS && sexp_bignump(x)) \\\n"
@@ -480,9 +499,12 @@ def fix_sexp_use_c_rvalues(src: str) -> str:
         "#define sexp_exact_positivep(x) (sexp_fixnump(x) && (sexp_unbox_fixnum(x) > 0))\n"
         "#endif\n"
     )
-    if old_neg not in src:
+    if old_neg_puchi in src:
+        src = src.replace(old_neg_puchi, new_neg_puchi, 1)
+    elif old_neg in src:
+        src = src.replace(old_neg, new_neg, 1)
+    else:
         raise SystemExit("fix_sexp_use_c_rvalues: exact_negativep/positivep not found")
-    src = src.replace(old_neg, new_neg, 1)
 
     # packed-string C rvalues (flag is always 0 → !flag is 1)
     src = src.replace(
