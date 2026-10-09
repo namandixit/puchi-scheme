@@ -81,11 +81,23 @@ int main(void) {
   /* No bignum promotion — result stays an exact integer (wrapped fixnum). */
   nfail += expect_true(ctx, "(exact-integer? (* 1000000000 1000000000))");
 
+  /* Checked host conversion, fixnum path. */
+  {
+    int64_t s = 0;
+    uint64_t u = 0;
+    if (!puchi_integer_to_sint64(puchi_make_fixnum(-7), &s) || s != -7)
+      nfail += fail("puchi_integer_to_sint64(-7)");
+    if (puchi_integer_to_uint64(puchi_make_fixnum(-7), &u))
+      nfail += fail("puchi_integer_to_uint64(-7) should not fit");
+    if (!puchi_integer_to_uint64(puchi_make_fixnum(7), &u) || u != 7)
+      nfail += fail("puchi_integer_to_uint64(7)");
+  }
+
   if (nfail) {
     fprintf(stderr, "%d integer-only checks failed\n", nfail);
     return 1;
   }
-  printf("integer-only ok (%d checks)\n", 14);
+  printf("integer-only ok (%d checks)\n", 17);
   puchi_delete_context(ctx);
   return 0;
 }

@@ -32,6 +32,7 @@ The amalgamated header is platform-independent for embeds:
 
 - **Host owns memory and I/O.** Pass a `puchi_host` with `alloc` / `free` at context create. Ports use `puchi_stream_ops`. A null or incomplete host does not fall back to CRT `malloc`.
 - **Host API surface.** Use always-visible `puchi_*` / `PUCHI_*` entrypoints (`puchi_create_context`, `puchi_eval_string`, …) and symbols listed as HOST in `product/puchi_host_symbols.txt`, plus the HOST accessors in `product/`. Always-visible ABI may include INTERNAL tag/mask macros as glue for HOST accessors — do not treat opcode enums, core-form codes, or GC freelist types as the host contract (those stay under `PUCHI_IMPLEMENTATION` / `PUCHI_TEST`).
+- **Converting script integers in host code.** Use `puchi_integer_to_sint64` / `puchi_integer_to_uint64`: they accept fixnums and bignums and return 0 when the value is not an exact integer or does not fit. `puchi_bignum_to_sint` / `_uint` only read a bignum's low 64 bits (raw bits, no range check) and return 0 for a non-bignum.
 - **No OS `#if` or syscalls in the header.** No `_WIN32` / `__APPLE__` / … layout forks, no `close` / `fopen` / `dlopen`. Post-amalgamate assert fails if those tokens return.
 - **No OS names in `*features*`.** `"chibi"` and `"puchi"` stay; `"windows"` does not. A `PUCHI_TEST` harness may use the CRT and may cons `windows` onto `*features*` at runtime so upstream Chibi libs (e.g. `(scheme process-context)`) load. `puchi_harness.c` does this on Windows only. Elsewhere it puts `test/harness-lib/` first on the module path: its `(chibi process)` stand-in exports just `exit` / `emergency-exit`, built from upstream's `(chibi win32 process-win32)` (plain CRT `exit`), so no OS name is faked.
 
@@ -106,7 +107,7 @@ On Windows the sanitizer pass needs the Clang ASan runtime DLL on PATH (the bat 
 |------|------|
 | `product/` | Puchi-owned fragments (banner, feature forces, host API/accessors, test API, `#e` mul) — concatenated as-is |
 | `product/puchi_host_symbols.txt` | HOST allowlist: which Chibi symbols become always-visible `puchi_*` / `PUCHI_*` (vs `PUCHI_TEST` / impl-only) |
-| `patches/` | Thin unified diffs: host ports, diskless boot, safe fixnum read |
+| `patches/` | Thin unified diffs: host ports, diskless boot, safe fixnum read, explicit integer conversions, bignum / uniform-vector range fixes |
 | `tools/amalgamate.sh` | Orchestrator: copy → patch → mechanical rewrite → trim/embed → concat → strip |
 | `tools/puchi_*.py` | Mechanical helpers (HOST ABI gen from manifest, features scrub, strip, …) |
 | `tools/build_puchi_tests.bat` | **Mandatory verify** (Windows): amalgamate + MSVC + Clang + Clang ASan/UBSan (tag `asan`) |

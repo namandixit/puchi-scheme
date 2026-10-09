@@ -1,0 +1,48 @@
+--- sexp.c
++++ sexp.c
+@@ -3270,6 +3270,24 @@
+ #define sexp_resolve_uniform_type(c, len) SEXP_U8
+ #endif
+ 
++/* x is an exact integer in [min, max]?  sexp_sint_value / sexp_uint_value
++ * only see a bignum's low limb, so check bignums limb by limb. */
++static int sexp_uvector_int_in_range(sexp x, long long min, unsigned long long max) {
++  sexp_uint_t i, mag;
++  if (sexp_fixnump(x))
++    return sexp_unbox_fixnum(x) >= min
++      && (sexp_unbox_fixnum(x) < 0 || (unsigned long long)sexp_unbox_fixnum(x) <= max);
++  if (!sexp_bignump(x))
++    return 0;
++  for (i = 1; i < sexp_bignum_length(x); i++)
++    if (sexp_bignum_data(x)[i])
++      return 0;
++  mag = sexp_bignum_data(x)[0];
++  if (sexp_bignum_sign(x) > 0)
++    return mag <= max;
++  return min < 0 && mag <= (unsigned long long)max + 1;
++}
++
+ sexp sexp_list_to_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp etype, sexp ls) {
+   long et, i;
+   long long min;
+@@ -3285,8 +3303,8 @@
+     et = sexp_unbox_fixnum(etype);
+     res = et == SEXP_U8 ? sexp_make_bytes(ctx, sexp_length(ctx, ls), SEXP_VOID) : sexp_make_uvector(ctx, etype, sexp_length(ctx, ls));
+     if (sexp_uvector_prefix(et) == 's') {
+-      min = (-1LL << (sexp_uvector_element_size(et)-1));
+-      max = (1LL << (sexp_uvector_element_size(et)-1)) - 1LL;
++      min = (long long)(~0uLL << (sexp_uvector_element_size(et)-1));
++      max = (1uLL << (sexp_uvector_element_size(et)-1)) - 1uLL;
+     } else {
+       min = 0;
+       max = sexp_uvector_element_size(et) == 64 ? -1 :
+@@ -3298,8 +3316,7 @@
+ #if SEXP_USE_UNIFORM_VECTOR_LITERALS
+           ((sexp_uvector_prefix(et) == 'u') || (sexp_uvector_prefix(et) == 's')) ?
+ #endif
+-          !((min == 0 && sexp_bignump(tmp) ? sexp_bignum_sign(tmp) > 0 : sexp_exact_integerp(tmp) && sexp_sint_value(tmp) >= min)
+-            && (sexp_sint_value(tmp) < 0 || sexp_uint_value(tmp) <= max))
++          !sexp_uvector_int_in_range(tmp, min, max)
+ #if SEXP_USE_UNIFORM_VECTOR_LITERALS
+           : ((sexp_uvector_prefix(et) == 'c') ? !sexp_numberp(tmp) :
+           !(sexp_exact_integerp(tmp) || sexp_realp(tmp)))

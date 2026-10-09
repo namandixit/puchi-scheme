@@ -1348,6 +1348,13 @@ PUCHI_API void puchi_set_global(puchi ctx, int idx, puchi val);
 PUCHI_API puchi puchi_set_standard_ports(puchi ctx, puchi env, puchi in, puchi out, puchi err);
 PUCHI_API void puchi_stack_trace(puchi ctx, puchi out);
 
+/* Checked integer conversion for host code. Return 1 and store *out when x is
+ * an exact integer (fixnum or bignum) that fits; otherwise return 0 and leave
+ * *out unchanged. Prefer these to puchi_bignum_to_sint / puchi_bignum_to_uint,
+ * which only read a bignum's low 64 bits (raw bits, no range check). */
+PUCHI_API int puchi_integer_to_sint64(puchi x, int64_t *out);
+PUCHI_API int puchi_integer_to_uint64(puchi x, uint64_t *out);
+
 #if !defined(puchi_opcodep)
 #define puchi_opcodep(x) (puchi_check_tag((x), PUCHI_OPCODE))
 #endif
@@ -3133,8 +3140,8 @@ SEXP_API sexp sexp_make_unsigned_integer(sexp ctx, unsigned long long x);
 #if !defined(PUCHI_INTEGER_ONLY)
 
 #if SEXP_64_BIT
-#define sexp_bignum_to_sint(x) (sexp_bignum_sign(x)*sexp_bignum_data(x)[0])
-#define sexp_bignum_to_uint(x) (sexp_bignum_data(x)[0])
+#define sexp_bignum_to_sint(x) (sexp_bignump(x) ? sexp_bignum_sign(x)*sexp_bignum_data(x)[0] : 0)
+#define sexp_bignum_to_uint(x) (sexp_bignump(x) ? sexp_bignum_data(x)[0] : 0)
 #else
 SEXP_API long long sexp_bignum_to_sint(sexp x);
 SEXP_API unsigned long long sexp_bignum_to_uint(sexp x);
@@ -7701,6 +7708,24 @@ static int sexp_resolve_uniform_type(int c, sexp len) {
   return SEXP_NOT_A_UNIFORM_TYPE;
 }
 
+/* x is an exact integer in [min, max]?  sexp_sint_value / sexp_uint_value
+ * only see a bignum's low limb, so check bignums limb by limb. */
+static int sexp_uvector_int_in_range(sexp x, long long min, unsigned long long max) {
+  sexp_uint_t i, mag;
+  if (sexp_fixnump(x))
+    return sexp_unbox_fixnum(x) >= min
+      && (sexp_unbox_fixnum(x) < 0 || (unsigned long long)sexp_unbox_fixnum(x) <= max);
+  if (!sexp_bignump(x))
+    return 0;
+  for (i = 1; i < sexp_bignum_length(x); i++)
+    if (sexp_bignum_data(x)[i])
+      return 0;
+  mag = sexp_bignum_data(x)[0];
+  if (sexp_bignum_sign(x) > 0)
+    return mag <= max;
+  return min < 0 && mag <= (unsigned long long)max + 1;
+}
+
 static sexp sexp_list_to_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp etype, sexp ls) {
   long et, i;
   long long min;
@@ -7716,8 +7741,8 @@ static sexp sexp_list_to_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp ety
     et = sexp_unbox_fixnum(etype);
     res = et == SEXP_U8 ? sexp_make_bytes(ctx, sexp_length(ctx, ls), SEXP_VOID) : sexp_make_uvector(ctx, etype, sexp_length(ctx, ls));
     if (sexp_uvector_prefix(et) == 's') {
-      min = (-1LL << (sexp_uvector_element_size(et)-1));
-      max = (1LL << (sexp_uvector_element_size(et)-1)) - 1LL;
+      min = (long long)(~0uLL << (sexp_uvector_element_size(et)-1));
+      max = (1uLL << (sexp_uvector_element_size(et)-1)) - 1uLL;
     } else {
       min = 0;
       max = sexp_uvector_element_size(et) == 64 ? -1 :
@@ -7727,8 +7752,7 @@ static sexp sexp_list_to_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp ety
       tmp = sexp_car(ls2);
       if (
           ((sexp_uvector_prefix(et) == 'u') || (sexp_uvector_prefix(et) == 's')) ?
-          !((min == 0 && sexp_bignump(tmp) ? sexp_bignum_sign(tmp) > 0 : sexp_exact_integerp(tmp) && sexp_sint_value(tmp) >= min)
-            && (sexp_sint_value(tmp) < 0 || sexp_uint_value(tmp) <= max))
+          !sexp_uvector_int_in_range(tmp, min, max)
           : ((sexp_uvector_prefix(et) == 'c') ? !sexp_numberp(tmp) :
           !(sexp_exact_integerp(tmp) || sexp_realp(tmp)))
           ) {
@@ -13363,7 +13387,7 @@ static sexp sexp_make_integer_from_lsint (sexp ctx, sexp_lsint_t x) {
     res = sexp_make_bignum(ctx, 1);
     if (lsint_lt_0(x)) {
       sexp_bignum_sign(res) = -1;
-      sexp_bignum_data(res)[0] = (sexp_uint_t)-lsint_to_sint(x);
+      sexp_bignum_data(res)[0] = -(sexp_uint_t)lsint_to_sint(x);
     } else {
       sexp_bignum_sign(res) = 1;
       sexp_bignum_data(res)[0] = (sexp_uint_t)lsint_to_sint(x);
@@ -13372,7 +13396,7 @@ static sexp sexp_make_integer_from_lsint (sexp ctx, sexp_lsint_t x) {
     res = sexp_make_bignum(ctx, 2);
     if (lsint_lt_0(x)) {
       sexp_bignum_sign(res) = -1;
-      sexp_bignum_data(res)[0] = (sexp_uint_t)-lsint_to_sint(x);
+      sexp_bignum_data(res)[0] = -(sexp_uint_t)lsint_to_sint(x);
       sexp_bignum_data(res)[1] = (sexp_uint_t)~lsint_to_sint_hi(x);
     } else {
       sexp_bignum_sign(res) = 1;
@@ -17479,6 +17503,59 @@ PUCHI_API puchi puchi_set_standard_ports(puchi ctx, puchi env, puchi in, puchi o
 
 PUCHI_API void puchi_stack_trace(puchi ctx, puchi out) {
   sexp_stack_trace(ctx, out);
+}
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+/* Magnitude of a bignum if it fits in one 64-bit limb (higher limbs zero). */
+static int puchi_bignum_magnitude64(puchi x, uint64_t *mag) {
+  sexp_uint_t i;
+  for (i = 1; i < sexp_bignum_length(x); i++)
+    if (sexp_bignum_data(x)[i])
+      return 0;
+  *mag = (uint64_t)sexp_bignum_data(x)[0];
+  return 1;
+}
+#endif
+
+PUCHI_API int puchi_integer_to_sint64(puchi x, int64_t *out) {
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+  uint64_t mag;
+#endif
+  if (sexp_fixnump(x)) {
+    if (out) *out = (int64_t)sexp_unbox_fixnum(x);
+    return 1;
+  }
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+  if (sexp_bignump(x) && puchi_bignum_magnitude64(x, &mag)) {
+    if (sexp_bignum_sign(x) > 0) {
+      if (mag > (uint64_t)INT64_MAX) return 0;
+      if (out) *out = (int64_t)mag;
+      return 1;
+    }
+    if (mag > (uint64_t)INT64_MAX + 1u) return 0;
+    if (out) *out = (mag == (uint64_t)INT64_MAX + 1u) ? INT64_MIN : -(int64_t)mag;
+    return 1;
+  }
+#endif
+  return 0;
+}
+
+PUCHI_API int puchi_integer_to_uint64(puchi x, uint64_t *out) {
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+  uint64_t mag;
+#endif
+  if (sexp_fixnump(x)) {
+    if (sexp_unbox_fixnum(x) < 0) return 0;
+    if (out) *out = (uint64_t)sexp_unbox_fixnum(x);
+    return 1;
+  }
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+  if (sexp_bignump(x) && sexp_bignum_sign(x) > 0 && puchi_bignum_magnitude64(x, &mag)) {
+    if (out) *out = mag;
+    return 1;
+  }
+#endif
+  return 0;
 }
 
 #if defined(PUCHI_TEST)

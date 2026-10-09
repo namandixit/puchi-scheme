@@ -404,6 +404,8 @@ product	puchi_context_set_env
 product	puchi_set_global
 product	puchi_set_standard_ports
 product	puchi_stack_trace
+product	puchi_integer_to_sint64
+product	puchi_integer_to_uint64
 function	sexp_alloc_tagged_aux	sexp sexp_alloc_tagged_aux(sexp ctx, size_t size, sexp_uint_t tag);
 # Callees of HOST macros (ABI renames sexp_* → puchi_*; wrappers required)
 function	sexp_add_module_directory_op	sexp sexp_add_module_directory_op(sexp ctx, sexp self, sexp_sint_t n, sexp dir, sexp appendp);
