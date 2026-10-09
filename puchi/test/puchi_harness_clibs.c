@@ -20,6 +20,9 @@
 #ifdef _WIN32
 #include <io.h>
 #include <direct.h>
+#else
+/* POSIX lseek/close/... the stubs expect (Chibi's sexp.h pulls these in). */
+#include <unistd.h>
 #endif
 
 #include "puchi_test_diagnostics.h"
@@ -34,6 +37,17 @@
 #pragma warning(push, 0)
 /* Optimizer/level-4 codes that warning(push, 0) alone may still emit. */
 #pragma warning(disable : 4701 4702 4703)
+#elif defined(__GNUC__)
+/* GCC pragmas take single options only (no -Wall / -Wextra groups). */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type"
+#pragma GCC diagnostic ignored "-Wimplicit-function-declaration"
+#pragma GCC diagnostic ignored "-Wint-conversion"
+#pragma GCC diagnostic ignored "-Wsign-compare"
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wunused-variable"
 #endif
 
 #define sexp_init_library sexp_init_lib_srfi_98
@@ -106,4 +120,6 @@ struct puchi_library_entry_t puchi_harness_static_libraries[] = {
 #pragma clang diagnostic pop
 #elif defined(_MSC_VER)
 #pragma warning(pop)
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
 #endif

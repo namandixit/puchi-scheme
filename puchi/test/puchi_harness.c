@@ -12,7 +12,7 @@
  *   puchi_harness.exe [-I dir] [-x module] [--expect|-e file] <script.scm> [args...]
  */
 /* Numeric mode comes from the compiler: (default) / PUCHI_INTEGER_ONLY /
- * PUCHI_ENABLE_NUMERICAL_TOWER — see build_puchi_tests.bat. */
+ * PUCHI_ENABLE_NUMERICAL_TOWER — see build_puchi_tests.bat / .sh. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -678,13 +678,14 @@ static int puchi_harness_run(puchi_worker *w) {
 
   puchi_TEST_add_static_libraries(ctx, puchi_harness_static_libraries);
 
-#if defined(_WIN32)
+  /* On every OS: the harness links (chibi win32 process-win32) — plain CRT
+   * exit — not (chibi process), so upstream libs such as
+   * (scheme process-context) must take their `windows` cond-expand branch. */
   {
     puchi win = puchi_intern(ctx, "windows", -1);
     puchi_set_global(ctx, PUCHI_G_FEATURES,
                      puchi_cons(ctx, win, puchi_global(ctx, PUCHI_G_FEATURES)));
   }
-#endif
 
   tmp = puchi_enable_modules(ctx, &puchi_crt_module_ops);
   if (puchi_check(ctx, tmp)) { status = 70; goto done; }
@@ -802,6 +803,8 @@ int main(int argc, char **argv) {
   puchi_harness_args args;
   puchi_worker workers[PUCHI_HARNESS_THREADS];
   puchi_thread threads[PUCHI_HARNESS_THREADS];
+  /* pthread_t has no null value: track creation separately. */
+  int started[PUCHI_HARNESS_THREADS];
   int i, script_i = -1, passed = 0, failed = 0;
   const char *x_module = NULL;
   const char *expect_path = NULL;
@@ -863,20 +866,21 @@ int main(int argc, char **argv) {
     memset(&workers[i], 0, sizeof(workers[i]));
     workers[i].index = i;
     workers[i].args = &args;
-    threads[i] = NULL;
+    started[i] = 0;
   }
 
   for (i = 0; i < PUCHI_HARNESS_THREADS; i++) {
     if (puchi_thread_create(&threads[i], puchi_worker_main, &workers[i]) != 0) {
       fprintf(stderr, "puchi_harness: failed to create worker %d\n", i);
-      threads[i] = NULL;
       workers[i].status = 1;
+    } else {
+      started[i] = 1;
     }
   }
 
   for (i = 0; i < PUCHI_HARNESS_THREADS; i++) {
     int st = 1;
-    if (threads[i]) {
+    if (started[i]) {
       if (puchi_thread_join(threads[i], &st) != 0)
         st = 1;
     } else {

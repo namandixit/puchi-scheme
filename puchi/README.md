@@ -7,6 +7,7 @@ bash puchi/tools/amalgamate.sh
 ```
 
 Requires bash (Git Bash on Windows), `patch` or `git apply`, and Python 3.
+Output is byte-identical on Windows and Linux (and across `PYTHONHASHSEED`s).
 
 ## Sandbox contract
 
@@ -15,7 +16,7 @@ The amalgamated header is platform-independent for embeds:
 - **Host owns memory and I/O.** Pass a `puchi_host` with `alloc` / `free` at context create. Ports use `puchi_stream_ops`. A null or incomplete host does not fall back to CRT `malloc`.
 - **Host API surface.** Use always-visible `puchi_*` / `PUCHI_*` entrypoints (`puchi_create_context`, `puchi_eval_string`, …) and symbols listed as HOST in `product/puchi_host_symbols.txt`, plus the HOST accessors in `product/`. Always-visible ABI may include INTERNAL tag/mask macros as glue for HOST accessors — do not treat opcode enums, core-form codes, or GC freelist types as the host contract (those stay under `PUCHI_IMPLEMENTATION` / `PUCHI_TEST`).
 - **No OS `#if` or syscalls in the header.** No `_WIN32` / `__APPLE__` / … layout forks, no `close` / `fopen` / `dlopen`. Post-amalgamate assert fails if those tokens return.
-- **No OS names in `*features*`.** `"chibi"` and `"puchi"` stay; `"windows"` does not. A `PUCHI_TEST` harness may use the CRT and may cons `windows` onto `*features*` at runtime so upstream Chibi libs (e.g. `(scheme process-context)`) load.
+- **No OS names in `*features*`.** `"chibi"` and `"puchi"` stay; `"windows"` does not. A `PUCHI_TEST` harness may use the CRT and may cons `windows` onto `*features*` at runtime so upstream Chibi libs (e.g. `(scheme process-context)`) load. `puchi_harness.c` does this on every OS: it links `(chibi win32 process-win32)` (plain CRT `exit`), never `(chibi process)`.
 
 ## Definition of done (mandatory)
 
@@ -25,15 +26,25 @@ After **any** puchi change (patches, `product/`, tools, tests, feature forces, a
 puchi\tools\build_puchi_tests.bat
 ```
 
-exits **0**. That script is the gate. It always:
+(Windows) or
+
+```bash
+bash puchi/tools/build_puchi_tests.sh
+```
+
+(Linux) exits **0**. That script is the gate. It always:
 
 1. **Amalgamates** (`amalgamate.sh` → regenerates `puchi.h`)
-2. Runs the **full suite** under **MSVC** and **Clang** (all three numeric configs; binaries are **executed**, not only linked)
-3. Re-runs the **same suite** under **Clang ASan + UBSan** with `-fno-sanitize-recover=all` (any sanitizer hit fails the bat).
+2. Runs the **full suite** under **MSVC** and **Clang** — **GCC** and **Clang** on Linux (all three numeric configs; binaries are **executed**, not only linked)
+3. Re-runs the **same suite** under **Clang ASan + UBSan** with `-fno-sanitize-recover=all` (any sanitizer hit fails the script).
+
+Both scripts need the generated FFI stubs under `lib/` (gitignored). Build
+Chibi normally once (`make`), or point `generate_harness_stubs.sh` at any
+`chibi-scheme` binary.
 
 Puchi keeps those checks honest on x86: `SEXP_USE_ALIGNED_BYTECODE` is forced on, and patch `005-sexp-c-safe-fixnum-read.diff` avoids signed overflow UB in `sexp_read_number`.
 
-Linking without running is not enough. `check_amalgamate.sh` only checks drift — it does **not** replace this bat.
+Linking without running is not enough. `check_amalgamate.sh` only checks drift — it does **not** replace the gate script.
 
 | Suite | Integer (`PUCHI_INTEGER_ONLY`) | Default (flonums) | Tower (`PUCHI_ENABLE_NUMERICAL_TOWER`) |
 |-------|--------------------------------|-------------------|----------------------------------------|
@@ -50,7 +61,7 @@ Every harness script: single-threaded first, then 64 parallel contexts.
 
 **Permanently out of scope** (all configs): `tests/ffi/`, `tests/snow/`, `tests/net-tests.scm`, `tests/memory/`, install/CLI (`tests/install/`, `tests/run/`), `tests/build/build-tests.sh`, and `(chibi process)` / `(chibi system)` / `(chibi tar)` / filesystem lib tests (no dlopen, process spawn, sockets, or disk VFS in the amalgamation).
 
-Sanitizer pass needs the Clang ASan runtime DLL on PATH (the bat adds `$(clang -print-resource-dir)/lib/windows` automatically).
+On Windows the sanitizer pass needs the Clang ASan runtime DLL on PATH (the bat adds `$(clang -print-resource-dir)/lib/windows` automatically). On Linux the runtime is linked statically; nothing to set up.
 
 ## Layout
 
@@ -61,7 +72,8 @@ Sanitizer pass needs the Clang ASan runtime DLL on PATH (the bat adds `$(clang -
 | `patches/` | Thin unified diffs: host ports, diskless boot, safe fixnum read |
 | `tools/amalgamate.sh` | Orchestrator: copy → patch → mechanical rewrite → trim/embed → concat → strip |
 | `tools/puchi_*.py` | Mechanical helpers (HOST ABI gen from manifest, features scrub, strip, …) |
-| `tools/build_puchi_tests.bat` | **Mandatory verify**: amalgamate + MSVC + Clang + Clang ASan/UBSan (tag `asan`) |
+| `tools/build_puchi_tests.bat` | **Mandatory verify** (Windows): amalgamate + MSVC + Clang + Clang ASan/UBSan (tag `asan`) |
+| `tools/build_puchi_tests.sh` | **Mandatory verify** (Linux): amalgamate + GCC + Clang + Clang ASan/UBSan (tag `asan`) |
 
 ## Numeric modes
 
@@ -94,6 +106,7 @@ bash puchi/tools/amalgamate.sh
 
 bash puchi/tools/check_amalgamate.sh   # must exit 0; commit puchi.h + refreshed patches
 puchi\tools\build_puchi_tests.bat      # mandatory: suite + sanitizers must exit 0
+bash puchi/tools/build_puchi_tests.sh   # same gate on Linux
 ```
 
 ## Drift check
@@ -102,4 +115,4 @@ puchi\tools\build_puchi_tests.bat      # mandatory: suite + sanitizers must exit
 bash puchi/tools/check_amalgamate.sh
 ```
 
-Fails if any patch does not apply, or if regenerated `puchi.h` differs from git. Still run `build_puchi_tests.bat` before calling the change done.
+Fails if any patch does not apply, or if regenerated `puchi.h` differs from git. Still run `build_puchi_tests.bat` / `build_puchi_tests.sh` before calling the change done.
