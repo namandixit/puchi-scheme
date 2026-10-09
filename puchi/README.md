@@ -9,6 +9,23 @@ bash puchi/tools/amalgamate.sh
 Requires bash (Git Bash on Windows), `patch` or `git apply`, and Python 3.
 Output is byte-identical on Windows and Linux (and across `PYTHONHASHSEED`s).
 
+## Edit only inside `puchi/` (mandatory)
+
+This is a fork of upstream Chibi Scheme. Every puchi change — sources,
+patches, tools, tests, docs — lives under `puchi/`. **Never edit, add or
+delete tracked files anywhere else**, so upstream updates merge cleanly. To
+change upstream behavior, add a diff to `patches/` (applied to a temp copy
+by `amalgamate.sh`), never edit the upstream file itself. Same for the
+harness: patch stub copies under `test/clibs/`, never `lib/`.
+
+The only files allowed outside `puchi/` are gitignored build outputs, e.g.
+the `lib/**/*.c` FFI stubs from `generate_harness_stubs.sh`; never commit them.
+Before pushing, this must print nothing:
+
+```bash
+git diff --name-only master...HEAD | grep -v '^puchi/'
+```
+
 ## Sandbox contract
 
 The amalgamated header is platform-independent for embeds:
