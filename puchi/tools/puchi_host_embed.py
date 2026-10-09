@@ -205,7 +205,29 @@ def patch_opcodes(opcodes: str) -> str:
                 break
         if not drop:
             out.append(line)
-    return "".join(out)
+    text = "".join(out)
+    # Clang -Wreserved-macro-identifier: leading underscore + uppercase.
+    for old, new in (
+        ("_FN1OPTP", "PUCHI_FN1OPTP"),
+        ("_FN2OPTP", "PUCHI_FN2OPTP"),
+        ("_FN1OPT", "PUCHI_FN1OPT"),
+        ("_FN2OPT", "PUCHI_FN2OPT"),
+        ("_FN3OPT", "PUCHI_FN3OPT"),
+        ("_FN0", "PUCHI_FN0"),
+        ("_FN1", "PUCHI_FN1"),
+        ("_FN2", "PUCHI_FN2"),
+        ("_FN3", "PUCHI_FN3"),
+        ("_FN4", "PUCHI_FN4"),
+        ("_FN5", "PUCHI_FN5"),
+        ("_FN", "PUCHI_FN"),
+        ("_GETTER", "PUCHI_GETTER"),
+        ("_SETTER", "PUCHI_SETTER"),
+        ("_PARAM", "PUCHI_PARAM"),
+        ("_OP", "PUCHI_OP"),
+        ("_I", "PUCHI_I"),
+    ):
+        text = re.sub(rf"\b{re.escape(old)}\b", new, text)
+    return text
 
 
 def rewrite_libc_calls(src: str) -> str:

@@ -53,7 +53,7 @@ static void puchi_diagnose(void *ctx_v, int code, const char *msg) {
   h->host.diagnose(h->host.userdata, code, msg ? msg : "");
 }
 
-static void puchi_fatal(void *ctx_v, int code, const char *msg) {
+PUCHI_NORETURN static void puchi_fatal(void *ctx_v, int code, const char *msg) {
   sexp ctx = (sexp)ctx_v;
   sexp_heap h;
   if (ctx && sexp_pointerp(ctx) && sexp_contextp(ctx) &&

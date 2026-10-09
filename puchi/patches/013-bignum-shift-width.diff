@@ -1,0 +1,10 @@
+--- bignum.c
++++ bignum.c
+@@ -718,7 +718,7 @@ sexp sexp_bignum_sqrt_estimate (sexp ctx, sexp a) {
+ 
+   adata_hi = sexp_bignum_data(a)[alen - 1];
+   for (i = sizeof(sexp_uint_t)*8-1; i > 0; i--)
+-    if (adata_hi & (1ul << i))
++    if (adata_hi & ((sexp_uint_t)1 << i))
+       break;
+   nbits = sizeof(sexp_uint_t) * 8 * (alen - 1) + i + 1;

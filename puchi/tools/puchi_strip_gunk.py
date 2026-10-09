@@ -184,11 +184,12 @@ def assert_no_process_globals(puchi_h: str) -> None:
 
 
 # OS / CPU / compiler tokens that must not appear in the product header.
+# `_MSC_VER` is allowed: only for diagnostic push/pop around the amalgamation
+# (puchi_diag_push.inc / puchi_diag_pop.inc). `__clang__` is likewise used there.
 _FORBIDDEN_OS_TOKENS = (
     "_WIN32",
     "_WIN64",
     "_Wp64",
-    "_MSC_VER",
     "__APPLE__",
     "__linux__",
     "__CYGWIN__",
@@ -675,6 +676,40 @@ def scrub_amalgamation_residue(src: str) -> str:
         "/* ==== bignum.c (active only if PUCHI_ENABLE_NUMERICAL_TOWER) ==== */",
     )
 
+    # Warning hygiene that spans .c bodies (sexp.c / eval.c / vm.c).
+    src = src.replace("_sexp_type_specs", "puchi_type_specs")
+    src = src.replace(
+        "static void sexp_add_path (",
+        "static inline void sexp_add_path (",
+    )
+    src = src.replace(
+        "static void sexp_add_path(",
+        "static inline void sexp_add_path(",
+    )
+    # C++ keywords used as C identifiers (Clang -Wc++-keyword).
+    src = src.replace("char class;", "char infnan_kind;")
+    src = src.replace(
+        "(class = classify_infnan(str))",
+        "(infnan_kind = classify_infnan(str))",
+    )
+    src = src.replace("class == 'n'", "infnan_kind == 'n'")
+    thread_old = (
+        "sexp sexp_thread_parameters_set (sexp ctx, sexp self, sexp_sint_t n, sexp new) {\n"
+        "  sexp_context_params(ctx) = new;\n"
+    )
+    thread_new = (
+        "sexp sexp_thread_parameters_set (sexp ctx, sexp self, sexp_sint_t n, sexp new_params) {\n"
+        "  sexp_context_params(ctx) = new_params;\n"
+    )
+    if thread_old not in src:
+        raise SystemExit(
+            "scrub_amalgamation_residue: sexp_thread_parameters_set not found"
+        )
+    src = src.replace(thread_old, thread_new, 1)
+
+    src = _scrub_vm_reserved_macros(src)
+    src = _scrub_statement_macros_extra_semi(src)
+
     for name in empty_macros_drop + dead_macros:
         if re.search(rf"#\s*define\s+{name}\b", src):
             raise SystemExit(f"scrub_amalgamation_residue: leftover #define {name}")
@@ -697,6 +732,153 @@ def scrub_amalgamation_residue(src: str) -> str:
         if re.search(pat, src):
             raise SystemExit(f"scrub_amalgamation_residue: leftover {label}")
 
+    return src
+
+
+def _scrub_vm_reserved_macros(src: str) -> str:
+    """Rename vm.c / fcall.c _ARG/_PUSH/_A… macros (Clang reserved-macro)."""
+    for old, new in (
+        ("_ALIGN_IP", "PUCHI_ALIGN_IP"),
+        ("_UWORD0", "PUCHI_UWORD0"),
+        ("_UWORD1", "PUCHI_UWORD1"),
+        ("_SWORD0", "PUCHI_SWORD0"),
+        ("_SWORD1", "PUCHI_SWORD1"),
+        ("_WORD0", "PUCHI_WORD0"),
+        ("_WORD1", "PUCHI_WORD1"),
+        ("_WORD2", "PUCHI_WORD2"),
+        ("_ARG1", "PUCHI_ARG1"),
+        ("_ARG2", "PUCHI_ARG2"),
+        ("_ARG3", "PUCHI_ARG3"),
+        ("_ARG4", "PUCHI_ARG4"),
+        ("_ARG5", "PUCHI_ARG5"),
+        ("_ARG6", "PUCHI_ARG6"),
+        ("_PUSH", "PUCHI_PUSH"),
+        ("_POP", "PUCHI_POP"),
+        ("_A", "PUCHI_A"),
+    ):
+        src = re.sub(rf"\b{re.escape(old)}\b", new, src)
+    return src
+
+
+def _scrub_statement_macros_extra_semi(src: str) -> str:
+    """Wrap statement macros in do-while(0) so caller ';' is not empty."""
+    exact_old = (
+        "#define sexp_negate_exact(x)                            \\\n"
+        "  if (sexp_bignump(x))                                  \\\n"
+        "    sexp_bignum_sign(x) = -sexp_bignum_sign(x);         \\\n"
+        "  else if (sexp_fixnump(x))                             \\\n"
+        "    x = sexp_fx_neg(x);\n"
+    )
+    exact_new = (
+        "#define sexp_negate_exact(x) do {                       \\\n"
+        "  if (sexp_bignump(x))                                  \\\n"
+        "    sexp_bignum_sign(x) = -sexp_bignum_sign(x);         \\\n"
+        "  else if (sexp_fixnump(x))                             \\\n"
+        "    x = sexp_fx_neg(x);                                 \\\n"
+        "} while (0)\n"
+    )
+    if exact_old not in src:
+        raise SystemExit(
+            "scrub_amalgamation_residue: sexp_negate_exact macro not found"
+        )
+    src = src.replace(exact_old, exact_new, 1)
+
+    neg_old = (
+        "#define sexp_negate(x)                                  \\\n"
+        "  if (sexp_flonump(x))                                  \\\n"
+        "    sexp_negate_flonum(x);                              \\\n"
+        "  else                                                  \\\n"
+        "    sexp_negate_exact(x)\n"
+    )
+    neg_new = (
+        "#define sexp_negate(x) do {                             \\\n"
+        "  if (sexp_flonump(x))                                  \\\n"
+        "    sexp_negate_flonum(x);                              \\\n"
+        "  else                                                  \\\n"
+        "    sexp_negate_exact(x);                               \\\n"
+        "} while (0)\n"
+    )
+    if neg_old not in src:
+        raise SystemExit("scrub_amalgamation_residue: sexp_negate macro not found")
+    src = src.replace(neg_old, neg_new, 1)
+
+    ratio_old = (
+        "#define sexp_negate_maybe_ratio(x)                      \\\n"
+        "  if (sexp_ratiop(x)) {                                 \\\n"
+        "    sexp_negate_exact(sexp_ratio_numerator(x));         \\\n"
+        "  } else {                                              \\\n"
+        "    sexp_negate(x);                                     \\\n"
+        "  }\n"
+    )
+    ratio_new = (
+        "#define sexp_negate_maybe_ratio(x) do {                 \\\n"
+        "  if (sexp_ratiop(x)) {                                 \\\n"
+        "    sexp_negate_exact(sexp_ratio_numerator(x));         \\\n"
+        "  } else {                                              \\\n"
+        "    sexp_negate(x);                                     \\\n"
+        "  }                                                     \\\n"
+        "} while (0)\n"
+    )
+    if ratio_old not in src:
+        raise SystemExit(
+            "scrub_amalgamation_residue: sexp_negate_maybe_ratio macro not found"
+        )
+    src = src.replace(ratio_old, ratio_new, 1)
+
+    # sexp_ensure_stack: ends with '}' then caller ';' → empty statement.
+    # Runs after _scrub_vm_reserved_macros so _ARG1 is already PUCHI_ARG1.
+    ens_old = (
+        "#define sexp_ensure_stack(n)                                            \\\n"
+        "  if (top+(n) >= sexp_stack_length(sexp_context_stack(ctx))) {          \\\n"
+        "    sexp_context_top(ctx) = top;                                        \\\n"
+        "    if (sexp_grow_stack(ctx, (n))) {                                    \\\n"
+        "      stack = sexp_stack_data(sexp_context_stack(ctx));                 \\\n"
+        "    } else {                                                            \\\n"
+        "      PUCHI_ARG1 = sexp_global(ctx, SEXP_G_OOS_ERROR);                  \\\n"
+        "      goto end_loop;                                                    \\\n"
+        "    }                                                                   \\\n"
+        "  }\n"
+    )
+    ens_new = (
+        "#define sexp_ensure_stack(n) do {                                       \\\n"
+        "  if (top+(n) >= sexp_stack_length(sexp_context_stack(ctx))) {          \\\n"
+        "    sexp_context_top(ctx) = top;                                        \\\n"
+        "    if (sexp_grow_stack(ctx, (n))) {                                    \\\n"
+        "      stack = sexp_stack_data(sexp_context_stack(ctx));                 \\\n"
+        "    } else {                                                            \\\n"
+        "      PUCHI_ARG1 = sexp_global(ctx, SEXP_G_OOS_ERROR);                  \\\n"
+        "      goto end_loop;                                                    \\\n"
+        "    }                                                                   \\\n"
+        "  }                                                                     \\\n"
+        "} while (0)\n"
+    )
+    if ens_old not in src:
+        # Spacing may differ on the PUCHI_ARG1 line after rename.
+        ens_old2 = ens_old.replace(
+            "      PUCHI_ARG1 = sexp_global(ctx, SEXP_G_OOS_ERROR);                  \\\n",
+            "      PUCHI_ARG1 = sexp_global(ctx, SEXP_G_OOS_ERROR);                       \\\n",
+        )
+        # Match whatever spaces the rename left on that line.
+        ens_re = re.compile(
+            r"#define sexp_ensure_stack\(n\)\s*\\\n"
+            r"  if \(top\+\(n\) >= sexp_stack_length\(sexp_context_stack\(ctx\)\)\) \{\s*\\\n"
+            r"    sexp_context_top\(ctx\) = top;\s*\\\n"
+            r"    if \(sexp_grow_stack\(ctx, \(n\)\)\) \{\s*\\\n"
+            r"      stack = sexp_stack_data\(sexp_context_stack\(ctx\)\);\s*\\\n"
+            r"    \} else \{\s*\\\n"
+            r"      PUCHI_ARG1 = sexp_global\(ctx, SEXP_G_OOS_ERROR\);\s*\\\n"
+            r"      goto end_loop;\s*\\\n"
+            r"    \}\s*\\\n"
+            r"  \}\n"
+        )
+        m = ens_re.search(src)
+        if not m:
+            raise SystemExit(
+                "scrub_amalgamation_residue: sexp_ensure_stack macro not found"
+            )
+        src = src[: m.start()] + ens_new + src[m.end() :]
+    else:
+        src = src.replace(ens_old, ens_new, 1)
     return src
 
 

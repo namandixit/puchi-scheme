@@ -72,9 +72,16 @@ def embed_c_string(name: str, text: str) -> str:
 
     Each substring is a single line of the embedded text (including its
     trailing newline and leading indentation) so the C form stays readable.
+    Wrapped to silence Clang -Woverlength-strings (ISO C99 4095 limit).
     """
     text = normalize_newlines(text)
-    lines = [f"static const char {name}[] ="]
+    lines = [
+        "#ifdef __clang__",
+        "#pragma clang diagnostic push",
+        '#pragma clang diagnostic ignored "-Woverlength-strings"',
+        "#endif",
+        f"static const char {name}[] =",
+    ]
     parts = text.splitlines(keepends=True)
     if not parts:
         lines.append('  ""')
@@ -82,6 +89,13 @@ def embed_c_string(name: str, text: str) -> str:
         for part in parts:
             lines.append('  "' + c_escape(part) + '"')
     lines.append(";")
+    lines.extend(
+        [
+            "#ifdef __clang__",
+            "#pragma clang diagnostic pop",
+            "#endif",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -564,6 +578,14 @@ def scrub_features_h(text: str) -> str:
         "#endif\n"
     )
     text = text[:abi_start] + abi_new
+
+    # Upstream uses SEXP_DEBUG_GC (typo/alias of USE_) ungated in a few #ifs.
+    if "#define SEXP_DEBUG_GC" not in text:
+        text += (
+            "\n#ifndef SEXP_DEBUG_GC\n"
+            "#define SEXP_DEBUG_GC 0\n"
+            "#endif\n"
+        )
     return text
 
 
@@ -743,6 +765,93 @@ def scrub_sexp_h(text: str) -> str:
                 1,
             )
 
+    # Pedantic hygiene: rename reserved identifiers / fix GC-var extra-semi.
+    text = _scrub_sexp_h_warning_hygiene(text)
+
+    return text
+
+
+def _scrub_sexp_h_warning_hygiene(text: str) -> str:
+    """Rename reserved macros/ids and fix sexp_gc_var trailing-semicolon ;;."""
+    text = text.replace("__HALF_MAX_SIGNED", "PUCHI_HALF_MAX_SIGNED")
+    text = text.replace("__MAX_SIGNED", "PUCHI_MAX_SIGNED")
+    text = text.replace("__MIN_SIGNED", "PUCHI_MIN_SIGNED")
+    text = text.replace("_sexp_type_specs", "puchi_type_specs")
+
+    # Native-GC sexp_gc_var: drop trailing ';' so callers' ';' is not empty.
+    gc_var_old = (
+        "#define sexp_gc_var(x, y)                       \\\n"
+        "  sexp x = SEXP_VOID;                           \\\n"
+        "  struct sexp_gc_var_t y = {NULL, NULL};\n"
+    )
+    gc_var_new = (
+        "#define sexp_gc_var(x, y)                       \\\n"
+        "  sexp x = SEXP_VOID;                           \\\n"
+        "  struct sexp_gc_var_t y = {NULL, NULL}\n"
+    )
+    if gc_var_old not in text:
+        raise SystemExit("scrub_sexp_h: sexp_gc_var macro not found")
+    text = text.replace(gc_var_old, gc_var_new, 1)
+
+    # Boehm stub path (usually stripped later): same trailing-'; issue.
+    text = text.replace(
+        "#define sexp_gc_var(x, y)            sexp x = SEXP_VOID;\n",
+        "#define sexp_gc_var(x, y)            sexp x = SEXP_VOID\n",
+    )
+
+    gc_macros_old = (
+        "#define sexp_gc_var1(x) sexp_gc_var(x, __sexp_gc_preserver1)\n"
+        "#define sexp_gc_var2(x, y) sexp_gc_var1(x) sexp_gc_var(y, __sexp_gc_preserver2)\n"
+        "#define sexp_gc_var3(x, y, z) sexp_gc_var2(x, y) sexp_gc_var(z, __sexp_gc_preserver3)\n"
+        "#define sexp_gc_var4(x, y, z, w) sexp_gc_var3(x, y, z) sexp_gc_var(w, __sexp_gc_preserver4)\n"
+        "#define sexp_gc_var5(x, y, z, w, v) sexp_gc_var4(x, y, z, w) sexp_gc_var(v, __sexp_gc_preserver5)\n"
+        "#define sexp_gc_var6(x, y, z, w, v, u) sexp_gc_var5(x, y, z, w, v) sexp_gc_var(u, __sexp_gc_preserver6)\n"
+        "#define sexp_gc_var7(x, y, z, w, v, u, t) sexp_gc_var6(x, y, z, w, v, u) sexp_gc_var(t, __sexp_gc_preserver7)\n"
+        "\n"
+        "#define sexp_gc_preserve1(ctx, x) sexp_gc_preserve(ctx, x, __sexp_gc_preserver1)\n"
+        "#define sexp_gc_preserve2(ctx, x, y) sexp_gc_preserve1(ctx, x); sexp_gc_preserve(ctx, y, __sexp_gc_preserver2)\n"
+        "#define sexp_gc_preserve3(ctx, x, y, z) sexp_gc_preserve2(ctx, x, y); sexp_gc_preserve(ctx, z, __sexp_gc_preserver3)\n"
+        "#define sexp_gc_preserve4(ctx, x, y, z, w) sexp_gc_preserve3(ctx, x, y, z); sexp_gc_preserve(ctx, w, __sexp_gc_preserver4)\n"
+        "#define sexp_gc_preserve5(ctx, x, y, z, w, v) sexp_gc_preserve4(ctx, x, y, z, w); sexp_gc_preserve(ctx, v, __sexp_gc_preserver5)\n"
+        "#define sexp_gc_preserve6(ctx, x, y, z, w, v, u) sexp_gc_preserve5(ctx, x, y, z, w, v); sexp_gc_preserve(ctx, u, __sexp_gc_preserver6)\n"
+        "#define sexp_gc_preserve7(ctx, x, y, z, w, v, u, t) sexp_gc_preserve6(ctx, x, y, z, w, v, u); sexp_gc_preserve(ctx, t, __sexp_gc_preserver7)\n"
+        "\n"
+        "#define sexp_gc_release1(ctx) sexp_gc_release(ctx, NULL, __sexp_gc_preserver1)\n"
+        "#define sexp_gc_release2(ctx) sexp_gc_release(ctx, NULL, __sexp_gc_preserver1)\n"
+        "#define sexp_gc_release3(ctx) sexp_gc_release(ctx, NULL, __sexp_gc_preserver1)\n"
+        "#define sexp_gc_release4(ctx) sexp_gc_release(ctx, NULL, __sexp_gc_preserver1)\n"
+        "#define sexp_gc_release5(ctx) sexp_gc_release(ctx, NULL, __sexp_gc_preserver1)\n"
+        "#define sexp_gc_release6(ctx) sexp_gc_release(ctx, NULL, __sexp_gc_preserver1)\n"
+        "#define sexp_gc_release7(ctx) sexp_gc_release(ctx, NULL, __sexp_gc_preserver1)\n"
+    )
+    gc_macros_new = (
+        "#define sexp_gc_var1(x) sexp_gc_var(x, puchi_gc_preserver1)\n"
+        "#define sexp_gc_var2(x, y) sexp_gc_var1(x); sexp_gc_var(y, puchi_gc_preserver2)\n"
+        "#define sexp_gc_var3(x, y, z) sexp_gc_var2(x, y); sexp_gc_var(z, puchi_gc_preserver3)\n"
+        "#define sexp_gc_var4(x, y, z, w) sexp_gc_var3(x, y, z); sexp_gc_var(w, puchi_gc_preserver4)\n"
+        "#define sexp_gc_var5(x, y, z, w, v) sexp_gc_var4(x, y, z, w); sexp_gc_var(v, puchi_gc_preserver5)\n"
+        "#define sexp_gc_var6(x, y, z, w, v, u) sexp_gc_var5(x, y, z, w, v); sexp_gc_var(u, puchi_gc_preserver6)\n"
+        "#define sexp_gc_var7(x, y, z, w, v, u, t) sexp_gc_var6(x, y, z, w, v, u); sexp_gc_var(t, puchi_gc_preserver7)\n"
+        "\n"
+        "#define sexp_gc_preserve1(ctx, x) sexp_gc_preserve(ctx, x, puchi_gc_preserver1)\n"
+        "#define sexp_gc_preserve2(ctx, x, y) sexp_gc_preserve1(ctx, x); sexp_gc_preserve(ctx, y, puchi_gc_preserver2)\n"
+        "#define sexp_gc_preserve3(ctx, x, y, z) sexp_gc_preserve2(ctx, x, y); sexp_gc_preserve(ctx, z, puchi_gc_preserver3)\n"
+        "#define sexp_gc_preserve4(ctx, x, y, z, w) sexp_gc_preserve3(ctx, x, y, z); sexp_gc_preserve(ctx, w, puchi_gc_preserver4)\n"
+        "#define sexp_gc_preserve5(ctx, x, y, z, w, v) sexp_gc_preserve4(ctx, x, y, z, w); sexp_gc_preserve(ctx, v, puchi_gc_preserver5)\n"
+        "#define sexp_gc_preserve6(ctx, x, y, z, w, v, u) sexp_gc_preserve5(ctx, x, y, z, w, v); sexp_gc_preserve(ctx, u, puchi_gc_preserver6)\n"
+        "#define sexp_gc_preserve7(ctx, x, y, z, w, v, u, t) sexp_gc_preserve6(ctx, x, y, z, w, v, u); sexp_gc_preserve(ctx, t, puchi_gc_preserver7)\n"
+        "\n"
+        "#define sexp_gc_release1(ctx) sexp_gc_release(ctx, NULL, puchi_gc_preserver1)\n"
+        "#define sexp_gc_release2(ctx) sexp_gc_release(ctx, NULL, puchi_gc_preserver1)\n"
+        "#define sexp_gc_release3(ctx) sexp_gc_release(ctx, NULL, puchi_gc_preserver1)\n"
+        "#define sexp_gc_release4(ctx) sexp_gc_release(ctx, NULL, puchi_gc_preserver1)\n"
+        "#define sexp_gc_release5(ctx) sexp_gc_release(ctx, NULL, puchi_gc_preserver1)\n"
+        "#define sexp_gc_release6(ctx) sexp_gc_release(ctx, NULL, puchi_gc_preserver1)\n"
+        "#define sexp_gc_release7(ctx) sexp_gc_release(ctx, NULL, puchi_gc_preserver1)\n"
+    )
+    if gc_macros_old not in text:
+        raise SystemExit("scrub_sexp_h: sexp_gc_varN / preserveN macros not found")
+    text = text.replace(gc_macros_old, gc_macros_new, 1)
     return text
 
 

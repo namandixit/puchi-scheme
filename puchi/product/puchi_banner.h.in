@@ -57,6 +57,7 @@ extern "C" {
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <stdarg.h>
 /* Host: include <stdio.h> before this header when using default
  * PUCHI_SNPRINTF / SSCANF (sexp.h stdio is scrubbed). */
@@ -109,45 +110,39 @@ extern "C" {
 #ifndef PUCHI_SSCANF
 #define PUCHI_SSCANF sscanf
 #endif
-/* ASCII character-class defaults (inline so arguments are evaluated once). */
-static inline int puchi_isalpha(int c) {
-  return (((unsigned)c | 32u) - (unsigned)'a') <= 25u;
-}
-static inline int puchi_isdigit(int c) {
-  return ((unsigned)c - (unsigned)'0') <= 9u;
-}
-static inline int puchi_isxdigit(int c) {
-  return puchi_isdigit(c) || (((unsigned)c | 32u) - (unsigned)'a') <= 5u;
-}
-static inline int puchi_isspace(int c) {
-  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
-}
-static inline int puchi_tolower(int c) {
-  return (puchi_isalpha(c) && (unsigned)c < 128u) ? (c | 32) : c;
-}
-static inline int puchi_toupper(int c) {
-  return (puchi_isalpha(c) && (unsigned)c < 128u) ? (c & ~32) : c;
-}
 #ifndef PUCHI_ISALPHA
-#define PUCHI_ISALPHA puchi_isalpha
+#define PUCHI_ISALPHA isalpha
 #endif
 #ifndef PUCHI_ISDIGIT
-#define PUCHI_ISDIGIT puchi_isdigit
+#define PUCHI_ISDIGIT isdigit
 #endif
 #ifndef PUCHI_ISXDIGIT
-#define PUCHI_ISXDIGIT puchi_isxdigit
+#define PUCHI_ISXDIGIT isxdigit
 #endif
 #ifndef PUCHI_ISSPACE
-#define PUCHI_ISSPACE puchi_isspace
+#define PUCHI_ISSPACE isspace
 #endif
 #ifndef PUCHI_TOLOWER
-#define PUCHI_TOLOWER puchi_tolower
+#define PUCHI_TOLOWER tolower
 #endif
 #ifndef PUCHI_TOUPPER
-#define PUCHI_TOUPPER puchi_toupper
+#define PUCHI_TOUPPER toupper
 #endif
+/* strcasecmp / strncasecmp are not ISO C (MSVC: _stricmp). Portable defaults
+ * live in puchi_libc_defaults.inc under PUCHI_IMPLEMENTATION || PUCHI_TEST. */
+#ifndef PUCHI_STRCASECMP
+#define PUCHI_STRCASECMP puchi_strcasecmp
+#endif
+#ifndef PUCHI_STRNCASECMP
+#define PUCHI_STRNCASECMP puchi_strncasecmp
+#endif
+#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)
+static inline int puchi_strcasecmp(const char *a, const char *b);
+static inline int puchi_strncasecmp(const char *a, const char *b, size_t n);
+#endif
+
 #ifndef PUCHI_LABS
-#define PUCHI_LABS labs
+#define PUCHI_LABS llabs
 #endif
 /* Core libm: GC heap growth and the numeric reader need these in every mode. */
 #ifndef PUCHI_POW
@@ -221,34 +216,7 @@ static inline int puchi_toupper(int c) {
 #endif /* PUCHI_ENABLE_NUMERICAL_TOWER */
 #endif /* !PUCHI_INTEGER_ONLY */
 
-/* Portable case-insensitive compare (no _stricmp / strcasecmp). */
-static inline int puchi_strcasecmp(const char *a, const char *b) {
-  unsigned char ca, cb;
-  for (;;) {
-    ca = (unsigned char)PUCHI_TOLOWER((unsigned char)*a++);
-    cb = (unsigned char)PUCHI_TOLOWER((unsigned char)*b++);
-    if (ca != cb) return (int)ca - (int)cb;
-    if (ca == 0) return 0;
-  }
-}
-static inline int puchi_strncasecmp(const char *a, const char *b, size_t n) {
-  unsigned char ca, cb;
-  if (n == 0) return 0;
-  do {
-    ca = (unsigned char)PUCHI_TOLOWER((unsigned char)*a++);
-    cb = (unsigned char)PUCHI_TOLOWER((unsigned char)*b++);
-    if (ca != cb) return (int)ca - (int)cb;
-    if (ca == 0) return 0;
-  } while (--n != 0);
-  return 0;
-}
-#ifndef PUCHI_STRCASECMP
-#define PUCHI_STRCASECMP puchi_strcasecmp
-#endif
-#ifndef PUCHI_STRNCASECMP
-#define PUCHI_STRNCASECMP puchi_strncasecmp
-#endif
-
+/* Bit-cast helper for sexp_pos_infinity / nan macros in the public header. */
 static inline double puchi_f64_from_bits(uint64_t u) {
   double d;
   PUCHI_MEMCPY(&d, &u, sizeof(d));
@@ -293,13 +261,17 @@ typedef struct puchi_module_ops {
   void (*free_buf)(void *userdata, char *buf);
 } puchi_module_ops;
 
+#ifndef PUCHI_NORETURN
+#define PUCHI_NORETURN _Noreturn
+#endif
+
 #if defined(PUCHI_IMPLEMENTATION)
 static void puchi_default_diagnose(void *ud, int code, const char *msg) {
   (void)ud;
   (void)code;
   (void)msg;
 }
-static void puchi_default_fatal(void *ud, int code, const char *msg) {
+PUCHI_NORETURN static void puchi_default_fatal(void *ud, int code, const char *msg) {
   (void)ud;
   (void)code;
   (void)msg;
@@ -311,7 +283,7 @@ static void puchi_default_fatal(void *ud, int code, const char *msg) {
 static void *puchi_host_alloc(void *ctx, size_t size);
 static void puchi_host_free(void *ctx, void *ptr);
 static void puchi_diagnose(void *ctx, int code, const char *msg);
-static void puchi_fatal(void *ctx, int code, const char *msg);
+PUCHI_NORETURN static void puchi_fatal(void *ctx, int code, const char *msg);
 #endif /* PUCHI_IMPLEMENTATION */
 
 /* ---- allocator hooks (per-context host on the heap; no process global) ---- */

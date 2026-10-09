@@ -248,6 +248,12 @@ echo "[puchi] writing puchi.h..."
 {
   cat "$PRODUCT/puchi_banner.h.in"
 
+  # Silence /W4 and -Weverything on amalgamated Chibi only when compiling the
+  # implementation TU or the PUCHI_TEST harness/stubs (not bare API includes).
+  echo "#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)"
+  cat "$PRODUCT/puchi_diag_push.inc"
+  echo "#endif /* PUCHI_IMPLEMENTATION || PUCHI_TEST (diag push) */"
+
   echo "/* ==== puchi feature forces ==== */"
   cat "$WORKDIR/puchi_features_force.h"
 
@@ -259,6 +265,13 @@ echo "[puchi] writing puchi.h..."
 
   echo "/* ==== eval.h ==== */"
   cat "$WORKDIR/eval.h"
+
+  # Portable strcasecmp bodies (not ISO C): after diag push; impl + TEST TUs.
+  echo "#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)"
+  echo "/* ==== puchi libc defaults (strcasecmp) ==== */"
+  cat "$PRODUCT/puchi_libc_defaults.inc"
+  echo "#endif /* PUCHI_IMPLEMENTATION || PUCHI_TEST (libc defaults) */"
+  echo
 
   cat "$PRODUCT/puchi_api_decls.inc"
   echo
@@ -304,6 +317,12 @@ echo "[puchi] writing puchi.h..."
 #endif
 
 #endif /* PUCHI_IMPLEMENTATION */
+
+EOF
+  echo "#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)"
+  cat "$PRODUCT/puchi_diag_pop.inc"
+  echo "#endif /* PUCHI_IMPLEMENTATION || PUCHI_TEST (diag pop) */"
+  cat <<'EOF'
 
 #endif /* PUCHI_H */
 EOF

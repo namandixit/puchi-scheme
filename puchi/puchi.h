@@ -57,6 +57,7 @@ extern "C" {
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <stdarg.h>
 /* Host: include <stdio.h> before this header when using default
  * PUCHI_SNPRINTF / SSCANF (sexp.h stdio is scrubbed). */
@@ -109,45 +110,39 @@ extern "C" {
 #if !defined(PUCHI_SSCANF)
 #define PUCHI_SSCANF sscanf
 #endif
-/* ASCII character-class defaults (inline so arguments are evaluated once). */
-static inline int puchi_isalpha(int c) {
-  return (((unsigned)c | 32u) - (unsigned)'a') <= 25u;
-}
-static inline int puchi_isdigit(int c) {
-  return ((unsigned)c - (unsigned)'0') <= 9u;
-}
-static inline int puchi_isxdigit(int c) {
-  return puchi_isdigit(c) || (((unsigned)c | 32u) - (unsigned)'a') <= 5u;
-}
-static inline int puchi_isspace(int c) {
-  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
-}
-static inline int puchi_tolower(int c) {
-  return (puchi_isalpha(c) && (unsigned)c < 128u) ? (c | 32) : c;
-}
-static inline int puchi_toupper(int c) {
-  return (puchi_isalpha(c) && (unsigned)c < 128u) ? (c & ~32) : c;
-}
 #if !defined(PUCHI_ISALPHA)
-#define PUCHI_ISALPHA puchi_isalpha
+#define PUCHI_ISALPHA isalpha
 #endif
 #if !defined(PUCHI_ISDIGIT)
-#define PUCHI_ISDIGIT puchi_isdigit
+#define PUCHI_ISDIGIT isdigit
 #endif
 #if !defined(PUCHI_ISXDIGIT)
-#define PUCHI_ISXDIGIT puchi_isxdigit
+#define PUCHI_ISXDIGIT isxdigit
 #endif
 #if !defined(PUCHI_ISSPACE)
-#define PUCHI_ISSPACE puchi_isspace
+#define PUCHI_ISSPACE isspace
 #endif
 #if !defined(PUCHI_TOLOWER)
-#define PUCHI_TOLOWER puchi_tolower
+#define PUCHI_TOLOWER tolower
 #endif
 #if !defined(PUCHI_TOUPPER)
-#define PUCHI_TOUPPER puchi_toupper
+#define PUCHI_TOUPPER toupper
 #endif
+/* strcasecmp / strncasecmp are not ISO C (MSVC: _stricmp). Portable defaults
+ * live in puchi_libc_defaults.inc under PUCHI_IMPLEMENTATION || PUCHI_TEST. */
+#if !defined(PUCHI_STRCASECMP)
+#define PUCHI_STRCASECMP puchi_strcasecmp
+#endif
+#if !defined(PUCHI_STRNCASECMP)
+#define PUCHI_STRNCASECMP puchi_strncasecmp
+#endif
+#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)
+static inline int puchi_strcasecmp(const char *a, const char *b);
+static inline int puchi_strncasecmp(const char *a, const char *b, size_t n);
+#endif
+
 #if !defined(PUCHI_LABS)
-#define PUCHI_LABS labs
+#define PUCHI_LABS llabs
 #endif
 /* Core libm: GC heap growth and the numeric reader need these in every mode. */
 #if !defined(PUCHI_POW)
@@ -221,34 +216,7 @@ static inline int puchi_toupper(int c) {
 #endif
 #endif
 
-/* Portable case-insensitive compare (no _stricmp / strcasecmp). */
-static inline int puchi_strcasecmp(const char *a, const char *b) {
-  unsigned char ca, cb;
-  for (;;) {
-    ca = (unsigned char)PUCHI_TOLOWER((unsigned char)*a++);
-    cb = (unsigned char)PUCHI_TOLOWER((unsigned char)*b++);
-    if (ca != cb) return (int)ca - (int)cb;
-    if (ca == 0) return 0;
-  }
-}
-static inline int puchi_strncasecmp(const char *a, const char *b, size_t n) {
-  unsigned char ca, cb;
-  if (n == 0) return 0;
-  do {
-    ca = (unsigned char)PUCHI_TOLOWER((unsigned char)*a++);
-    cb = (unsigned char)PUCHI_TOLOWER((unsigned char)*b++);
-    if (ca != cb) return (int)ca - (int)cb;
-    if (ca == 0) return 0;
-  } while (--n != 0);
-  return 0;
-}
-#if !defined(PUCHI_STRCASECMP)
-#define PUCHI_STRCASECMP puchi_strcasecmp
-#endif
-#if !defined(PUCHI_STRNCASECMP)
-#define PUCHI_STRNCASECMP puchi_strncasecmp
-#endif
-
+/* Bit-cast helper for sexp_pos_infinity / nan macros in the public header. */
 static inline double puchi_f64_from_bits(uint64_t u) {
   double d;
   PUCHI_MEMCPY(&d, &u, sizeof(d));
@@ -293,13 +261,17 @@ typedef struct puchi_module_ops {
   void (*free_buf)(void *userdata, char *buf);
 } puchi_module_ops;
 
+#if !defined(PUCHI_NORETURN)
+#define PUCHI_NORETURN _Noreturn
+#endif
+
 #if defined(PUCHI_IMPLEMENTATION)
 static void puchi_default_diagnose(void *ud, int code, const char *msg) {
   (void)ud;
   (void)code;
   (void)msg;
 }
-static void puchi_default_fatal(void *ud, int code, const char *msg) {
+PUCHI_NORETURN static void puchi_default_fatal(void *ud, int code, const char *msg) {
   (void)ud;
   (void)code;
   (void)msg;
@@ -311,7 +283,7 @@ static void puchi_default_fatal(void *ud, int code, const char *msg) {
 static void *puchi_host_alloc(void *ctx, size_t size);
 static void puchi_host_free(void *ctx, void *ptr);
 static void puchi_diagnose(void *ctx, int code, const char *msg);
-static void puchi_fatal(void *ctx, int code, const char *msg);
+PUCHI_NORETURN static void puchi_fatal(void *ctx, int code, const char *msg);
 #endif
 
 /* ---- allocator hooks (per-context host on the heap; no process global) ---- */
@@ -343,6 +315,59 @@ static void puchi_fatal(void *ctx, int code, const char *msg);
 #define sexp_architecture "portable"
 #define sexp_version "0.12.0"
 #define sexp_release_name "puchi"
+#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)
+/* Silence /W4 and -Weverything noise from amalgamated upstream Chibi.
+ * amalgamate.sh gates this on PUCHI_IMPLEMENTATION || PUCHI_TEST so bare
+ * API includes are not wrapped. */
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-align"
+#pragma clang diagnostic ignored "-Wcast-function-type-strict"
+#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
+#pragma clang diagnostic ignored "-Wbad-function-cast"
+#pragma clang diagnostic ignored "-Wsign-conversion"
+#pragma clang diagnostic ignored "-Wsign-compare"
+#pragma clang diagnostic ignored "-Wshorten-64-to-32"
+#pragma clang diagnostic ignored "-Wimplicit-int-conversion"
+#pragma clang diagnostic ignored "-Wimplicit-int-conversion-on-negation"
+#pragma clang diagnostic ignored "-Wimplicit-int-float-conversion"
+#pragma clang diagnostic ignored "-Wimplicit-const-int-float-conversion"
+#pragma clang diagnostic ignored "-Wimplicit-float-conversion"
+#pragma clang diagnostic ignored "-Wfloat-conversion"
+#pragma clang diagnostic ignored "-Wdouble-promotion"
+#pragma clang diagnostic ignored "-Wfloat-equal"
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#pragma clang diagnostic ignored "-Wunused-variable"
+#pragma clang diagnostic ignored "-Wunused-but-set-variable"
+#pragma clang diagnostic ignored "-Wunused-function"
+#pragma clang diagnostic ignored "-Wunused-macros"
+#pragma clang diagnostic ignored "-Wmissing-prototypes"
+#pragma clang diagnostic ignored "-Wmissing-variable-declarations"
+#pragma clang diagnostic ignored "-Wdeclaration-after-statement"
+#pragma clang diagnostic ignored "-Wimplicit-fallthrough"
+#pragma clang diagnostic ignored "-Wcomma"
+#pragma clang diagnostic ignored "-Wpadded"
+#pragma clang diagnostic ignored "-Wpadded-bitfield"
+#pragma clang diagnostic ignored "-Wswitch-default"
+#pragma clang diagnostic ignored "-Wgnu-folding-constant"
+#pragma clang diagnostic ignored "-Wimplicit-void-ptr-cast"
+#pragma clang diagnostic ignored "-Wtentative-definition-compat"
+#pragma clang diagnostic ignored "-Wsometimes-uninitialized"
+#pragma clang diagnostic ignored "-Wunsafe-buffer-usage"
+#elif defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4100) /* unreferenced formal parameter */
+#pragma warning(disable : 4101) /* unreferenced local variable */
+#pragma warning(disable : 4189) /* local variable initialized but not referenced */
+#pragma warning(disable : 4018) /* signed/unsigned mismatch */
+#pragma warning(disable : 4389) /* signed/unsigned mismatch */
+#pragma warning(disable : 4244) /* conversion possible loss of data */
+#pragma warning(disable : 4245) /* signed/unsigned conversion */
+#pragma warning(disable : 4267) /* size_t conversion */
+#pragma warning(disable : 4146) /* unary minus on unsigned */
+#pragma warning(disable : 4334) /* 32-bit shift result converted to 64 bits */
+#endif
+#endif
 /* ==== puchi feature forces ==== */
 /* Forced by amalgamate.sh. Set PUCHI_* macros before including puchi.h.
  *
@@ -594,6 +619,10 @@ typedef char sexp_abi_identifier_t[8];
 #define sexp_version_compatible(ctx, subver, genver) 1
 #define sexp_abi_compatible(ctx, subabi, genabi) 1
 #endif
+
+#if !defined(SEXP_DEBUG_GC)
+#define SEXP_DEBUG_GC 0
+#endif
 /* ==== sexp.h (bignum.h inlined mid-file under PUCHI_ENABLE_NUMERICAL_TOWER) ==== */
 
 
@@ -745,14 +774,14 @@ typedef struct sexp_struct *sexp;
 #define sexp_heap_last_block(h) ((sexp)((char*)h->data + h->size - sexp_heap_align(sexp_free_chunk_size)))
 #define sexp_heap_end(h) ((sexp)((char*)h->data + h->size))
 
-#define __HALF_MAX_SIGNED(type) ((type)1 << (sizeof(type)*8-2))
-#define __MAX_SIGNED(type) (__HALF_MAX_SIGNED(type) - 1 + __HALF_MAX_SIGNED(type))
-#define __MIN_SIGNED(type) (-1 - __MAX_SIGNED(type))
+#define PUCHI_HALF_MAX_SIGNED(type) ((type)1 << (sizeof(type)*8-2))
+#define PUCHI_MAX_SIGNED(type) (PUCHI_HALF_MAX_SIGNED(type) - 1 + PUCHI_HALF_MAX_SIGNED(type))
+#define PUCHI_MIN_SIGNED(type) (-1 - PUCHI_MAX_SIGNED(type))
 
 #define SEXP_UINT_T_MAX ((sexp_uint_t)-1)
 #define SEXP_UINT_T_MIN (0)
-#define SEXP_SINT_T_MAX __MAX_SIGNED(sexp_sint_t)
-#define SEXP_SINT_T_MIN __MIN_SIGNED(sexp_sint_t)
+#define SEXP_SINT_T_MAX PUCHI_MAX_SIGNED(sexp_sint_t)
+#define SEXP_SINT_T_MIN PUCHI_MIN_SIGNED(sexp_sint_t)
 
 #define SEXP_MAX_FIXNUM ((((sexp_sint_t)1)<<(sizeof(sexp_sint_t)*8-SEXP_FIXNUM_BITS-1))-1)
 #define SEXP_MIN_FIXNUM (-SEXP_MAX_FIXNUM-1)
@@ -841,7 +870,7 @@ struct sexp_mark_stack_ptr_t {
   struct sexp_mark_stack_ptr_t *prev; /* TODO: remove for allocations on stack */
 };
 
-/* Note this must be kept in sync with the _sexp_type_specs type            */
+/* Note this must be kept in sync with the puchi_type_specs type            */
 /* registry in sexp.c.  The structure of a sexp type is:                    */
 /*   [ HEADER [[EQ_FIELDS... ] GC_FIELDS...] [WEAK_FIELDS...] [OTHER...] ]  */
 /* Thus all sexp's must be contiguous and align at the start of the type.   */
@@ -1026,7 +1055,7 @@ SEXP_API sexp sexp_gc(sexp ctx, size_t *sum_freed);
 
 #define sexp_gc_var(x, y)                       \
   sexp x = SEXP_VOID;                           \
-  struct sexp_gc_var_t y = {NULL, NULL};
+  struct sexp_gc_var_t y = {NULL, NULL}
 
 #define sexp_gc_preserve_name(ctx, x, y)
 
@@ -1046,29 +1075,29 @@ SEXP_API void sexp_release_object(sexp ctx, sexp x);
 void* sexp_alloc(sexp ctx, size_t size);
 #define sexp_alloc_atomic            sexp_alloc
 
-#define sexp_gc_var1(x) sexp_gc_var(x, __sexp_gc_preserver1)
-#define sexp_gc_var2(x, y) sexp_gc_var1(x) sexp_gc_var(y, __sexp_gc_preserver2)
-#define sexp_gc_var3(x, y, z) sexp_gc_var2(x, y) sexp_gc_var(z, __sexp_gc_preserver3)
-#define sexp_gc_var4(x, y, z, w) sexp_gc_var3(x, y, z) sexp_gc_var(w, __sexp_gc_preserver4)
-#define sexp_gc_var5(x, y, z, w, v) sexp_gc_var4(x, y, z, w) sexp_gc_var(v, __sexp_gc_preserver5)
-#define sexp_gc_var6(x, y, z, w, v, u) sexp_gc_var5(x, y, z, w, v) sexp_gc_var(u, __sexp_gc_preserver6)
-#define sexp_gc_var7(x, y, z, w, v, u, t) sexp_gc_var6(x, y, z, w, v, u) sexp_gc_var(t, __sexp_gc_preserver7)
+#define sexp_gc_var1(x) sexp_gc_var(x, puchi_gc_preserver1)
+#define sexp_gc_var2(x, y) sexp_gc_var1(x); sexp_gc_var(y, puchi_gc_preserver2)
+#define sexp_gc_var3(x, y, z) sexp_gc_var2(x, y); sexp_gc_var(z, puchi_gc_preserver3)
+#define sexp_gc_var4(x, y, z, w) sexp_gc_var3(x, y, z); sexp_gc_var(w, puchi_gc_preserver4)
+#define sexp_gc_var5(x, y, z, w, v) sexp_gc_var4(x, y, z, w); sexp_gc_var(v, puchi_gc_preserver5)
+#define sexp_gc_var6(x, y, z, w, v, u) sexp_gc_var5(x, y, z, w, v); sexp_gc_var(u, puchi_gc_preserver6)
+#define sexp_gc_var7(x, y, z, w, v, u, t) sexp_gc_var6(x, y, z, w, v, u); sexp_gc_var(t, puchi_gc_preserver7)
 
-#define sexp_gc_preserve1(ctx, x) sexp_gc_preserve(ctx, x, __sexp_gc_preserver1)
-#define sexp_gc_preserve2(ctx, x, y) sexp_gc_preserve1(ctx, x); sexp_gc_preserve(ctx, y, __sexp_gc_preserver2)
-#define sexp_gc_preserve3(ctx, x, y, z) sexp_gc_preserve2(ctx, x, y); sexp_gc_preserve(ctx, z, __sexp_gc_preserver3)
-#define sexp_gc_preserve4(ctx, x, y, z, w) sexp_gc_preserve3(ctx, x, y, z); sexp_gc_preserve(ctx, w, __sexp_gc_preserver4)
-#define sexp_gc_preserve5(ctx, x, y, z, w, v) sexp_gc_preserve4(ctx, x, y, z, w); sexp_gc_preserve(ctx, v, __sexp_gc_preserver5)
-#define sexp_gc_preserve6(ctx, x, y, z, w, v, u) sexp_gc_preserve5(ctx, x, y, z, w, v); sexp_gc_preserve(ctx, u, __sexp_gc_preserver6)
-#define sexp_gc_preserve7(ctx, x, y, z, w, v, u, t) sexp_gc_preserve6(ctx, x, y, z, w, v, u); sexp_gc_preserve(ctx, t, __sexp_gc_preserver7)
+#define sexp_gc_preserve1(ctx, x) sexp_gc_preserve(ctx, x, puchi_gc_preserver1)
+#define sexp_gc_preserve2(ctx, x, y) sexp_gc_preserve1(ctx, x); sexp_gc_preserve(ctx, y, puchi_gc_preserver2)
+#define sexp_gc_preserve3(ctx, x, y, z) sexp_gc_preserve2(ctx, x, y); sexp_gc_preserve(ctx, z, puchi_gc_preserver3)
+#define sexp_gc_preserve4(ctx, x, y, z, w) sexp_gc_preserve3(ctx, x, y, z); sexp_gc_preserve(ctx, w, puchi_gc_preserver4)
+#define sexp_gc_preserve5(ctx, x, y, z, w, v) sexp_gc_preserve4(ctx, x, y, z, w); sexp_gc_preserve(ctx, v, puchi_gc_preserver5)
+#define sexp_gc_preserve6(ctx, x, y, z, w, v, u) sexp_gc_preserve5(ctx, x, y, z, w, v); sexp_gc_preserve(ctx, u, puchi_gc_preserver6)
+#define sexp_gc_preserve7(ctx, x, y, z, w, v, u, t) sexp_gc_preserve6(ctx, x, y, z, w, v, u); sexp_gc_preserve(ctx, t, puchi_gc_preserver7)
 
-#define sexp_gc_release1(ctx) sexp_gc_release(ctx, NULL, __sexp_gc_preserver1)
-#define sexp_gc_release2(ctx) sexp_gc_release(ctx, NULL, __sexp_gc_preserver1)
-#define sexp_gc_release3(ctx) sexp_gc_release(ctx, NULL, __sexp_gc_preserver1)
-#define sexp_gc_release4(ctx) sexp_gc_release(ctx, NULL, __sexp_gc_preserver1)
-#define sexp_gc_release5(ctx) sexp_gc_release(ctx, NULL, __sexp_gc_preserver1)
-#define sexp_gc_release6(ctx) sexp_gc_release(ctx, NULL, __sexp_gc_preserver1)
-#define sexp_gc_release7(ctx) sexp_gc_release(ctx, NULL, __sexp_gc_preserver1)
+#define sexp_gc_release1(ctx) sexp_gc_release(ctx, NULL, puchi_gc_preserver1)
+#define sexp_gc_release2(ctx) sexp_gc_release(ctx, NULL, puchi_gc_preserver1)
+#define sexp_gc_release3(ctx) sexp_gc_release(ctx, NULL, puchi_gc_preserver1)
+#define sexp_gc_release4(ctx) sexp_gc_release(ctx, NULL, puchi_gc_preserver1)
+#define sexp_gc_release5(ctx) sexp_gc_release(ctx, NULL, puchi_gc_preserver1)
+#define sexp_gc_release6(ctx) sexp_gc_release(ctx, NULL, puchi_gc_preserver1)
+#define sexp_gc_release7(ctx) sexp_gc_release(ctx, NULL, puchi_gc_preserver1)
 
 #define sexp_align(n, bits) (((n)+(1<<(bits))-1)&(((sexp_uint_t)-1)-((1<<(bits))-1)))
 
@@ -1738,27 +1767,30 @@ SEXP_API sexp sexp_make_unsigned_integer(sexp ctx, unsigned long long x);
 #endif
 #define sexp_evenp(x) (!(sexp_oddp(x)))
 
-#define sexp_negate_exact(x)                            \
+#define sexp_negate_exact(x) do {                       \
   if (sexp_bignump(x))                                  \
     sexp_bignum_sign(x) = -sexp_bignum_sign(x);         \
   else if (sexp_fixnump(x))                             \
-    x = sexp_fx_neg(x);
+    x = sexp_fx_neg(x);                                 \
+} while (0)
 
 #define sexp_negate_flonum(x) sexp_flonum_value(x) = -(sexp_flonum_value(x))
 
 /* TODO: Doesn't support x == SEXP_MIN_FIXNUM. */
-#define sexp_negate(x)                                  \
+#define sexp_negate(x) do {                             \
   if (sexp_flonump(x))                                  \
     sexp_negate_flonum(x);                              \
   else                                                  \
-    sexp_negate_exact(x)
+    sexp_negate_exact(x);                               \
+} while (0)
 
-#define sexp_negate_maybe_ratio(x)                      \
+#define sexp_negate_maybe_ratio(x) do {                 \
   if (sexp_ratiop(x)) {                                 \
     sexp_negate_exact(sexp_ratio_numerator(x));         \
   } else {                                              \
     sexp_negate(x);                                     \
-  }
+  }                                                     \
+} while (0)
 
 #if !defined(PUCHI_INTEGER_ONLY)
 
@@ -2782,6 +2814,32 @@ SEXP_API int sexp_rest_unused_p (sexp lambda);
 #define sexp_warn_undefs(ctx, from, to, res) sexp_warn_undefs_op(ctx, NULL, 3, from, to, res)
 #define sexp_string_cmp(ctx, a, b, c) sexp_string_cmp_op(ctx, NULL, 3, a, b, c)
 
+#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)
+/* ==== puchi libc defaults (strcasecmp) ==== */
+/* Portable strcasecmp / strncasecmp (not ISO C). Emitted under
+ * PUCHI_IMPLEMENTATION || PUCHI_TEST after diag push. Uses PUCHI_TOLOWER. */
+static inline int puchi_strcasecmp(const char *a, const char *b) {
+  unsigned char ca, cb;
+  for (;;) {
+    ca = (unsigned char)PUCHI_TOLOWER((unsigned char)*a++);
+    cb = (unsigned char)PUCHI_TOLOWER((unsigned char)*b++);
+    if (ca != cb) return (int)ca - (int)cb;
+    if (ca == 0) return 0;
+  }
+}
+static inline int puchi_strncasecmp(const char *a, const char *b, size_t n) {
+  unsigned char ca, cb;
+  if (n == 0) return 0;
+  do {
+    ca = (unsigned char)PUCHI_TOLOWER((unsigned char)*a++);
+    cb = (unsigned char)PUCHI_TOLOWER((unsigned char)*b++);
+    if (ca != cb) return (int)ca - (int)cb;
+    if (ca == 0) return 0;
+  } while (--n != 0);
+  return 0;
+}
+#endif
+
 /* ---- puchi high-level API ---- */
 SEXP_API sexp sexp_create_context(sexp_uint_t heap_size, sexp_uint_t heap_max_size, const puchi_host *host);
 SEXP_API sexp sexp_delete_context(sexp ctx);
@@ -2837,7 +2895,7 @@ static void puchi_diagnose(void *ctx_v, int code, const char *msg) {
   h->host.diagnose(h->host.userdata, code, msg ? msg : "");
 }
 
-static void puchi_fatal(void *ctx_v, int code, const char *msg) {
+PUCHI_NORETURN static void puchi_fatal(void *ctx_v, int code, const char *msg) {
   sexp ctx = (sexp)ctx_v;
   sexp_heap h;
   if (ctx && sexp_pointerp(ctx) && sexp_contextp(ctx) &&
@@ -3482,7 +3540,7 @@ sexp sexp_finalize_uvector (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
   return SEXP_VOID;
 }
 
-static struct sexp_type_struct _sexp_type_specs[] = {
+static struct sexp_type_struct puchi_type_specs[] = {
   {(sexp)"Object", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, SEXP_OBJECT, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Type", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, SEXP_TYPE, sexp_offsetof(type, name), 8, 8, 0, 0, sexp_sizeof(type), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Integer", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, SEXP_FIXNUM, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL},
@@ -3748,7 +3806,7 @@ void sexp_init_context_globals (sexp ctx) {
     if (!type) {
       return; /* TODO - fundamental OOM, what to do here? */
     }
-    PUCHI_MEMCPY(&(type->value), &(_sexp_type_specs[i]), sizeof(_sexp_type_specs[0]));
+    PUCHI_MEMCPY(&(type->value), &(puchi_type_specs[i]), sizeof(puchi_type_specs[0]));
     vec[i] = type;
     sexp_type_name(type) = sexp_c_string(ctx, (char*)sexp_type_name(type), -1);
     if (sexp_type_finalize_name(type)) {
@@ -5952,7 +6010,7 @@ static char classify_infnan(char *str) {
 sexp sexp_read_raw (sexp ctx, sexp in, sexp *shares) {
   char *str;
   int c1, c2, line;
-  char class;
+  char infnan_kind;
   sexp tmp2;
   sexp_gc_var2(res, tmp);
   sexp_gc_preserve2(ctx, res, tmp);
@@ -6462,9 +6520,9 @@ sexp sexp_read_raw (sexp ctx, sexp in, sexp *shares) {
         else if (PUCHI_STRCASECMP(str+1, "nan.0") == 0)
           res = sexp_make_flonum(ctx, sexp_nan);
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-        else if ((class = classify_infnan(str)) != '0') {
+        else if ((infnan_kind = classify_infnan(str)) != '0') {
           tmp = sexp_make_flonum(ctx,
-                                 class == 'n' ? sexp_nan
+                                 infnan_kind == 'n' ? sexp_nan
                                               : c1 == '+' ? sexp_pos_infinity
                                                           : sexp_neg_infinity);
           /* This works because inf.0 and nan.0 are the same length. */
@@ -6613,217 +6671,217 @@ void sexp_init (void) {
 
 /* amalgamated eval.h */
 
-#define _I(n) sexp_make_fixnum(n)
+#define PUCHI_I(n) sexp_make_fixnum(n)
 
-#define _OP(c,o,n,m,rt,a1,a2,a3,i,s,d,f) \
+#define PUCHI_OP(c,o,n,m,rt,a1,a2,a3,i,s,d,f) \
  {(sexp)s, d, NULL, NULL, rt, a1, a2, a3, NULL, NULL, c, o, n, m, i, f}
 
-#define _GETTER(name, type, index) \
-  {(sexp)name, _I(type), _I(index), NULL, _I(SEXP_OBJECT), _I(type), NULL, NULL, NULL, NULL, SEXP_OPC_GETTER, SEXP_OP_SLOT_REF, 1, 0, 0, NULL}
-#define _SETTER(name, type, index) \
-  {(sexp)name, _I(type), _I(index), NULL, SEXP_VOID, _I(type), _I(SEXP_OBJECT), NULL, NULL, NULL, SEXP_OPC_SETTER, SEXP_OP_SLOT_SET, 2, 0, 0, NULL}
+#define PUCHI_GETTER(name, type, index) \
+  {(sexp)name, PUCHI_I(type), PUCHI_I(index), NULL, PUCHI_I(SEXP_OBJECT), PUCHI_I(type), NULL, NULL, NULL, NULL, SEXP_OPC_GETTER, SEXP_OP_SLOT_REF, 1, 0, 0, NULL}
+#define PUCHI_SETTER(name, type, index) \
+  {(sexp)name, PUCHI_I(type), PUCHI_I(index), NULL, SEXP_VOID, PUCHI_I(type), PUCHI_I(SEXP_OBJECT), NULL, NULL, NULL, SEXP_OPC_SETTER, SEXP_OP_SLOT_SET, 2, 0, 0, NULL}
 
-#define _PARAM(n, t) \
-  _OP(SEXP_OPC_PARAMETER, SEXP_OP_PARAMETER_REF, 0, 1, t, t, SEXP_FALSE, SEXP_FALSE, 0, n, SEXP_FALSE, 0)
+#define PUCHI_PARAM(n, t) \
+  PUCHI_OP(SEXP_OPC_PARAMETER, SEXP_OP_PARAMETER_REF, 0, 1, t, t, SEXP_FALSE, SEXP_FALSE, 0, n, SEXP_FALSE, 0)
 
-#define _FN(o,n,m,rt,a1,a2,a3,s,d,f) _OP(SEXP_OPC_FOREIGN, o, n, m, rt, a1, a2, a3, 0, s, d, (sexp_proc1)f)
+#define PUCHI_FN(o,n,m,rt,a1,a2,a3,s,d,f) PUCHI_OP(SEXP_OPC_FOREIGN, o, n, m, rt, a1, a2, a3, 0, s, d, (sexp_proc1)f)
 
-#define _FN0(rt, s, d, f) _FN(SEXP_OP_FCALL0, 0, 0, rt, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, s, d, f)
-#define _FN1(rt, a1, s, d, f) _FN(SEXP_OP_FCALL1, 1, 0, rt, a1, SEXP_FALSE, SEXP_FALSE, s, d, f)
-#define _FN1OPT(rt, a1, s, d, f) _FN(SEXP_OP_FCALL1, 0, 1, rt, a1, SEXP_FALSE, SEXP_FALSE, s, d, f)
-#define _FN1OPTP(rt, a1, s, d, f) _FN(SEXP_OP_FCALL1, 0, 3, rt, a1, SEXP_FALSE, SEXP_FALSE, s, d, f)
-#define _FN2(rt, a1, a2, s, d, f) _FN(SEXP_OP_FCALL2, 2, 0, rt, a1, a2, SEXP_FALSE, s, d, f)
-#define _FN2OPT(rt, a1, a2, s, d, f) _FN(SEXP_OP_FCALL2, 1, 1, rt, a1, a2, SEXP_FALSE, s, d, f)
-#define _FN2OPTP(rt, a1, a2, s, d, f) _FN(SEXP_OP_FCALL2, 1, 3, rt, a1, a2, SEXP_FALSE, s, d, f)
-#define _FN3(rt, a1, a2, a3, s, d, f) _FN(SEXP_OP_FCALL3, 3, 0, rt, a1, a2, a3, s, d, f)
-#define _FN3OPT(rt, a1, a2, a3, s, d, f) _FN(SEXP_OP_FCALL3, 2, 1, rt, a1, a2, a3, s, d, f)
-#define _FN4(rt, a1, a2, a3, s, d, f) _FN(SEXP_OP_FCALL4, 4, 0, rt, a1, a2, a3, s, d, f)
-#define _FN5(rt, a1, a2, a3, s, d, f) _FN(SEXP_OP_FCALLN, 5, 0, rt, a1, a2, a3, s, d, f)
+#define PUCHI_FN0(rt, s, d, f) PUCHI_FN(SEXP_OP_FCALL0, 0, 0, rt, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, s, d, f)
+#define PUCHI_FN1(rt, a1, s, d, f) PUCHI_FN(SEXP_OP_FCALL1, 1, 0, rt, a1, SEXP_FALSE, SEXP_FALSE, s, d, f)
+#define PUCHI_FN1OPT(rt, a1, s, d, f) PUCHI_FN(SEXP_OP_FCALL1, 0, 1, rt, a1, SEXP_FALSE, SEXP_FALSE, s, d, f)
+#define PUCHI_FN1OPTP(rt, a1, s, d, f) PUCHI_FN(SEXP_OP_FCALL1, 0, 3, rt, a1, SEXP_FALSE, SEXP_FALSE, s, d, f)
+#define PUCHI_FN2(rt, a1, a2, s, d, f) PUCHI_FN(SEXP_OP_FCALL2, 2, 0, rt, a1, a2, SEXP_FALSE, s, d, f)
+#define PUCHI_FN2OPT(rt, a1, a2, s, d, f) PUCHI_FN(SEXP_OP_FCALL2, 1, 1, rt, a1, a2, SEXP_FALSE, s, d, f)
+#define PUCHI_FN2OPTP(rt, a1, a2, s, d, f) PUCHI_FN(SEXP_OP_FCALL2, 1, 3, rt, a1, a2, SEXP_FALSE, s, d, f)
+#define PUCHI_FN3(rt, a1, a2, a3, s, d, f) PUCHI_FN(SEXP_OP_FCALL3, 3, 0, rt, a1, a2, a3, s, d, f)
+#define PUCHI_FN3OPT(rt, a1, a2, a3, s, d, f) PUCHI_FN(SEXP_OP_FCALL3, 2, 1, rt, a1, a2, a3, s, d, f)
+#define PUCHI_FN4(rt, a1, a2, a3, s, d, f) PUCHI_FN(SEXP_OP_FCALL4, 4, 0, rt, a1, a2, a3, s, d, f)
+#define PUCHI_FN5(rt, a1, a2, a3, s, d, f) PUCHI_FN(SEXP_OP_FCALLN, 5, 0, rt, a1, a2, a3, s, d, f)
 
 static struct sexp_opcode_struct opcodes[] = {
-_PARAM("current-input-port", _I(SEXP_IPORT)),
-_PARAM("current-output-port", _I(SEXP_OPORT)),
-_PARAM("current-error-port", _I(SEXP_OPORT)),
-_PARAM("current-exception-handler", _I(SEXP_PROCEDURE)),
-_PARAM("interaction-environment", _I(SEXP_ENV)),
-_PARAM("command-line", SEXP_NULL),
-_OP(SEXP_OPC_GETTER, SEXP_OP_CAR, 1, 0, _I(SEXP_OBJECT), _I(SEXP_PAIR), SEXP_FALSE, SEXP_FALSE, 0, "car", 0, NULL),
-_OP(SEXP_OPC_SETTER, SEXP_OP_SET_CAR, 2, 0, SEXP_VOID, _I(SEXP_PAIR), _I(SEXP_OBJECT), SEXP_FALSE, 0, "set-car!", 0, NULL),
-_OP(SEXP_OPC_GETTER, SEXP_OP_CDR, 1, 0, _I(SEXP_OBJECT), _I(SEXP_PAIR), SEXP_FALSE, SEXP_FALSE, 0, "cdr", 0, NULL),
-_OP(SEXP_OPC_SETTER, SEXP_OP_SET_CDR, 2, 0, SEXP_VOID, _I(SEXP_PAIR), _I(SEXP_OBJECT), SEXP_FALSE, 0, "set-cdr!", 0, NULL),
-_GETTER("pair-source", SEXP_PAIR, 2),
-_SETTER("pair-source-set!", SEXP_PAIR, 2),
-_GETTER("syntactic-closure-rename", SEXP_SYNCLO, 3),
-_SETTER("syntactic-closure-set-rename!", SEXP_SYNCLO, 3),
-_OP(SEXP_OPC_GETTER, SEXP_OP_VECTOR_REF, 2, 0, _I(SEXP_OBJECT), _I(SEXP_VECTOR), _I(SEXP_FIXNUM), SEXP_FALSE, 0, "vector-ref", 0, NULL),
-_OP(SEXP_OPC_SETTER, SEXP_OP_VECTOR_SET, 3, 0, SEXP_VOID, _I(SEXP_VECTOR), _I(SEXP_FIXNUM), _I(SEXP_OBJECT), 0, "vector-set!", 0, NULL),
-_OP(SEXP_OPC_GETTER, SEXP_OP_VECTOR_LENGTH, 1, 0, _I(SEXP_FIXNUM), _I(SEXP_VECTOR), SEXP_FALSE, SEXP_FALSE, 0, "vector-length", 0, NULL),
-_OP(SEXP_OPC_GETTER, SEXP_OP_BYTES_REF, 2, 0, _I(SEXP_FIXNUM), _I(SEXP_BYTES), _I(SEXP_FIXNUM), SEXP_FALSE, 0, "bytevector-u8-ref", 0, NULL),
-_OP(SEXP_OPC_SETTER, SEXP_OP_BYTES_SET, 3, 0, SEXP_VOID, _I(SEXP_BYTES), _I(SEXP_FIXNUM), _I(SEXP_FIXNUM), 0, "bytevector-u8-set!", 0, NULL),
-_OP(SEXP_OPC_GETTER, SEXP_OP_BYTES_LENGTH, 1, 0, _I(SEXP_FIXNUM), _I(SEXP_BYTES), SEXP_FALSE, SEXP_FALSE, 0, "bytevector-length", 0, NULL),
-_OP(SEXP_OPC_GETTER, SEXP_OP_STRING_REF, 2, 0, _I(SEXP_CHAR), _I(SEXP_STRING), _I(SEXP_STRING_CURSOR), SEXP_FALSE, 0, "string-cursor-ref", 0, NULL),
-_OP(SEXP_OPC_GETTER, SEXP_OP_STRING_CURSOR_NEXT, 2, 0, _I(SEXP_STRING_CURSOR), _I(SEXP_STRING), _I(SEXP_STRING_CURSOR), SEXP_FALSE, 0, "string-cursor-next", 0, NULL),
-_OP(SEXP_OPC_GETTER, SEXP_OP_STRING_CURSOR_PREV, 2, 0, _I(SEXP_STRING_CURSOR), _I(SEXP_STRING), _I(SEXP_STRING_CURSOR), SEXP_FALSE, 0, "string-cursor-prev", 0, NULL),
-_OP(SEXP_OPC_GETTER, SEXP_OP_STRING_CURSOR_END, 1, 0, _I(SEXP_STRING_CURSOR), _I(SEXP_STRING), SEXP_FALSE, SEXP_FALSE, 0, "string-cursor-end", 0, NULL),
-_FN1(_I(SEXP_FIXNUM), _I(SEXP_STRING_CURSOR), "string-cursor-offset", 0, sexp_string_cursor_offset),
-_OP(SEXP_OPC_SETTER, SEXP_OP_STRING_SET, 3, 0, SEXP_VOID, _I(SEXP_STRING), _I(SEXP_FIXNUM), _I(SEXP_CHAR), 0, "string-cursor-set!", 0, NULL),
-_OP(SEXP_OPC_GETTER, SEXP_OP_STRING_LENGTH, 1, 0, _I(SEXP_FIXNUM), _I(SEXP_STRING), SEXP_FALSE, SEXP_FALSE, 0, "string-length", 0, NULL),
-_FN1(_I(SEXP_FLONUM), _I(SEXP_FIXNUM), "exact->inexact", 0, sexp_exact_to_inexact),
-_FN1(_I(SEXP_FIXNUM), _I(SEXP_FLONUM), "inexact->exact", 0, sexp_inexact_to_exact),
-_OP(SEXP_OPC_GENERIC, SEXP_OP_CHAR_UPCASE, 1, 0, _I(SEXP_CHAR), _I(SEXP_CHAR), SEXP_FALSE, SEXP_FALSE, 0, "char-upcase", 0, NULL),
-_OP(SEXP_OPC_GENERIC, SEXP_OP_CHAR_DOWNCASE, 1, 0, _I(SEXP_CHAR), _I(SEXP_CHAR), SEXP_FALSE, SEXP_FALSE, 0, "char-downcase", 0, NULL),
-_OP(SEXP_OPC_GENERIC, SEXP_OP_CHAR2INT, 1, 0, _I(SEXP_FIXNUM), _I(SEXP_CHAR), SEXP_FALSE, SEXP_FALSE, 0, "char->integer", 0, NULL),
-_OP(SEXP_OPC_GENERIC, SEXP_OP_INT2CHAR, 1, 0, _I(SEXP_CHAR), _I(SEXP_FIXNUM), SEXP_FALSE, SEXP_FALSE, 0, "integer->char", 0, NULL),
-_OP(SEXP_OPC_ARITHMETIC,     SEXP_OP_ADD, 0, 1, _I(SEXP_NUMBER), _I(SEXP_NUMBER), _I(SEXP_NUMBER), SEXP_FALSE, 0, "+", SEXP_ZERO, NULL),
-_OP(SEXP_OPC_ARITHMETIC,     SEXP_OP_MUL, 0, 1, _I(SEXP_NUMBER), _I(SEXP_NUMBER), _I(SEXP_NUMBER), SEXP_FALSE, 0, "*", SEXP_ONE, NULL),
-_OP(SEXP_OPC_ARITHMETIC,     SEXP_OP_SUB, 1, 1, _I(SEXP_NUMBER), _I(SEXP_NUMBER), _I(SEXP_NUMBER), SEXP_FALSE, 1, "-", SEXP_ZERO, NULL),
-_OP(SEXP_OPC_ARITHMETIC,     SEXP_OP_DIV, 1, 1, _I(SEXP_NUMBER), _I(SEXP_NUMBER), _I(SEXP_NUMBER), SEXP_FALSE, 1, "/", SEXP_ONE, NULL),
-_OP(SEXP_OPC_ARITHMETIC,     SEXP_OP_QUOTIENT, 2, 0, _I(SEXP_FIXNUM), _I(SEXP_FIXNUM), _I(SEXP_FIXNUM), SEXP_FALSE, 0, "quotient", 0, NULL),
-_OP(SEXP_OPC_ARITHMETIC,     SEXP_OP_REMAINDER, 2, 0, _I(SEXP_FIXNUM), _I(SEXP_FIXNUM), _I(SEXP_FIXNUM), SEXP_FALSE, 0, "remainder", 0, NULL),
-_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_LT,  2, 1, _I(SEXP_BOOLEAN), _I(SEXP_NUMBER), _I(SEXP_NUMBER), SEXP_FALSE, 0, "<", 0, NULL),
-_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_LE,  2, 1, _I(SEXP_BOOLEAN), _I(SEXP_NUMBER), _I(SEXP_NUMBER), SEXP_FALSE, 0, "<=", 0, NULL),
-_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_LT,  2, 1, _I(SEXP_BOOLEAN), _I(SEXP_NUMBER), _I(SEXP_NUMBER), SEXP_FALSE, 1, ">", 0, NULL),
-_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_LE,  2, 1, _I(SEXP_BOOLEAN), _I(SEXP_NUMBER), _I(SEXP_NUMBER), SEXP_FALSE, 1, ">=", 0, NULL),
-_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_EQN, 2, 1, _I(SEXP_BOOLEAN), _I(SEXP_NUMBER), _I(SEXP_NUMBER), SEXP_FALSE, 0, "=", 0, NULL),
-_OP(SEXP_OPC_PREDICATE,      SEXP_OP_EQ,  2, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), _I(SEXP_OBJECT), SEXP_FALSE, 0, "eq?", 0, NULL),
-_OP(SEXP_OPC_CONSTRUCTOR,    SEXP_OP_CONS, 2, 0, _I(SEXP_PAIR), _I(SEXP_OBJECT), _I(SEXP_OBJECT), SEXP_FALSE, 0, "cons", 0, NULL),
-_OP(SEXP_OPC_CONSTRUCTOR,    SEXP_OP_MAKE_VECTOR, 1, 1, _I(SEXP_VECTOR), _I(SEXP_FIXNUM), _I(SEXP_OBJECT), SEXP_FALSE, 0, "make-vector", SEXP_VOID, NULL),
-_OP(SEXP_OPC_CONSTRUCTOR,    SEXP_OP_MAKE_EXCEPTION, 5, 0, _I(SEXP_EXCEPTION), _I(SEXP_OBJECT), _I(SEXP_OBJECT), _I(SEXP_OBJECT), 0, "make-exception", 0, NULL),
-_GETTER("exception-kind", SEXP_EXCEPTION, 0),
-_GETTER("exception-irritants", SEXP_EXCEPTION, 2),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_ISA,  2, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), _I(SEXP_OBJECT), SEXP_FALSE, 0, "is-a?", NULL, 0),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_NULLP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "null?", NULL, 0),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_EOFP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "eof-object?", NULL, 0),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_SYMBOLP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "symbol?", NULL, 0),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_CHARP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "char?", NULL, 0),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_FIXNUMP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "fixnum?", NULL, 0),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_SCP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "string-cursor?", NULL, 0),
-_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_SC_LT,  2, 1, _I(SEXP_BOOLEAN), _I(SEXP_STRING_CURSOR), _I(SEXP_STRING_CURSOR), SEXP_FALSE, 0, "string-cursor<?", 0, NULL),
-_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_SC_LE,  2, 1, _I(SEXP_BOOLEAN), _I(SEXP_STRING_CURSOR), _I(SEXP_STRING_CURSOR), SEXP_FALSE, 0, "string-cursor<=?", 0, NULL),
-_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_SC_LT,  2, 1, _I(SEXP_BOOLEAN), _I(SEXP_STRING_CURSOR), _I(SEXP_STRING_CURSOR), SEXP_FALSE, 1, "string-cursor>?", 0, NULL),
-_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_SC_LE,  2, 1, _I(SEXP_BOOLEAN), _I(SEXP_STRING_CURSOR), _I(SEXP_STRING_CURSOR), SEXP_FALSE, 1, "string-cursor>=?", 0, NULL),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "pair?", _I(SEXP_PAIR), 0),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "string?", _I(SEXP_STRING), 0),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "vector?", _I(SEXP_VECTOR), 0),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "bytevector?", _I(SEXP_BYTES), 0),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "exception?", _I(SEXP_EXCEPTION), 0),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "flonum?", _I(SEXP_FLONUM), 0),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "bignum?", _I(SEXP_BIGNUM), 0),
+PUCHI_PARAM("current-input-port", PUCHI_I(SEXP_IPORT)),
+PUCHI_PARAM("current-output-port", PUCHI_I(SEXP_OPORT)),
+PUCHI_PARAM("current-error-port", PUCHI_I(SEXP_OPORT)),
+PUCHI_PARAM("current-exception-handler", PUCHI_I(SEXP_PROCEDURE)),
+PUCHI_PARAM("interaction-environment", PUCHI_I(SEXP_ENV)),
+PUCHI_PARAM("command-line", SEXP_NULL),
+PUCHI_OP(SEXP_OPC_GETTER, SEXP_OP_CAR, 1, 0, PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_PAIR), SEXP_FALSE, SEXP_FALSE, 0, "car", 0, NULL),
+PUCHI_OP(SEXP_OPC_SETTER, SEXP_OP_SET_CAR, 2, 0, SEXP_VOID, PUCHI_I(SEXP_PAIR), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, 0, "set-car!", 0, NULL),
+PUCHI_OP(SEXP_OPC_GETTER, SEXP_OP_CDR, 1, 0, PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_PAIR), SEXP_FALSE, SEXP_FALSE, 0, "cdr", 0, NULL),
+PUCHI_OP(SEXP_OPC_SETTER, SEXP_OP_SET_CDR, 2, 0, SEXP_VOID, PUCHI_I(SEXP_PAIR), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, 0, "set-cdr!", 0, NULL),
+PUCHI_GETTER("pair-source", SEXP_PAIR, 2),
+PUCHI_SETTER("pair-source-set!", SEXP_PAIR, 2),
+PUCHI_GETTER("syntactic-closure-rename", SEXP_SYNCLO, 3),
+PUCHI_SETTER("syntactic-closure-set-rename!", SEXP_SYNCLO, 3),
+PUCHI_OP(SEXP_OPC_GETTER, SEXP_OP_VECTOR_REF, 2, 0, PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_VECTOR), PUCHI_I(SEXP_FIXNUM), SEXP_FALSE, 0, "vector-ref", 0, NULL),
+PUCHI_OP(SEXP_OPC_SETTER, SEXP_OP_VECTOR_SET, 3, 0, SEXP_VOID, PUCHI_I(SEXP_VECTOR), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_OBJECT), 0, "vector-set!", 0, NULL),
+PUCHI_OP(SEXP_OPC_GETTER, SEXP_OP_VECTOR_LENGTH, 1, 0, PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_VECTOR), SEXP_FALSE, SEXP_FALSE, 0, "vector-length", 0, NULL),
+PUCHI_OP(SEXP_OPC_GETTER, SEXP_OP_BYTES_REF, 2, 0, PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_BYTES), PUCHI_I(SEXP_FIXNUM), SEXP_FALSE, 0, "bytevector-u8-ref", 0, NULL),
+PUCHI_OP(SEXP_OPC_SETTER, SEXP_OP_BYTES_SET, 3, 0, SEXP_VOID, PUCHI_I(SEXP_BYTES), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_FIXNUM), 0, "bytevector-u8-set!", 0, NULL),
+PUCHI_OP(SEXP_OPC_GETTER, SEXP_OP_BYTES_LENGTH, 1, 0, PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_BYTES), SEXP_FALSE, SEXP_FALSE, 0, "bytevector-length", 0, NULL),
+PUCHI_OP(SEXP_OPC_GETTER, SEXP_OP_STRING_REF, 2, 0, PUCHI_I(SEXP_CHAR), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_STRING_CURSOR), SEXP_FALSE, 0, "string-cursor-ref", 0, NULL),
+PUCHI_OP(SEXP_OPC_GETTER, SEXP_OP_STRING_CURSOR_NEXT, 2, 0, PUCHI_I(SEXP_STRING_CURSOR), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_STRING_CURSOR), SEXP_FALSE, 0, "string-cursor-next", 0, NULL),
+PUCHI_OP(SEXP_OPC_GETTER, SEXP_OP_STRING_CURSOR_PREV, 2, 0, PUCHI_I(SEXP_STRING_CURSOR), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_STRING_CURSOR), SEXP_FALSE, 0, "string-cursor-prev", 0, NULL),
+PUCHI_OP(SEXP_OPC_GETTER, SEXP_OP_STRING_CURSOR_END, 1, 0, PUCHI_I(SEXP_STRING_CURSOR), PUCHI_I(SEXP_STRING), SEXP_FALSE, SEXP_FALSE, 0, "string-cursor-end", 0, NULL),
+PUCHI_FN1(PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_STRING_CURSOR), "string-cursor-offset", 0, sexp_string_cursor_offset),
+PUCHI_OP(SEXP_OPC_SETTER, SEXP_OP_STRING_SET, 3, 0, SEXP_VOID, PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_CHAR), 0, "string-cursor-set!", 0, NULL),
+PUCHI_OP(SEXP_OPC_GETTER, SEXP_OP_STRING_LENGTH, 1, 0, PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_STRING), SEXP_FALSE, SEXP_FALSE, 0, "string-length", 0, NULL),
+PUCHI_FN1(PUCHI_I(SEXP_FLONUM), PUCHI_I(SEXP_FIXNUM), "exact->inexact", 0, sexp_exact_to_inexact),
+PUCHI_FN1(PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_FLONUM), "inexact->exact", 0, sexp_inexact_to_exact),
+PUCHI_OP(SEXP_OPC_GENERIC, SEXP_OP_CHAR_UPCASE, 1, 0, PUCHI_I(SEXP_CHAR), PUCHI_I(SEXP_CHAR), SEXP_FALSE, SEXP_FALSE, 0, "char-upcase", 0, NULL),
+PUCHI_OP(SEXP_OPC_GENERIC, SEXP_OP_CHAR_DOWNCASE, 1, 0, PUCHI_I(SEXP_CHAR), PUCHI_I(SEXP_CHAR), SEXP_FALSE, SEXP_FALSE, 0, "char-downcase", 0, NULL),
+PUCHI_OP(SEXP_OPC_GENERIC, SEXP_OP_CHAR2INT, 1, 0, PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_CHAR), SEXP_FALSE, SEXP_FALSE, 0, "char->integer", 0, NULL),
+PUCHI_OP(SEXP_OPC_GENERIC, SEXP_OP_INT2CHAR, 1, 0, PUCHI_I(SEXP_CHAR), PUCHI_I(SEXP_FIXNUM), SEXP_FALSE, SEXP_FALSE, 0, "integer->char", 0, NULL),
+PUCHI_OP(SEXP_OPC_ARITHMETIC,     SEXP_OP_ADD, 0, 1, PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), SEXP_FALSE, 0, "+", SEXP_ZERO, NULL),
+PUCHI_OP(SEXP_OPC_ARITHMETIC,     SEXP_OP_MUL, 0, 1, PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), SEXP_FALSE, 0, "*", SEXP_ONE, NULL),
+PUCHI_OP(SEXP_OPC_ARITHMETIC,     SEXP_OP_SUB, 1, 1, PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), SEXP_FALSE, 1, "-", SEXP_ZERO, NULL),
+PUCHI_OP(SEXP_OPC_ARITHMETIC,     SEXP_OP_DIV, 1, 1, PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), SEXP_FALSE, 1, "/", SEXP_ONE, NULL),
+PUCHI_OP(SEXP_OPC_ARITHMETIC,     SEXP_OP_QUOTIENT, 2, 0, PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_FIXNUM), SEXP_FALSE, 0, "quotient", 0, NULL),
+PUCHI_OP(SEXP_OPC_ARITHMETIC,     SEXP_OP_REMAINDER, 2, 0, PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_FIXNUM), SEXP_FALSE, 0, "remainder", 0, NULL),
+PUCHI_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_LT,  2, 1, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), SEXP_FALSE, 0, "<", 0, NULL),
+PUCHI_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_LE,  2, 1, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), SEXP_FALSE, 0, "<=", 0, NULL),
+PUCHI_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_LT,  2, 1, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), SEXP_FALSE, 1, ">", 0, NULL),
+PUCHI_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_LE,  2, 1, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), SEXP_FALSE, 1, ">=", 0, NULL),
+PUCHI_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_EQN, 2, 1, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), SEXP_FALSE, 0, "=", 0, NULL),
+PUCHI_OP(SEXP_OPC_PREDICATE,      SEXP_OP_EQ,  2, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, 0, "eq?", 0, NULL),
+PUCHI_OP(SEXP_OPC_CONSTRUCTOR,    SEXP_OP_CONS, 2, 0, PUCHI_I(SEXP_PAIR), PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, 0, "cons", 0, NULL),
+PUCHI_OP(SEXP_OPC_CONSTRUCTOR,    SEXP_OP_MAKE_VECTOR, 1, 1, PUCHI_I(SEXP_VECTOR), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, 0, "make-vector", SEXP_VOID, NULL),
+PUCHI_OP(SEXP_OPC_CONSTRUCTOR,    SEXP_OP_MAKE_EXCEPTION, 5, 0, PUCHI_I(SEXP_EXCEPTION), PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), 0, "make-exception", 0, NULL),
+PUCHI_GETTER("exception-kind", SEXP_EXCEPTION, 0),
+PUCHI_GETTER("exception-irritants", SEXP_EXCEPTION, 2),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_ISA,  2, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, 0, "is-a?", NULL, 0),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_NULLP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "null?", NULL, 0),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_EOFP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "eof-object?", NULL, 0),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_SYMBOLP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "symbol?", NULL, 0),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_CHARP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "char?", NULL, 0),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_FIXNUMP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "fixnum?", NULL, 0),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_SCP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "string-cursor?", NULL, 0),
+PUCHI_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_SC_LT,  2, 1, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_STRING_CURSOR), PUCHI_I(SEXP_STRING_CURSOR), SEXP_FALSE, 0, "string-cursor<?", 0, NULL),
+PUCHI_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_SC_LE,  2, 1, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_STRING_CURSOR), PUCHI_I(SEXP_STRING_CURSOR), SEXP_FALSE, 0, "string-cursor<=?", 0, NULL),
+PUCHI_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_SC_LT,  2, 1, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_STRING_CURSOR), PUCHI_I(SEXP_STRING_CURSOR), SEXP_FALSE, 1, "string-cursor>?", 0, NULL),
+PUCHI_OP(SEXP_OPC_ARITHMETIC_CMP, SEXP_OP_SC_LE,  2, 1, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_STRING_CURSOR), PUCHI_I(SEXP_STRING_CURSOR), SEXP_FALSE, 1, "string-cursor>=?", 0, NULL),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "pair?", PUCHI_I(SEXP_PAIR), 0),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "string?", PUCHI_I(SEXP_STRING), 0),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "vector?", PUCHI_I(SEXP_VECTOR), 0),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "bytevector?", PUCHI_I(SEXP_BYTES), 0),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "exception?", PUCHI_I(SEXP_EXCEPTION), 0),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "flonum?", PUCHI_I(SEXP_FLONUM), 0),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "bignum?", PUCHI_I(SEXP_BIGNUM), 0),
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "ratio?", _I(SEXP_RATIO), 0),
-_FN1(_I(SEXP_FIXNUM), _I(SEXP_RATIO), "ratio-numerator", 0, sexp_ratio_numerator_op),
-_FN1(_I(SEXP_FIXNUM), _I(SEXP_RATIO), "ratio-denominator", 0, sexp_ratio_denominator_op),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "ratio?", PUCHI_I(SEXP_RATIO), 0),
+PUCHI_FN1(PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_RATIO), "ratio-numerator", 0, sexp_ratio_numerator_op),
+PUCHI_FN1(PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_RATIO), "ratio-denominator", 0, sexp_ratio_denominator_op),
 #endif
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "%complex?", _I(SEXP_COMPLEX), 0),
-_FN1(_I(SEXP_NUMBER), _I(SEXP_COMPLEX), "complex-real", 0, sexp_complex_real_op),
-_FN1(_I(SEXP_NUMBER), _I(SEXP_COMPLEX), "complex-imag", 0, sexp_complex_imag_op),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "%complex?", PUCHI_I(SEXP_COMPLEX), 0),
+PUCHI_FN1(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_COMPLEX), "complex-real", 0, sexp_complex_real_op),
+PUCHI_FN1(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_COMPLEX), "complex-imag", 0, sexp_complex_imag_op),
 #endif
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "closure?", _I(SEXP_PROCEDURE), 0),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "opcode?", _I(SEXP_OPCODE), 0),
-_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, _I(SEXP_BOOLEAN), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "input-port?", _I(SEXP_IPORT), 0),
-_FN1(_I(SEXP_BOOLEAN), _I(SEXP_IPORT), "output-port?", 0, sexp_port_outputp_op),
-_FN1(_I(SEXP_BOOLEAN), _I(SEXP_IPORT), "binary-port?", 0, sexp_port_binaryp_op),
-_FN1(_I(SEXP_BOOLEAN), _I(SEXP_IPORT), "port-open?", 0, sexp_port_openp_op),
-_OP(SEXP_OPC_GENERIC, SEXP_OP_APPLY1, 2, 16, _I(SEXP_OBJECT), _I(SEXP_PROCEDURE), SEXP_NULL, SEXP_FALSE, 0, "apply1", 0, NULL),
-_OP(SEXP_OPC_GENERIC, SEXP_OP_CALLCC, 1, 0, _I(SEXP_OBJECT), _I(SEXP_PROCEDURE), SEXP_FALSE, SEXP_FALSE, 0, "%call/cc", 0, NULL),
-_OP(SEXP_OPC_GENERIC, SEXP_OP_RAISE, 1, 0, _I(SEXP_OBJECT), _I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "raise", 0, NULL),
-_OP(SEXP_OPC_IO, SEXP_OP_WRITE_CHAR, 1, 3, SEXP_VOID, _I(SEXP_CHAR), _I(SEXP_OPORT), SEXP_FALSE, 0, "write-char", (sexp)"current-output-port", NULL),
-_OP(SEXP_OPC_IO, SEXP_OP_WRITE_STRING, 2, 3, SEXP_VOID, _I(SEXP_STRING), _I(SEXP_FIXNUM), _I(SEXP_OPORT), 0, "%write-string", (sexp)"current-output-port", NULL),
-_OP(SEXP_OPC_IO, SEXP_OP_READ_CHAR, 0, 3, _I(SEXP_CHAR), _I(SEXP_IPORT), SEXP_FALSE, SEXP_FALSE, 0, "read-char", (sexp)"current-input-port", NULL),
-_OP(SEXP_OPC_IO, SEXP_OP_PEEK_CHAR, 0, 3, _I(SEXP_CHAR), _I(SEXP_IPORT), SEXP_FALSE, SEXP_FALSE, 0, "peek-char", (sexp)"current-input-port", NULL),
-_FN1OPTP(_I(SEXP_BOOLEAN), _I(SEXP_IPORT), "char-ready?", (sexp)"current-input-port", sexp_char_ready_p),
-_FN1OPTP(_I(SEXP_OBJECT), _I(SEXP_IPORT), "read", (sexp)"current-input-port", sexp_read_op),
-_FN2OPTP(SEXP_VOID,_I(SEXP_OBJECT), _I(SEXP_OPORT), "write", (sexp)"current-output-port", sexp_write_op),
-_FN1OPTP(SEXP_VOID, _I(SEXP_OPORT), "flush-output", (sexp)"current-output-port", sexp_flush_output_op),
-_FN2(_I(SEXP_BOOLEAN), _I(SEXP_OBJECT), _I(SEXP_OBJECT), "equal?", 0, sexp_equalp_op),
-_FN4(_I(SEXP_BOOLEAN), _I(SEXP_OBJECT), _I(SEXP_OBJECT), _I(SEXP_OBJECT), "equal?/bounded", 0, sexp_equalp_bound),
-_FN1(_I(SEXP_BOOLEAN), _I(SEXP_OBJECT), "list?", 0, sexp_listp_op),
-_FN1(_I(SEXP_BOOLEAN), _I(SEXP_OBJECT), "identifier?", 0, sexp_identifierp_op),
-_FN1(_I(SEXP_SYMBOL), _I(SEXP_OBJECT), "identifier->symbol", 0, sexp_strip_synclos),
-_FN4(_I(SEXP_BOOLEAN), _I(SEXP_OBJECT), _I(SEXP_ENV), _I(SEXP_OBJECT), "identifier=?", 0, sexp_identifier_eq_op),
-_FN1(_I(SEXP_FIXNUM), SEXP_NULL, "length*", 0, sexp_length_op),
-_FN1(SEXP_NULL, SEXP_NULL, "reverse", 0, sexp_reverse_op),
-_FN1(SEXP_NULL, SEXP_NULL, "reverse!", 0, sexp_nreverse_op),
-_FN2(SEXP_NULL, SEXP_NULL, SEXP_NULL, "append2", 0, sexp_append2_op),
-_FN1(_I(SEXP_VECTOR), SEXP_NULL, "list->vector", 0, sexp_list_to_vector_op),
-_FN1(SEXP_VOID, _I(SEXP_IPORT), "close-input-port", 0, sexp_close_port_op),
-_FN1(SEXP_VOID, _I(SEXP_OPORT), "close-output-port", 0, sexp_close_port_op),
-_FN0(_I(SEXP_ENV), "make-environment", 0, sexp_make_env_op),
-_FN1(_I(SEXP_ENV), _I(SEXP_ENV), "env-parent", 0, sexp_env_parent_op),
-_FN1(_I(SEXP_ENV), _I(SEXP_FIXNUM), "null-environment", 0, sexp_make_null_env_op),
-_FN1(_I(SEXP_ENV), _I(SEXP_FIXNUM), "primitive-environment", 0, sexp_make_primitive_env_op),
-_FN1(_I(SEXP_ENV), _I(SEXP_FIXNUM), "scheme-report-environment", 0, sexp_make_standard_env_op),
-_FN1(_I(SEXP_BOOLEAN), _I(SEXP_OBJECT), "make-immutable!", 0, sexp_make_immutable_op),
-_FN2OPTP(_I(SEXP_OBJECT), _I(SEXP_OBJECT), _I(SEXP_ENV), "compile", (sexp)"interaction-environment", sexp_compile_op),
-_FN2OPTP(_I(SEXP_OBJECT), _I(SEXP_OBJECT), _I(SEXP_ENV), "generate", (sexp)"interaction-environment", sexp_generate_op),
-_FN2OPTP(SEXP_VOID, _I(SEXP_STRING), _I(SEXP_ENV), "%load", (sexp)"interaction-environment", sexp_load_op),
-_FN4(SEXP_VOID, _I(SEXP_ENV), _I(SEXP_ENV), _I(SEXP_OBJECT), "%import", 0, sexp_env_import_op),
-_FN2OPTP(SEXP_VOID, _I(SEXP_EXCEPTION), _I(SEXP_OPORT), "print-exception", (sexp)"current-error-port", sexp_print_exception_op),
-_FN1OPTP(SEXP_VOID, _I(SEXP_OPORT), "print-stack-trace", (sexp)"current-error-port", sexp_stack_trace_op),
-_FN3OPT(SEXP_VOID, _I(SEXP_OBJECT), _I(SEXP_OBJECT), _I(SEXP_OBJECT), "warn-undefs", SEXP_FALSE, sexp_warn_undefs_op),
-_FN2OPT(_I(SEXP_STRING), _I(SEXP_FIXNUM), _I(SEXP_CHAR), "make-string", sexp_make_character(' '), sexp_make_string_op),
-_FN2OPT(_I(SEXP_STRING), _I(SEXP_FIXNUM), _I(SEXP_FIXNUM), "make-bytevector", SEXP_ZERO, sexp_make_bytes_op),
-_FN2OPT(_I(SEXP_NUMBER), _I(SEXP_STRING), _I(SEXP_FIXNUM), "string->number", SEXP_TEN, sexp_string_to_number_op),
-_FN3(_I(SEXP_FIXNUM), _I(SEXP_STRING), _I(SEXP_STRING), _I(SEXP_BOOLEAN), "string-cmp", 0, sexp_string_cmp_op),
-_FN1(_I(SEXP_SYMBOL), _I(SEXP_STRING), "string->symbol", 0, sexp_string_to_symbol_op),
-_FN1(_I(SEXP_STRING), _I(SEXP_SYMBOL), "symbol->string", 0, sexp_symbol_to_string_op),
-_FN2OPT(_I(SEXP_STRING), SEXP_NULL, _I(SEXP_STRING), "string-concatenate", SEXP_FALSE, sexp_string_concatenate_op),
-_FN2(_I(SEXP_OBJECT), _I(SEXP_OBJECT), SEXP_NULL, "memq", 0, sexp_memq_op),
-_FN2(_I(SEXP_OBJECT), _I(SEXP_OBJECT), SEXP_NULL, "assq", 0, sexp_assq_op),
-_FN3(_I(SEXP_SYNCLO), _I(SEXP_ENV), SEXP_NULL, _I(SEXP_OBJECT), "make-syntactic-closure", 0, sexp_make_synclo_op),
-_FN1(_I(SEXP_OBJECT), _I(SEXP_OBJECT), "strip-syntactic-closures", 0, sexp_strip_synclos),
-_FN0(_I(SEXP_OPORT), "open-output-string", 0, sexp_open_output_string_op),
-_FN1(_I(SEXP_IPORT), _I(SEXP_STRING), "open-input-string", 0, sexp_open_input_string_op),
-_FN1(_I(SEXP_STRING), _I(SEXP_OPORT), "get-output-string", 0, sexp_get_output_string_op),
-_FN2(_I(SEXP_VOID), _I(SEXP_IPORT), _I(SEXP_FIXNUM), "set-port-line!", 0, sexp_set_port_line_op),
-_FN2OPT(_I(SEXP_OBJECT), _I(SEXP_PROCEDURE), _I(SEXP_FIXNUM), "register-optimization!", _I(600), sexp_register_optimization),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "closure?", PUCHI_I(SEXP_PROCEDURE), 0),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "opcode?", PUCHI_I(SEXP_OPCODE), 0),
+PUCHI_OP(SEXP_OPC_TYPE_PREDICATE, SEXP_OP_TYPEP,  1, 0, PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "input-port?", PUCHI_I(SEXP_IPORT), 0),
+PUCHI_FN1(PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_IPORT), "output-port?", 0, sexp_port_outputp_op),
+PUCHI_FN1(PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_IPORT), "binary-port?", 0, sexp_port_binaryp_op),
+PUCHI_FN1(PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_IPORT), "port-open?", 0, sexp_port_openp_op),
+PUCHI_OP(SEXP_OPC_GENERIC, SEXP_OP_APPLY1, 2, 16, PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_PROCEDURE), SEXP_NULL, SEXP_FALSE, 0, "apply1", 0, NULL),
+PUCHI_OP(SEXP_OPC_GENERIC, SEXP_OP_CALLCC, 1, 0, PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_PROCEDURE), SEXP_FALSE, SEXP_FALSE, 0, "%call/cc", 0, NULL),
+PUCHI_OP(SEXP_OPC_GENERIC, SEXP_OP_RAISE, 1, 0, PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), SEXP_FALSE, SEXP_FALSE, 0, "raise", 0, NULL),
+PUCHI_OP(SEXP_OPC_IO, SEXP_OP_WRITE_CHAR, 1, 3, SEXP_VOID, PUCHI_I(SEXP_CHAR), PUCHI_I(SEXP_OPORT), SEXP_FALSE, 0, "write-char", (sexp)"current-output-port", NULL),
+PUCHI_OP(SEXP_OPC_IO, SEXP_OP_WRITE_STRING, 2, 3, SEXP_VOID, PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_OPORT), 0, "%write-string", (sexp)"current-output-port", NULL),
+PUCHI_OP(SEXP_OPC_IO, SEXP_OP_READ_CHAR, 0, 3, PUCHI_I(SEXP_CHAR), PUCHI_I(SEXP_IPORT), SEXP_FALSE, SEXP_FALSE, 0, "read-char", (sexp)"current-input-port", NULL),
+PUCHI_OP(SEXP_OPC_IO, SEXP_OP_PEEK_CHAR, 0, 3, PUCHI_I(SEXP_CHAR), PUCHI_I(SEXP_IPORT), SEXP_FALSE, SEXP_FALSE, 0, "peek-char", (sexp)"current-input-port", NULL),
+PUCHI_FN1OPTP(PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_IPORT), "char-ready?", (sexp)"current-input-port", sexp_char_ready_p),
+PUCHI_FN1OPTP(PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_IPORT), "read", (sexp)"current-input-port", sexp_read_op),
+PUCHI_FN2OPTP(SEXP_VOID,PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OPORT), "write", (sexp)"current-output-port", sexp_write_op),
+PUCHI_FN1OPTP(SEXP_VOID, PUCHI_I(SEXP_OPORT), "flush-output", (sexp)"current-output-port", sexp_flush_output_op),
+PUCHI_FN2(PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), "equal?", 0, sexp_equalp_op),
+PUCHI_FN4(PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), "equal?/bounded", 0, sexp_equalp_bound),
+PUCHI_FN1(PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), "list?", 0, sexp_listp_op),
+PUCHI_FN1(PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), "identifier?", 0, sexp_identifierp_op),
+PUCHI_FN1(PUCHI_I(SEXP_SYMBOL), PUCHI_I(SEXP_OBJECT), "identifier->symbol", 0, sexp_strip_synclos),
+PUCHI_FN4(PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_ENV), PUCHI_I(SEXP_OBJECT), "identifier=?", 0, sexp_identifier_eq_op),
+PUCHI_FN1(PUCHI_I(SEXP_FIXNUM), SEXP_NULL, "length*", 0, sexp_length_op),
+PUCHI_FN1(SEXP_NULL, SEXP_NULL, "reverse", 0, sexp_reverse_op),
+PUCHI_FN1(SEXP_NULL, SEXP_NULL, "reverse!", 0, sexp_nreverse_op),
+PUCHI_FN2(SEXP_NULL, SEXP_NULL, SEXP_NULL, "append2", 0, sexp_append2_op),
+PUCHI_FN1(PUCHI_I(SEXP_VECTOR), SEXP_NULL, "list->vector", 0, sexp_list_to_vector_op),
+PUCHI_FN1(SEXP_VOID, PUCHI_I(SEXP_IPORT), "close-input-port", 0, sexp_close_port_op),
+PUCHI_FN1(SEXP_VOID, PUCHI_I(SEXP_OPORT), "close-output-port", 0, sexp_close_port_op),
+PUCHI_FN0(PUCHI_I(SEXP_ENV), "make-environment", 0, sexp_make_env_op),
+PUCHI_FN1(PUCHI_I(SEXP_ENV), PUCHI_I(SEXP_ENV), "env-parent", 0, sexp_env_parent_op),
+PUCHI_FN1(PUCHI_I(SEXP_ENV), PUCHI_I(SEXP_FIXNUM), "null-environment", 0, sexp_make_null_env_op),
+PUCHI_FN1(PUCHI_I(SEXP_ENV), PUCHI_I(SEXP_FIXNUM), "primitive-environment", 0, sexp_make_primitive_env_op),
+PUCHI_FN1(PUCHI_I(SEXP_ENV), PUCHI_I(SEXP_FIXNUM), "scheme-report-environment", 0, sexp_make_standard_env_op),
+PUCHI_FN1(PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_OBJECT), "make-immutable!", 0, sexp_make_immutable_op),
+PUCHI_FN2OPTP(PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_ENV), "compile", (sexp)"interaction-environment", sexp_compile_op),
+PUCHI_FN2OPTP(PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_ENV), "generate", (sexp)"interaction-environment", sexp_generate_op),
+PUCHI_FN2OPTP(SEXP_VOID, PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_ENV), "%load", (sexp)"interaction-environment", sexp_load_op),
+PUCHI_FN4(SEXP_VOID, PUCHI_I(SEXP_ENV), PUCHI_I(SEXP_ENV), PUCHI_I(SEXP_OBJECT), "%import", 0, sexp_env_import_op),
+PUCHI_FN2OPTP(SEXP_VOID, PUCHI_I(SEXP_EXCEPTION), PUCHI_I(SEXP_OPORT), "print-exception", (sexp)"current-error-port", sexp_print_exception_op),
+PUCHI_FN1OPTP(SEXP_VOID, PUCHI_I(SEXP_OPORT), "print-stack-trace", (sexp)"current-error-port", sexp_stack_trace_op),
+PUCHI_FN3OPT(SEXP_VOID, PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), "warn-undefs", SEXP_FALSE, sexp_warn_undefs_op),
+PUCHI_FN2OPT(PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_CHAR), "make-string", sexp_make_character(' '), sexp_make_string_op),
+PUCHI_FN2OPT(PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_FIXNUM), "make-bytevector", SEXP_ZERO, sexp_make_bytes_op),
+PUCHI_FN2OPT(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_FIXNUM), "string->number", SEXP_TEN, sexp_string_to_number_op),
+PUCHI_FN3(PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_BOOLEAN), "string-cmp", 0, sexp_string_cmp_op),
+PUCHI_FN1(PUCHI_I(SEXP_SYMBOL), PUCHI_I(SEXP_STRING), "string->symbol", 0, sexp_string_to_symbol_op),
+PUCHI_FN1(PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_SYMBOL), "symbol->string", 0, sexp_symbol_to_string_op),
+PUCHI_FN2OPT(PUCHI_I(SEXP_STRING), SEXP_NULL, PUCHI_I(SEXP_STRING), "string-concatenate", SEXP_FALSE, sexp_string_concatenate_op),
+PUCHI_FN2(PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), SEXP_NULL, "memq", 0, sexp_memq_op),
+PUCHI_FN2(PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), SEXP_NULL, "assq", 0, sexp_assq_op),
+PUCHI_FN3(PUCHI_I(SEXP_SYNCLO), PUCHI_I(SEXP_ENV), SEXP_NULL, PUCHI_I(SEXP_OBJECT), "make-syntactic-closure", 0, sexp_make_synclo_op),
+PUCHI_FN1(PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), "strip-syntactic-closures", 0, sexp_strip_synclos),
+PUCHI_FN0(PUCHI_I(SEXP_OPORT), "open-output-string", 0, sexp_open_output_string_op),
+PUCHI_FN1(PUCHI_I(SEXP_IPORT), PUCHI_I(SEXP_STRING), "open-input-string", 0, sexp_open_input_string_op),
+PUCHI_FN1(PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_OPORT), "get-output-string", 0, sexp_get_output_string_op),
+PUCHI_FN2(PUCHI_I(SEXP_VOID), PUCHI_I(SEXP_IPORT), PUCHI_I(SEXP_FIXNUM), "set-port-line!", 0, sexp_set_port_line_op),
+PUCHI_FN2OPT(PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_PROCEDURE), PUCHI_I(SEXP_FIXNUM), "register-optimization!", PUCHI_I(600), sexp_register_optimization),
 #if !defined(PUCHI_INTEGER_ONLY)
-_FN1(_I(SEXP_NUMBER), _I(SEXP_NUMBER), "exp", 0, sexp_exp),
-_FN1(_I(SEXP_NUMBER), _I(SEXP_NUMBER), "ln", 0, sexp_log),
-_FN1(_I(SEXP_NUMBER), _I(SEXP_NUMBER), "sin", 0, sexp_sin),
-_FN1(_I(SEXP_NUMBER), _I(SEXP_NUMBER), "cos", 0, sexp_cos),
-_FN1(_I(SEXP_NUMBER), _I(SEXP_NUMBER), "tan", 0, sexp_tan),
-_FN1(_I(SEXP_NUMBER), _I(SEXP_NUMBER), "asin", 0, sexp_asin),
-_FN1(_I(SEXP_NUMBER), _I(SEXP_NUMBER), "acos", 0, sexp_acos),
-_FN1(_I(SEXP_NUMBER), _I(SEXP_NUMBER), "atan1", 0, sexp_atan),
-_FN1(_I(SEXP_NUMBER), _I(SEXP_NUMBER), "sqrt", 0, sexp_sqrt),
-_FN1(_I(SEXP_PAIR), _I(SEXP_NUMBER), "exact-sqrt", 0, sexp_exact_sqrt),
-_FN1(_I(SEXP_NUMBER), _I(SEXP_NUMBER), "round", 0, sexp_round),
-_FN1(_I(SEXP_NUMBER), _I(SEXP_NUMBER), "truncate", 0, sexp_trunc),
-_FN1(_I(SEXP_NUMBER), _I(SEXP_NUMBER), "floor", 0, sexp_floor),
-_FN1(_I(SEXP_NUMBER), _I(SEXP_NUMBER), "ceiling", 0, sexp_ceiling),
+PUCHI_FN1(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), "exp", 0, sexp_exp),
+PUCHI_FN1(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), "ln", 0, sexp_log),
+PUCHI_FN1(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), "sin", 0, sexp_sin),
+PUCHI_FN1(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), "cos", 0, sexp_cos),
+PUCHI_FN1(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), "tan", 0, sexp_tan),
+PUCHI_FN1(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), "asin", 0, sexp_asin),
+PUCHI_FN1(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), "acos", 0, sexp_acos),
+PUCHI_FN1(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), "atan1", 0, sexp_atan),
+PUCHI_FN1(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), "sqrt", 0, sexp_sqrt),
+PUCHI_FN1(PUCHI_I(SEXP_PAIR), PUCHI_I(SEXP_NUMBER), "exact-sqrt", 0, sexp_exact_sqrt),
+PUCHI_FN1(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), "round", 0, sexp_round),
+PUCHI_FN1(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), "truncate", 0, sexp_trunc),
+PUCHI_FN1(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), "floor", 0, sexp_floor),
+PUCHI_FN1(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), "ceiling", 0, sexp_ceiling),
 #endif
-_FN2(_I(SEXP_NUMBER), _I(SEXP_NUMBER), _I(SEXP_NUMBER), "expt", 0, sexp_expt_op),
-_FN2(_I(SEXP_STRING_CURSOR), _I(SEXP_STRING), _I(SEXP_FIXNUM), "string-index->cursor", 0, sexp_string_index_to_cursor),
-_FN2(_I(SEXP_FIXNUM), _I(SEXP_STRING), _I(SEXP_STRING_CURSOR), "string-cursor->index", 0, sexp_string_cursor_to_index),
-_FN2(_I(SEXP_CHAR), _I(SEXP_STRING), _I(SEXP_FIXNUM), "string-ref", 0, sexp_string_utf8_index_ref),
-_FN3(SEXP_VOID, _I(SEXP_STRING), _I(SEXP_FIXNUM), _I(SEXP_CHAR), "string-set!", 0, sexp_string_utf8_index_set),
-_FN3OPT(_I(SEXP_STRING), _I(SEXP_STRING), _I(SEXP_STRING_CURSOR), _I(SEXP_STRING_CURSOR), "substring-cursor", SEXP_FALSE, sexp_substring_op),
-_FN3OPT(_I(SEXP_STRING), _I(SEXP_STRING), _I(SEXP_FIXNUM), _I(SEXP_FIXNUM), "substring", SEXP_FALSE, sexp_utf8_substring_op),
-_FN3OPT(_I(SEXP_BYTES), _I(SEXP_BYTES), _I(SEXP_FIXNUM), _I(SEXP_FIXNUM), "subbytes", SEXP_FALSE, sexp_subbytes_op),
-_FN1(SEXP_VOID, _I(SEXP_IPORT), "port-fold-case?", 0, sexp_get_port_fold_case),
-_FN2(SEXP_VOID, _I(SEXP_IPORT), _I(SEXP_BOOLEAN), "set-port-fold-case!", 0, sexp_set_port_fold_case),
-_FN2(_I(SEXP_TYPE), _I(SEXP_STRING), _I(SEXP_OBJECT), "lookup-type", 0, sexp_lookup_type_op),
-_FN3(_I(SEXP_TYPE), _I(SEXP_STRING), _I(SEXP_TYPE), SEXP_NULL, "register-simple-type", 0, sexp_register_simple_type_op),
-_FN2(_I(SEXP_OPCODE), _I(SEXP_STRING), _I(SEXP_FIXNUM), "make-type-predicate", 0, sexp_make_type_predicate_op),
-_FN2(_I(SEXP_OPCODE), _I(SEXP_STRING), _I(SEXP_FIXNUM), "make-constructor", 0, sexp_make_constructor_op),
-_FN3(_I(SEXP_OPCODE), _I(SEXP_STRING), _I(SEXP_FIXNUM), _I(SEXP_FIXNUM), "make-getter", 0, sexp_make_getter_op),
-_FN3(_I(SEXP_OPCODE), _I(SEXP_STRING), _I(SEXP_FIXNUM), _I(SEXP_FIXNUM), "make-setter", 0, sexp_make_setter_op),
-_FN2(_I(SEXP_OPCODE), _I(SEXP_TYPE), _I(SEXP_SYMBOL), "type-slot-offset", 0, sexp_type_slot_offset_op),
-_OP(SEXP_OPC_GETTER, SEXP_OP_SLOTN_REF, 3, 0, _I(SEXP_OBJECT), _I(SEXP_OBJECT), _I(SEXP_OBJECT), _I(SEXP_FIXNUM), 0, "slot-ref", 0, NULL),
-_OP(SEXP_OPC_SETTER, SEXP_OP_SLOTN_SET, 4, 0, SEXP_VOID, _I(SEXP_OBJECT), _I(SEXP_OBJECT), _I(SEXP_FIXNUM), 0,"slot-set!", 0, NULL),
-_FN1(_I(SEXP_BOOLEAN), _I(SEXP_IPORT), "stream-port?", 0, sexp_stream_portp_op),
-_FN0(_I(SEXP_ENV), "current-environment", 0, sexp_current_environment),
-_FN1(_I(SEXP_ENV), _I(SEXP_ENV), "set-current-environment!", 0, sexp_set_current_environment),
-_FN0(_I(SEXP_ENV), "%meta-env", 0, sexp_meta_environment),
-_FN1(SEXP_NULL, _I(SEXP_ENV), "env-exports", 0, sexp_env_exports_op),
-_FN0(_I(SEXP_OBJECT), "thread-parameters", 0, sexp_thread_parameters),
-_FN1(_I(SEXP_OBJECT), _I(SEXP_OBJECT), "thread-parameters-set!", 0, sexp_thread_parameters_set),
-_FN2(_I(SEXP_UNIFORM_VECTOR), _I(SEXP_FIXNUM), _I(SEXP_OBJECT), "list->uvector", 0, sexp_list_to_uvector_op),
-_FN2(_I(SEXP_UNIFORM_VECTOR), _I(SEXP_FIXNUM), _I(SEXP_FIXNUM), "make-uvector", 0, sexp_make_uvector_op),
-_FN0(_I(SEXP_OBJECT), "square-brackets-symbol", 0, sexp_square_brackets_sym),
-_OP(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+PUCHI_FN2(PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), PUCHI_I(SEXP_NUMBER), "expt", 0, sexp_expt_op),
+PUCHI_FN2(PUCHI_I(SEXP_STRING_CURSOR), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_FIXNUM), "string-index->cursor", 0, sexp_string_index_to_cursor),
+PUCHI_FN2(PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_STRING_CURSOR), "string-cursor->index", 0, sexp_string_cursor_to_index),
+PUCHI_FN2(PUCHI_I(SEXP_CHAR), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_FIXNUM), "string-ref", 0, sexp_string_utf8_index_ref),
+PUCHI_FN3(SEXP_VOID, PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_CHAR), "string-set!", 0, sexp_string_utf8_index_set),
+PUCHI_FN3OPT(PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_STRING_CURSOR), PUCHI_I(SEXP_STRING_CURSOR), "substring-cursor", SEXP_FALSE, sexp_substring_op),
+PUCHI_FN3OPT(PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_FIXNUM), "substring", SEXP_FALSE, sexp_utf8_substring_op),
+PUCHI_FN3OPT(PUCHI_I(SEXP_BYTES), PUCHI_I(SEXP_BYTES), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_FIXNUM), "subbytes", SEXP_FALSE, sexp_subbytes_op),
+PUCHI_FN1(SEXP_VOID, PUCHI_I(SEXP_IPORT), "port-fold-case?", 0, sexp_get_port_fold_case),
+PUCHI_FN2(SEXP_VOID, PUCHI_I(SEXP_IPORT), PUCHI_I(SEXP_BOOLEAN), "set-port-fold-case!", 0, sexp_set_port_fold_case),
+PUCHI_FN2(PUCHI_I(SEXP_TYPE), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_OBJECT), "lookup-type", 0, sexp_lookup_type_op),
+PUCHI_FN3(PUCHI_I(SEXP_TYPE), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_TYPE), SEXP_NULL, "register-simple-type", 0, sexp_register_simple_type_op),
+PUCHI_FN2(PUCHI_I(SEXP_OPCODE), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_FIXNUM), "make-type-predicate", 0, sexp_make_type_predicate_op),
+PUCHI_FN2(PUCHI_I(SEXP_OPCODE), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_FIXNUM), "make-constructor", 0, sexp_make_constructor_op),
+PUCHI_FN3(PUCHI_I(SEXP_OPCODE), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_FIXNUM), "make-getter", 0, sexp_make_getter_op),
+PUCHI_FN3(PUCHI_I(SEXP_OPCODE), PUCHI_I(SEXP_STRING), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_FIXNUM), "make-setter", 0, sexp_make_setter_op),
+PUCHI_FN2(PUCHI_I(SEXP_OPCODE), PUCHI_I(SEXP_TYPE), PUCHI_I(SEXP_SYMBOL), "type-slot-offset", 0, sexp_type_slot_offset_op),
+PUCHI_OP(SEXP_OPC_GETTER, SEXP_OP_SLOTN_REF, 3, 0, PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_FIXNUM), 0, "slot-ref", 0, NULL),
+PUCHI_OP(SEXP_OPC_SETTER, SEXP_OP_SLOTN_SET, 4, 0, SEXP_VOID, PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_FIXNUM), 0,"slot-set!", 0, NULL),
+PUCHI_FN1(PUCHI_I(SEXP_BOOLEAN), PUCHI_I(SEXP_IPORT), "stream-port?", 0, sexp_stream_portp_op),
+PUCHI_FN0(PUCHI_I(SEXP_ENV), "current-environment", 0, sexp_current_environment),
+PUCHI_FN1(PUCHI_I(SEXP_ENV), PUCHI_I(SEXP_ENV), "set-current-environment!", 0, sexp_set_current_environment),
+PUCHI_FN0(PUCHI_I(SEXP_ENV), "%meta-env", 0, sexp_meta_environment),
+PUCHI_FN1(SEXP_NULL, PUCHI_I(SEXP_ENV), "env-exports", 0, sexp_env_exports_op),
+PUCHI_FN0(PUCHI_I(SEXP_OBJECT), "thread-parameters", 0, sexp_thread_parameters),
+PUCHI_FN1(PUCHI_I(SEXP_OBJECT), PUCHI_I(SEXP_OBJECT), "thread-parameters-set!", 0, sexp_thread_parameters_set),
+PUCHI_FN2(PUCHI_I(SEXP_UNIFORM_VECTOR), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_OBJECT), "list->uvector", 0, sexp_list_to_uvector_op),
+PUCHI_FN2(PUCHI_I(SEXP_UNIFORM_VECTOR), PUCHI_I(SEXP_FIXNUM), PUCHI_I(SEXP_FIXNUM), "make-uvector", 0, sexp_make_uvector_op),
+PUCHI_FN0(PUCHI_I(SEXP_OBJECT), "square-brackets-symbol", 0, sexp_square_brackets_sym),
+PUCHI_OP(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
 };
 
 struct sexp_opcode_struct* sexp_primitive_opcodes = opcodes;
@@ -7537,24 +7595,24 @@ static sexp sexp_restore_stack (sexp ctx, sexp saved) {
   return SEXP_VOID;
 }
 
-#define _ARG1 (stack[top-1])
-#define _ARG2 (stack[top-2])
-#define _ARG3 (stack[top-3])
-#define _ARG4 (stack[top-4])
-#define _ARG5 (stack[top-5])
-#define _ARG6 (stack[top-6])
-#define _PUSH(x) (stack[top++]=(x))
-#define _POP() (stack[--top])
+#define PUCHI_ARG1 (stack[top-1])
+#define PUCHI_ARG2 (stack[top-2])
+#define PUCHI_ARG3 (stack[top-3])
+#define PUCHI_ARG4 (stack[top-4])
+#define PUCHI_ARG5 (stack[top-5])
+#define PUCHI_ARG6 (stack[top-6])
+#define PUCHI_PUSH(x) (stack[top++]=(x))
+#define PUCHI_POP() (stack[--top])
 
-#define _ALIGN_IP() ip = (unsigned char *)sexp_word_align((sexp_uint_t)ip)
+#define PUCHI_ALIGN_IP() ip = (unsigned char *)sexp_word_align((sexp_uint_t)ip)
 
-#define _WORD0 ((sexp*)ip)[0]
-#define _UWORD0 ((sexp_uint_t*)ip)[0]
-#define _SWORD0 ((sexp_sint_t*)ip)[0]
-#define _WORD1 ((sexp*)ip)[1]
-#define _UWORD1 ((sexp_uint_t*)ip)[1]
-#define _SWORD1 ((sexp_sint_t*)ip)[1]
-#define _WORD2 ((sexp*)ip)[2]
+#define PUCHI_WORD0 ((sexp*)ip)[0]
+#define PUCHI_UWORD0 ((sexp_uint_t*)ip)[0]
+#define PUCHI_SWORD0 ((sexp_sint_t*)ip)[0]
+#define PUCHI_WORD1 ((sexp*)ip)[1]
+#define PUCHI_UWORD1 ((sexp_uint_t*)ip)[1]
+#define PUCHI_SWORD1 ((sexp_sint_t*)ip)[1]
+#define PUCHI_WORD2 ((sexp*)ip)[2]
 
 #define sexp_raise(msg, args)                                       \
   do {sexp_context_top(ctx) = top+1;                                \
@@ -7565,7 +7623,7 @@ static sexp sexp_restore_stack (sexp ctx, sexp saved) {
   while (0)
 
 #define sexp_check_exception()                                 \
-  do {if (sexp_exceptionp(_ARG1)) {                            \
+  do {if (sexp_exceptionp(PUCHI_ARG1)) {                            \
       goto call_error_handler;}}                               \
     while (0)
 
@@ -7588,7 +7646,7 @@ static int sexp_check_type(sexp ctx, sexp a, sexp b) {
 }
 
 #define sexp_fcall_return(x, i)                                 \
-  top -= i; _ARG1 = x; ip += sizeof(sexp); sexp_check_exception();
+  top -= i; PUCHI_ARG1 = x; ip += sizeof(sexp); sexp_check_exception();
 
 /* ---- opt/fcall.c (amalgamated) ---- */
 
@@ -7605,26 +7663,26 @@ typedef sexp (*sexp_proc17) (sexp, sexp, sexp_sint_t, sexp, sexp, sexp, sexp, se
 typedef sexp (*sexp_proc18) (sexp, sexp, sexp_sint_t, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp);
 typedef sexp (*sexp_proc19) (sexp, sexp, sexp_sint_t, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp, sexp);
 
-#define _A(i) stack[top-i]
+#define PUCHI_A(i) stack[top-i]
 
 sexp sexp_fcall (sexp ctx, sexp self, sexp_sint_t n, sexp f) {
   sexp *stack = sexp_stack_data(sexp_context_stack(ctx));
   sexp_sint_t top = sexp_context_top(ctx);
   switch (n) {
-  case 5: return ((sexp_proc6)sexp_opcode_func(f))(ctx, f, 5, _A(1), _A(2), _A(3), _A(4), _A(5));
-  case 6: return ((sexp_proc7)sexp_opcode_func(f))(ctx, f, 6, _A(1), _A(2), _A(3), _A(4), _A(5), _A(6));
-  case 7: return ((sexp_proc8)sexp_opcode_func(f))(ctx, f, 7, _A(1), _A(2), _A(3), _A(4), _A(5), _A(6), _A(7));
-  case 8: return ((sexp_proc9)sexp_opcode_func(f))(ctx, f, 8, _A(1), _A(2), _A(3), _A(4), _A(5), _A(6), _A(7), _A(8));
-  case 9: return ((sexp_proc10)sexp_opcode_func(f))(ctx, f, 9, _A(1), _A(2), _A(3), _A(4), _A(5), _A(6), _A(7), _A(8), _A(9));
-  case 10: return ((sexp_proc11)sexp_opcode_func(f))(ctx, f, 10, _A(1), _A(2), _A(3), _A(4), _A(5), _A(6), _A(7), _A(8), _A(9), _A(10));
-  case 11: return ((sexp_proc12)sexp_opcode_func(f))(ctx, f, 11, _A(1), _A(2), _A(3), _A(4), _A(5), _A(6), _A(7), _A(8), _A(9), _A(10), _A(11));
-  case 12: return ((sexp_proc13)sexp_opcode_func(f))(ctx, f, 12, _A(1), _A(2), _A(3), _A(4), _A(5), _A(6), _A(7), _A(8), _A(9), _A(10), _A(11), _A(12));
-  case 13: return ((sexp_proc14)sexp_opcode_func(f))(ctx, f, 13, _A(1), _A(2), _A(3), _A(4), _A(5), _A(6), _A(7), _A(8), _A(9), _A(10), _A(11), _A(12), _A(13));
-  case 14: return ((sexp_proc15)sexp_opcode_func(f))(ctx, f, 14, _A(1), _A(2), _A(3), _A(4), _A(5), _A(6), _A(7), _A(8), _A(9), _A(10), _A(11), _A(12), _A(13), _A(14));
-  case 15: return ((sexp_proc16)sexp_opcode_func(f))(ctx, f, 15, _A(1), _A(2), _A(3), _A(4), _A(5), _A(6), _A(7), _A(8), _A(9), _A(10), _A(11), _A(12), _A(13), _A(14), _A(15));
-  case 16: return ((sexp_proc17)sexp_opcode_func(f))(ctx, f, 16, _A(1), _A(2), _A(3), _A(4), _A(5), _A(6), _A(7), _A(8), _A(9), _A(10), _A(11), _A(12), _A(13), _A(14), _A(15), _A(16));
-  case 17: return ((sexp_proc18)sexp_opcode_func(f))(ctx, f, 17, _A(1), _A(2), _A(3), _A(4), _A(5), _A(6), _A(7), _A(8), _A(9), _A(10), _A(11), _A(12), _A(13), _A(14), _A(15), _A(16), _A(17));
-  case 18: return ((sexp_proc19)sexp_opcode_func(f))(ctx, f, 18, _A(1), _A(2), _A(3), _A(4), _A(5), _A(6), _A(7), _A(8), _A(9), _A(10), _A(11), _A(12), _A(13), _A(14), _A(15), _A(16), _A(17), _A(18));
+  case 5: return ((sexp_proc6)sexp_opcode_func(f))(ctx, f, 5, PUCHI_A(1), PUCHI_A(2), PUCHI_A(3), PUCHI_A(4), PUCHI_A(5));
+  case 6: return ((sexp_proc7)sexp_opcode_func(f))(ctx, f, 6, PUCHI_A(1), PUCHI_A(2), PUCHI_A(3), PUCHI_A(4), PUCHI_A(5), PUCHI_A(6));
+  case 7: return ((sexp_proc8)sexp_opcode_func(f))(ctx, f, 7, PUCHI_A(1), PUCHI_A(2), PUCHI_A(3), PUCHI_A(4), PUCHI_A(5), PUCHI_A(6), PUCHI_A(7));
+  case 8: return ((sexp_proc9)sexp_opcode_func(f))(ctx, f, 8, PUCHI_A(1), PUCHI_A(2), PUCHI_A(3), PUCHI_A(4), PUCHI_A(5), PUCHI_A(6), PUCHI_A(7), PUCHI_A(8));
+  case 9: return ((sexp_proc10)sexp_opcode_func(f))(ctx, f, 9, PUCHI_A(1), PUCHI_A(2), PUCHI_A(3), PUCHI_A(4), PUCHI_A(5), PUCHI_A(6), PUCHI_A(7), PUCHI_A(8), PUCHI_A(9));
+  case 10: return ((sexp_proc11)sexp_opcode_func(f))(ctx, f, 10, PUCHI_A(1), PUCHI_A(2), PUCHI_A(3), PUCHI_A(4), PUCHI_A(5), PUCHI_A(6), PUCHI_A(7), PUCHI_A(8), PUCHI_A(9), PUCHI_A(10));
+  case 11: return ((sexp_proc12)sexp_opcode_func(f))(ctx, f, 11, PUCHI_A(1), PUCHI_A(2), PUCHI_A(3), PUCHI_A(4), PUCHI_A(5), PUCHI_A(6), PUCHI_A(7), PUCHI_A(8), PUCHI_A(9), PUCHI_A(10), PUCHI_A(11));
+  case 12: return ((sexp_proc13)sexp_opcode_func(f))(ctx, f, 12, PUCHI_A(1), PUCHI_A(2), PUCHI_A(3), PUCHI_A(4), PUCHI_A(5), PUCHI_A(6), PUCHI_A(7), PUCHI_A(8), PUCHI_A(9), PUCHI_A(10), PUCHI_A(11), PUCHI_A(12));
+  case 13: return ((sexp_proc14)sexp_opcode_func(f))(ctx, f, 13, PUCHI_A(1), PUCHI_A(2), PUCHI_A(3), PUCHI_A(4), PUCHI_A(5), PUCHI_A(6), PUCHI_A(7), PUCHI_A(8), PUCHI_A(9), PUCHI_A(10), PUCHI_A(11), PUCHI_A(12), PUCHI_A(13));
+  case 14: return ((sexp_proc15)sexp_opcode_func(f))(ctx, f, 14, PUCHI_A(1), PUCHI_A(2), PUCHI_A(3), PUCHI_A(4), PUCHI_A(5), PUCHI_A(6), PUCHI_A(7), PUCHI_A(8), PUCHI_A(9), PUCHI_A(10), PUCHI_A(11), PUCHI_A(12), PUCHI_A(13), PUCHI_A(14));
+  case 15: return ((sexp_proc16)sexp_opcode_func(f))(ctx, f, 15, PUCHI_A(1), PUCHI_A(2), PUCHI_A(3), PUCHI_A(4), PUCHI_A(5), PUCHI_A(6), PUCHI_A(7), PUCHI_A(8), PUCHI_A(9), PUCHI_A(10), PUCHI_A(11), PUCHI_A(12), PUCHI_A(13), PUCHI_A(14), PUCHI_A(15));
+  case 16: return ((sexp_proc17)sexp_opcode_func(f))(ctx, f, 16, PUCHI_A(1), PUCHI_A(2), PUCHI_A(3), PUCHI_A(4), PUCHI_A(5), PUCHI_A(6), PUCHI_A(7), PUCHI_A(8), PUCHI_A(9), PUCHI_A(10), PUCHI_A(11), PUCHI_A(12), PUCHI_A(13), PUCHI_A(14), PUCHI_A(15), PUCHI_A(16));
+  case 17: return ((sexp_proc18)sexp_opcode_func(f))(ctx, f, 17, PUCHI_A(1), PUCHI_A(2), PUCHI_A(3), PUCHI_A(4), PUCHI_A(5), PUCHI_A(6), PUCHI_A(7), PUCHI_A(8), PUCHI_A(9), PUCHI_A(10), PUCHI_A(11), PUCHI_A(12), PUCHI_A(13), PUCHI_A(14), PUCHI_A(15), PUCHI_A(16), PUCHI_A(17));
+  case 18: return ((sexp_proc19)sexp_opcode_func(f))(ctx, f, 18, PUCHI_A(1), PUCHI_A(2), PUCHI_A(3), PUCHI_A(4), PUCHI_A(5), PUCHI_A(6), PUCHI_A(7), PUCHI_A(8), PUCHI_A(9), PUCHI_A(10), PUCHI_A(11), PUCHI_A(12), PUCHI_A(13), PUCHI_A(14), PUCHI_A(15), PUCHI_A(16), PUCHI_A(17), PUCHI_A(18));
   default: return sexp_user_exception(ctx, self, "too many FFI arguments", f);
   }
 }
@@ -7632,16 +7690,17 @@ sexp sexp_fcall (sexp ctx, sexp self, sexp_sint_t n, sexp f) {
 
 
 
-#define sexp_ensure_stack(n)                                            \
+#define sexp_ensure_stack(n) do {                                       \
   if (top+(n) >= sexp_stack_length(sexp_context_stack(ctx))) {          \
     sexp_context_top(ctx) = top;                                        \
     if (sexp_grow_stack(ctx, (n))) {                                    \
       stack = sexp_stack_data(sexp_context_stack(ctx));                 \
     } else {                                                            \
-      _ARG1 = sexp_global(ctx, SEXP_G_OOS_ERROR);                       \
+      PUCHI_ARG1 = sexp_global(ctx, SEXP_G_OOS_ERROR);                  \
       goto end_loop;                                                    \
     }                                                                   \
-  }
+  }                                                                     \
+} while (0)
 
 /* used only when no thread scheduler has been loaded */
 
@@ -7663,10 +7722,10 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
   i = sexp_unbox_fixnum(sexp_length(ctx, tmp2));
   sexp_ensure_stack(i + 64 + (sexp_procedurep(tmp1) ? sexp_bytecode_max_depth(sexp_procedure_code(tmp1)) : 0));
   for (top += i; sexp_pairp(tmp2); tmp2=sexp_cdr(tmp2), top--)
-    _ARG1 = sexp_car(tmp2);
+    PUCHI_ARG1 = sexp_car(tmp2);
   top += i;
   /* restore the make_call invariant */
-  _PUSH(tmp1);
+  PUCHI_PUSH(tmp1);
   goto make_call;
 
  loop:
@@ -7674,24 +7733,24 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
   case SEXP_OP_NOOP:
     break;
   call_error_handler:
-    if (! sexp_exception_procedure(_ARG1))
-      sexp_exception_procedure(_ARG1) = self;
-    if (sexp_not(sexp_exception_source(_ARG1))
-        && sexp_procedurep(sexp_exception_procedure(_ARG1))
-        && sexp_procedure_source(sexp_exception_procedure(_ARG1)))
-      sexp_exception_source(_ARG1) = sexp_lookup_source_info(sexp_exception_procedure(_ARG1), (ip-sexp_bytecode_data(bc)));
+    if (! sexp_exception_procedure(PUCHI_ARG1))
+      sexp_exception_procedure(PUCHI_ARG1) = self;
+    if (sexp_not(sexp_exception_source(PUCHI_ARG1))
+        && sexp_procedurep(sexp_exception_procedure(PUCHI_ARG1))
+        && sexp_procedure_source(sexp_exception_procedure(PUCHI_ARG1)))
+      sexp_exception_source(PUCHI_ARG1) = sexp_lookup_source_info(sexp_exception_procedure(PUCHI_ARG1), (ip-sexp_bytecode_data(bc)));
   case SEXP_OP_RAISE:
     sexp_context_top(ctx) = top;
-    if (sexp_trampolinep(_ARG1)) {
-      tmp1 = sexp_trampoline_procedure(_ARG1);
-      tmp2 = sexp_trampoline_args(_ARG1);
-      if (sexp_trampoline_abortp(_ARG1)) {      /* abort - do not catch */
-        _ARG1 = tmp2;
+    if (sexp_trampolinep(PUCHI_ARG1)) {
+      tmp1 = sexp_trampoline_procedure(PUCHI_ARG1);
+      tmp2 = sexp_trampoline_args(PUCHI_ARG1);
+      if (sexp_trampoline_abortp(PUCHI_ARG1)) {      /* abort - do not catch */
+        PUCHI_ARG1 = tmp2;
         goto end_loop;
       }
       top--;
       if (sexp_not(tmp1) && sexp_pairp(tmp2)) { /* noop trampoline is */
-        _PUSH(sexp_car(tmp2));                  /* a wrapped exception */
+        PUCHI_PUSH(sexp_car(tmp2));                  /* a wrapped exception */
         goto loop;
       }
       goto apply1;
@@ -7699,11 +7758,11 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     tmp1 = sexp_parameter_ref(ctx, sexp_global(ctx, SEXP_G_ERR_HANDLER));
     sexp_context_last_fp(ctx) = fp;
     if (! sexp_procedurep(tmp1)) {
-      if (!sexp_exceptionp(_ARG1)) {
-        _ARG1 = sexp_make_exception(ctx, SEXP_UNCAUGHT, SEXP_FALSE, _ARG1, self, SEXP_FALSE);
+      if (!sexp_exceptionp(PUCHI_ARG1)) {
+        PUCHI_ARG1 = sexp_make_exception(ctx, SEXP_UNCAUGHT, SEXP_FALSE, PUCHI_ARG1, self, SEXP_FALSE);
       }
       sexp_context_top(ctx) = top;
-      sexp_exception_stack_trace(_ARG1) = sexp_get_stack_trace(ctx);
+      sexp_exception_stack_trace(PUCHI_ARG1) = sexp_get_stack_trace(ctx);
       goto end_loop;
     }
     stack[top] = SEXP_ONE;
@@ -7721,27 +7780,27 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     sexp_context_top(ctx) = top;
     tmp1 = stack[fp-1];
     tmp2 = sexp_restore_stack(ctx, sexp_vector_ref(cp, 0));
-    if (sexp_exceptionp(tmp2)) {_ARG1 = tmp2; goto call_error_handler;}
+    if (sexp_exceptionp(tmp2)) {PUCHI_ARG1 = tmp2; goto call_error_handler;}
     top = sexp_context_top(ctx);
-    fp = sexp_unbox_fixnum(_ARG1);
-    self = _ARG2;
+    fp = sexp_unbox_fixnum(PUCHI_ARG1);
+    self = PUCHI_ARG2;
     bc = sexp_procedure_code(self);
     cp = sexp_procedure_vars(self);
-    ip = sexp_bytecode_data(bc) + sexp_unbox_fixnum(_ARG3);
+    ip = sexp_bytecode_data(bc) + sexp_unbox_fixnum(PUCHI_ARG3);
     top -= 4;
-    _ARG1 = tmp1;
+    PUCHI_ARG1 = tmp1;
     break;
   case SEXP_OP_CALLCC:
     stack[top] = SEXP_ONE;
     stack[top+1] = sexp_make_fixnum(ip-sexp_bytecode_data(bc));
     stack[top+2] = self;
     stack[top+3] = sexp_make_fixnum(fp);
-    tmp1 = _ARG1;
+    tmp1 = PUCHI_ARG1;
     i = 1;
     sexp_context_top(ctx) = top;
     tmp2 = sexp_make_vector(ctx, SEXP_ONE, SEXP_UNDEF);
     sexp_vector_set(tmp2, SEXP_ZERO, sexp_save_stack(ctx, stack, top+4));
-    _ARG1 = sexp_make_procedure(ctx,
+    PUCHI_ARG1 = sexp_make_procedure(ctx,
                                 SEXP_ZERO,
                                 SEXP_ONE,
                                 sexp_global(ctx, SEXP_G_RESUMECC_BYTECODE),
@@ -7750,8 +7809,8 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     ip -= sizeof(sexp);
     goto make_call;
   case SEXP_OP_APPLY1:
-    tmp1 = _ARG1;
-    tmp2 = _ARG2;
+    tmp1 = PUCHI_ARG1;
+    tmp2 = PUCHI_ARG2;
   apply1:
     tmp = sexp_length(ctx, tmp2);
     if (sexp_not(tmp))
@@ -7770,7 +7829,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
         stack[top] = sexp_car(tmp2);
       top = fp+i-j;
       /* restore the make_call invariant */
-      _PUSH(tmp1);
+      PUCHI_PUSH(tmp1);
       fp = k;
       /* if final cdr of tmp2 isn't null, then args list was improper */
       if (! sexp_nullp(tmp2)) {
@@ -7780,9 +7839,9 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     }
     goto make_call;
   case SEXP_OP_TAIL_CALL:
-    _ALIGN_IP();
-    i = sexp_unbox_fixnum(_WORD0);             /* number of params */
-    tmp1 = _ARG1;                              /* procedure to call */
+    PUCHI_ALIGN_IP();
+    i = sexp_unbox_fixnum(PUCHI_WORD0);             /* number of params */
+    tmp1 = PUCHI_ARG1;                              /* procedure to call */
     /* save frame info */
     tmp2 = stack[fp+3];                        /* previous fp */
     j = sexp_unbox_fixnum(stack[fp]);          /* previous num params */
@@ -7795,20 +7854,20 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
       stack[fp-j+k] = stack[top-1-i+k];
     top = fp+i-j;
     /* restore the make_call invariant */
-    _PUSH(tmp1);
+    PUCHI_PUSH(tmp1);
     fp = sexp_unbox_fixnum(tmp2);
     goto make_call;
   case SEXP_OP_CALL:
-    _ALIGN_IP();
-    i = sexp_unbox_fixnum(_WORD0);
-    tmp1 = _ARG1;
+    PUCHI_ALIGN_IP();
+    i = sexp_unbox_fixnum(PUCHI_WORD0);
+    tmp1 = PUCHI_ARG1;
   make_call:
     sexp_context_top(ctx) = top;
     if (sexp_opcodep(tmp1)) {
       /* compile non-inlined opcode applications on the fly */
       tmp1 = make_opcode_procedure(ctx, tmp1, i, SEXP_PROC_NONE);
       if (sexp_exceptionp(tmp1)) {
-        _ARG1 = tmp1;
+        PUCHI_ARG1 = tmp1;
         goto call_error_handler;
       }
     }
@@ -7843,7 +7902,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
       top++;
       i++;
     }
-    _ARG1 = sexp_make_fixnum(i);
+    PUCHI_ARG1 = sexp_make_fixnum(i);
     stack[top] = sexp_make_fixnum(ip+sizeof(sexp)-sexp_bytecode_data(bc));
     stack[top+1] = self;
     stack[top+2] = sexp_make_fixnum(fp);
@@ -7855,581 +7914,581 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     fp = top-4;
     break;
   case SEXP_OP_FCALL0:
-    _ALIGN_IP();
+    PUCHI_ALIGN_IP();
     sexp_context_top(ctx) = top;
     sexp_context_last_fp(ctx) = fp;
-    tmp1 = ((sexp_proc1)sexp_opcode_func(_WORD0))(ctx, _WORD0, 0);
+    tmp1 = ((sexp_proc1)sexp_opcode_func(PUCHI_WORD0))(ctx, PUCHI_WORD0, 0);
     sexp_fcall_return(tmp1, -1)
     break;
   case SEXP_OP_FCALL1:
-    _ALIGN_IP();
+    PUCHI_ALIGN_IP();
     sexp_context_top(ctx) = top;
     sexp_context_last_fp(ctx) = fp;
-    tmp1 = ((sexp_proc2)sexp_opcode_func(_WORD0))(ctx, _WORD0, 1, _ARG1);
+    tmp1 = ((sexp_proc2)sexp_opcode_func(PUCHI_WORD0))(ctx, PUCHI_WORD0, 1, PUCHI_ARG1);
     sexp_fcall_return(tmp1, 0)
     break;
   case SEXP_OP_FCALL2:
-    _ALIGN_IP();
+    PUCHI_ALIGN_IP();
     sexp_context_top(ctx) = top;
     sexp_context_last_fp(ctx) = fp;
-    tmp1 = ((sexp_proc3)sexp_opcode_func(_WORD0))(ctx, _WORD0, 2, _ARG1, _ARG2);
+    tmp1 = ((sexp_proc3)sexp_opcode_func(PUCHI_WORD0))(ctx, PUCHI_WORD0, 2, PUCHI_ARG1, PUCHI_ARG2);
     sexp_fcall_return(tmp1, 1)
     break;
   case SEXP_OP_FCALL3:
-    _ALIGN_IP();
+    PUCHI_ALIGN_IP();
     sexp_context_top(ctx) = top;
     sexp_context_last_fp(ctx) = fp;
-    tmp1 = ((sexp_proc4)sexp_opcode_func(_WORD0))(ctx, _WORD0, 3, _ARG1, _ARG2, _ARG3);
+    tmp1 = ((sexp_proc4)sexp_opcode_func(PUCHI_WORD0))(ctx, PUCHI_WORD0, 3, PUCHI_ARG1, PUCHI_ARG2, PUCHI_ARG3);
     sexp_fcall_return(tmp1, 2)
     break;
   case SEXP_OP_FCALL4:
-    _ALIGN_IP();
+    PUCHI_ALIGN_IP();
     sexp_context_top(ctx) = top;
     sexp_context_last_fp(ctx) = fp;
-    tmp1 = ((sexp_proc5)sexp_opcode_func(_WORD0))(ctx, _WORD0, 4, _ARG1, _ARG2, _ARG3, _ARG4);
+    tmp1 = ((sexp_proc5)sexp_opcode_func(PUCHI_WORD0))(ctx, PUCHI_WORD0, 4, PUCHI_ARG1, PUCHI_ARG2, PUCHI_ARG3, PUCHI_ARG4);
     sexp_fcall_return(tmp1, 3)
     break;
   case SEXP_OP_FCALLN:
-    _ALIGN_IP();
+    PUCHI_ALIGN_IP();
     sexp_context_top(ctx) = top;
     sexp_context_last_fp(ctx) = fp;
-    i = sexp_opcode_num_args(_WORD0) + sexp_opcode_variadic_p(_WORD0);
-    tmp1 = sexp_fcall(ctx, self, i, _WORD0);
+    i = sexp_opcode_num_args(PUCHI_WORD0) + sexp_opcode_variadic_p(PUCHI_WORD0);
+    tmp1 = sexp_fcall(ctx, self, i, PUCHI_WORD0);
     sexp_fcall_return(tmp1, i-1)
     break;
   case SEXP_OP_JUMP_UNLESS:
-    _ALIGN_IP();
+    PUCHI_ALIGN_IP();
     if (stack[--top] == SEXP_FALSE)
-      ip += _SWORD0;
+      ip += PUCHI_SWORD0;
     else
       ip += sizeof(sexp_sint_t);
     break;
   case SEXP_OP_JUMP:
-    _ALIGN_IP();
-    ip += _SWORD0;
+    PUCHI_ALIGN_IP();
+    ip += PUCHI_SWORD0;
     break;
   case SEXP_OP_PUSH:
-    _ALIGN_IP();
-    _PUSH(_WORD0);
+    PUCHI_ALIGN_IP();
+    PUCHI_PUSH(PUCHI_WORD0);
     ip += sizeof(sexp);
     break;
   case SEXP_OP_DROP:
     top--;
     break;
   case SEXP_OP_GLOBAL_REF:
-    _ALIGN_IP();
-    if (sexp_cdr(_WORD0) == SEXP_UNDEF) {
+    PUCHI_ALIGN_IP();
+    if (sexp_cdr(PUCHI_WORD0) == SEXP_UNDEF) {
       /* handle renamed forward references by doing a final delayed */
       /* lookup before throwing an undefined variable error */
-      if (sexp_synclop(sexp_car(_WORD0))) {
-        tmp1 = sexp_env_cell(ctx, sexp_synclo_env(sexp_car(_WORD0)), sexp_synclo_expr(sexp_car(_WORD0)), 0);
-        if (tmp1 != NULL) _WORD0 = tmp1;
+      if (sexp_synclop(sexp_car(PUCHI_WORD0))) {
+        tmp1 = sexp_env_cell(ctx, sexp_synclo_env(sexp_car(PUCHI_WORD0)), sexp_synclo_expr(sexp_car(PUCHI_WORD0)), 0);
+        if (tmp1 != NULL) PUCHI_WORD0 = tmp1;
       }
-      if (sexp_cdr(_WORD0) == SEXP_UNDEF)
-        sexp_raise("undefined variable", sexp_list1(ctx, sexp_car(_WORD0)));
+      if (sexp_cdr(PUCHI_WORD0) == SEXP_UNDEF)
+        sexp_raise("undefined variable", sexp_list1(ctx, sexp_car(PUCHI_WORD0)));
     }
     /* ... FALLTHROUGH ... */
   case SEXP_OP_GLOBAL_KNOWN_REF:
-    _ALIGN_IP();
-    _PUSH(sexp_cdr(_WORD0));
+    PUCHI_ALIGN_IP();
+    PUCHI_PUSH(sexp_cdr(PUCHI_WORD0));
     ip += sizeof(sexp);
     break;
   case SEXP_OP_STACK_REF:
-    _ALIGN_IP();
-    stack[top] = stack[top - _SWORD0];
+    PUCHI_ALIGN_IP();
+    stack[top] = stack[top - PUCHI_SWORD0];
     ip += sizeof(sexp);
     top++;
     break;
   case SEXP_OP_LOCAL_REF:
-    _ALIGN_IP();
-    stack[top] = stack[fp - 1 - _SWORD0];
+    PUCHI_ALIGN_IP();
+    stack[top] = stack[fp - 1 - PUCHI_SWORD0];
     ip += sizeof(sexp);
     top++;
     break;
   case SEXP_OP_LOCAL_SET:
-    _ALIGN_IP();
-    stack[fp - 1 - _SWORD0] = _POP();
+    PUCHI_ALIGN_IP();
+    stack[fp - 1 - PUCHI_SWORD0] = PUCHI_POP();
     ip += sizeof(sexp);
     break;
   case SEXP_OP_CLOSURE_REF:
-    _ALIGN_IP();
-    _PUSH(sexp_vector_ref(cp, sexp_make_fixnum(_SWORD0)));
+    PUCHI_ALIGN_IP();
+    PUCHI_PUSH(sexp_vector_ref(cp, sexp_make_fixnum(PUCHI_SWORD0)));
     ip += sizeof(sexp);
     break;
   case SEXP_OP_CLOSURE_VARS:
-    _ARG1 = sexp_procedure_vars(_ARG1);
+    PUCHI_ARG1 = sexp_procedure_vars(PUCHI_ARG1);
     break;
   case SEXP_OP_VECTOR_REF:
-    if (! sexp_vectorp(_ARG1))
-      sexp_raise("vector-ref: not a vector", sexp_list1(ctx, _ARG1));
-    else if (! sexp_fixnump(_ARG2))
-      sexp_raise("vector-ref: not an integer", sexp_list1(ctx, _ARG2));
-    i = sexp_unbox_fixnum(_ARG2);
-    if ((i < 0) || (i >= (sexp_sint_t)sexp_vector_length(_ARG1)))
-      sexp_raise("vector-ref: index out of range", sexp_list2(ctx, _ARG1, _ARG2));
-    _ARG2 = sexp_vector_ref(_ARG1, _ARG2);
+    if (! sexp_vectorp(PUCHI_ARG1))
+      sexp_raise("vector-ref: not a vector", sexp_list1(ctx, PUCHI_ARG1));
+    else if (! sexp_fixnump(PUCHI_ARG2))
+      sexp_raise("vector-ref: not an integer", sexp_list1(ctx, PUCHI_ARG2));
+    i = sexp_unbox_fixnum(PUCHI_ARG2);
+    if ((i < 0) || (i >= (sexp_sint_t)sexp_vector_length(PUCHI_ARG1)))
+      sexp_raise("vector-ref: index out of range", sexp_list2(ctx, PUCHI_ARG1, PUCHI_ARG2));
+    PUCHI_ARG2 = sexp_vector_ref(PUCHI_ARG1, PUCHI_ARG2);
     top--;
     break;
   case SEXP_OP_VECTOR_SET:
-    if (! sexp_vectorp(_ARG1))
-      sexp_raise("vector-set!: not a vector", sexp_list1(ctx, _ARG1));
-    else if (sexp_immutablep(_ARG1))
-      sexp_raise("vector-set!: immutable vector", sexp_list1(ctx, _ARG1));
-    else if (! sexp_fixnump(_ARG2))
-      sexp_raise("vector-set!: not an integer", sexp_list1(ctx, _ARG2));
-    i = sexp_unbox_fixnum(_ARG2);
-    if ((i < 0) || (i >= (sexp_sint_t)sexp_vector_length(_ARG1)))
-      sexp_raise("vector-set!: index out of range", sexp_list2(ctx, _ARG1, _ARG2));
-    sexp_vector_set(_ARG1, _ARG2, _ARG3);
+    if (! sexp_vectorp(PUCHI_ARG1))
+      sexp_raise("vector-set!: not a vector", sexp_list1(ctx, PUCHI_ARG1));
+    else if (sexp_immutablep(PUCHI_ARG1))
+      sexp_raise("vector-set!: immutable vector", sexp_list1(ctx, PUCHI_ARG1));
+    else if (! sexp_fixnump(PUCHI_ARG2))
+      sexp_raise("vector-set!: not an integer", sexp_list1(ctx, PUCHI_ARG2));
+    i = sexp_unbox_fixnum(PUCHI_ARG2);
+    if ((i < 0) || (i >= (sexp_sint_t)sexp_vector_length(PUCHI_ARG1)))
+      sexp_raise("vector-set!: index out of range", sexp_list2(ctx, PUCHI_ARG1, PUCHI_ARG2));
+    sexp_vector_set(PUCHI_ARG1, PUCHI_ARG2, PUCHI_ARG3);
     top-=3;
     break;
   case SEXP_OP_VECTOR_LENGTH:
-    if (! sexp_vectorp(_ARG1))
-      sexp_raise("vector-length: not a vector", sexp_list1(ctx, _ARG1));
-    _ARG1 = sexp_make_fixnum(sexp_vector_length(_ARG1));
+    if (! sexp_vectorp(PUCHI_ARG1))
+      sexp_raise("vector-length: not a vector", sexp_list1(ctx, PUCHI_ARG1));
+    PUCHI_ARG1 = sexp_make_fixnum(sexp_vector_length(PUCHI_ARG1));
     break;
   case SEXP_OP_BYTES_REF:
-    if (! sexp_bytesp(_ARG1))
-      sexp_raise("byte-vector-ref: not a byte-vector", sexp_list1(ctx, _ARG1));
-    if (! sexp_fixnump(_ARG2))
-      sexp_raise("byte-vector-ref: not an integer", sexp_list1(ctx, _ARG2));
-    i = sexp_unbox_fixnum(_ARG2);
-    if ((i < 0) || (i >= (sexp_sint_t)sexp_bytes_length(_ARG1)))
-      sexp_raise("byte-vector-ref: index out of range", sexp_list2(ctx, _ARG1, _ARG2));
-    _ARG2 = sexp_bytes_ref(_ARG1, _ARG2);
+    if (! sexp_bytesp(PUCHI_ARG1))
+      sexp_raise("byte-vector-ref: not a byte-vector", sexp_list1(ctx, PUCHI_ARG1));
+    if (! sexp_fixnump(PUCHI_ARG2))
+      sexp_raise("byte-vector-ref: not an integer", sexp_list1(ctx, PUCHI_ARG2));
+    i = sexp_unbox_fixnum(PUCHI_ARG2);
+    if ((i < 0) || (i >= (sexp_sint_t)sexp_bytes_length(PUCHI_ARG1)))
+      sexp_raise("byte-vector-ref: index out of range", sexp_list2(ctx, PUCHI_ARG1, PUCHI_ARG2));
+    PUCHI_ARG2 = sexp_bytes_ref(PUCHI_ARG1, PUCHI_ARG2);
     top--;
     break;
   case SEXP_OP_STRING_REF:
-    if (! sexp_stringp(_ARG1))
-      sexp_raise("string-cursor-ref: not a string", sexp_list1(ctx, _ARG1));
-    else if (! sexp_string_cursorp(_ARG2))
-      sexp_raise("string-cursor-ref: not a string-cursor", sexp_list1(ctx, _ARG2));
-    i = sexp_unbox_string_cursor(_ARG2);
-    if ((i < 0) || (i >= (sexp_sint_t)sexp_string_size(_ARG1)))
-      sexp_raise("string-ref: index out of range", sexp_list2(ctx, _ARG1, _ARG2));
-    _ARG2 = sexp_string_cursor_ref(ctx, _ARG1, _ARG2);
+    if (! sexp_stringp(PUCHI_ARG1))
+      sexp_raise("string-cursor-ref: not a string", sexp_list1(ctx, PUCHI_ARG1));
+    else if (! sexp_string_cursorp(PUCHI_ARG2))
+      sexp_raise("string-cursor-ref: not a string-cursor", sexp_list1(ctx, PUCHI_ARG2));
+    i = sexp_unbox_string_cursor(PUCHI_ARG2);
+    if ((i < 0) || (i >= (sexp_sint_t)sexp_string_size(PUCHI_ARG1)))
+      sexp_raise("string-ref: index out of range", sexp_list2(ctx, PUCHI_ARG1, PUCHI_ARG2));
+    PUCHI_ARG2 = sexp_string_cursor_ref(ctx, PUCHI_ARG1, PUCHI_ARG2);
     top--;
     sexp_check_exception();
     break;
   case SEXP_OP_BYTES_SET:
-    if (! sexp_bytesp(_ARG1))
-      sexp_raise("byte-vector-set!: not a byte-vector", sexp_list1(ctx, _ARG1));
-    else if (sexp_immutablep(_ARG1))
-      sexp_raise("byte-vector-set!: immutable byte-vector", sexp_list1(ctx, _ARG1));
-    else if (! sexp_fixnump(_ARG2))
-      sexp_raise("byte-vector-set!: not an integer", sexp_list1(ctx, _ARG2));
-    else if (!(sexp_fixnump(_ARG3) && sexp_unbox_fixnum(_ARG3)>=0
-               && sexp_unbox_fixnum(_ARG3)<0x100))
-      sexp_raise("byte-vector-set!: not an octet", sexp_list1(ctx, _ARG3));
-    i = sexp_unbox_fixnum(_ARG2);
-    if ((i < 0) || (i >= (sexp_sint_t)sexp_bytes_length(_ARG1)))
-      sexp_raise("byte-vector-set!: index out of range", sexp_list2(ctx, _ARG1, _ARG2));
-    sexp_bytes_set(_ARG1, _ARG2, _ARG3);
+    if (! sexp_bytesp(PUCHI_ARG1))
+      sexp_raise("byte-vector-set!: not a byte-vector", sexp_list1(ctx, PUCHI_ARG1));
+    else if (sexp_immutablep(PUCHI_ARG1))
+      sexp_raise("byte-vector-set!: immutable byte-vector", sexp_list1(ctx, PUCHI_ARG1));
+    else if (! sexp_fixnump(PUCHI_ARG2))
+      sexp_raise("byte-vector-set!: not an integer", sexp_list1(ctx, PUCHI_ARG2));
+    else if (!(sexp_fixnump(PUCHI_ARG3) && sexp_unbox_fixnum(PUCHI_ARG3)>=0
+               && sexp_unbox_fixnum(PUCHI_ARG3)<0x100))
+      sexp_raise("byte-vector-set!: not an octet", sexp_list1(ctx, PUCHI_ARG3));
+    i = sexp_unbox_fixnum(PUCHI_ARG2);
+    if ((i < 0) || (i >= (sexp_sint_t)sexp_bytes_length(PUCHI_ARG1)))
+      sexp_raise("byte-vector-set!: index out of range", sexp_list2(ctx, PUCHI_ARG1, PUCHI_ARG2));
+    sexp_bytes_set(PUCHI_ARG1, PUCHI_ARG2, PUCHI_ARG3);
     top-=3;
     break;
   case SEXP_OP_STRING_SET:
-    if (! sexp_stringp(_ARG1))
-      sexp_raise("string-cursor-set!: not a string", sexp_list1(ctx, _ARG1));
-    else if (sexp_immutablep(_ARG1))
-      sexp_raise("string-cursor-set!: immutable string", sexp_list1(ctx, _ARG1));
-    else if (! sexp_string_cursorp(_ARG2))
-      sexp_raise("string-cursor-set!: not a string-cursor", sexp_list1(ctx, _ARG2));
-    else if (! sexp_charp(_ARG3))
-      sexp_raise("string-cursor-set!: not a char", sexp_list1(ctx, _ARG3));
-    i = sexp_unbox_string_cursor(_ARG2);
-    if ((i < 0) || (i >= (sexp_sint_t)sexp_string_size(_ARG1)))
-      sexp_raise("string-cursor-set!: index out of range", sexp_list2(ctx, _ARG1, _ARG2));
+    if (! sexp_stringp(PUCHI_ARG1))
+      sexp_raise("string-cursor-set!: not a string", sexp_list1(ctx, PUCHI_ARG1));
+    else if (sexp_immutablep(PUCHI_ARG1))
+      sexp_raise("string-cursor-set!: immutable string", sexp_list1(ctx, PUCHI_ARG1));
+    else if (! sexp_string_cursorp(PUCHI_ARG2))
+      sexp_raise("string-cursor-set!: not a string-cursor", sexp_list1(ctx, PUCHI_ARG2));
+    else if (! sexp_charp(PUCHI_ARG3))
+      sexp_raise("string-cursor-set!: not a char", sexp_list1(ctx, PUCHI_ARG3));
+    i = sexp_unbox_string_cursor(PUCHI_ARG2);
+    if ((i < 0) || (i >= (sexp_sint_t)sexp_string_size(PUCHI_ARG1)))
+      sexp_raise("string-cursor-set!: index out of range", sexp_list2(ctx, PUCHI_ARG1, PUCHI_ARG2));
     sexp_context_top(ctx) = top;
-    sexp_string_set(ctx, _ARG1, _ARG2, _ARG3);
+    sexp_string_set(ctx, PUCHI_ARG1, PUCHI_ARG2, PUCHI_ARG3);
     top-=3;
     break;
   case SEXP_OP_STRING_CURSOR_NEXT:
-    if (! sexp_stringp(_ARG1))
-      sexp_raise("string-cursor-next: not a string", sexp_list1(ctx, _ARG1));
-    else if (! sexp_string_cursorp(_ARG2))
-      sexp_raise("string-cursor-next: not a string-cursor", sexp_list1(ctx, _ARG2));
-    _ARG2 = sexp_string_cursor_next(_ARG1, _ARG2);
+    if (! sexp_stringp(PUCHI_ARG1))
+      sexp_raise("string-cursor-next: not a string", sexp_list1(ctx, PUCHI_ARG1));
+    else if (! sexp_string_cursorp(PUCHI_ARG2))
+      sexp_raise("string-cursor-next: not a string-cursor", sexp_list1(ctx, PUCHI_ARG2));
+    PUCHI_ARG2 = sexp_string_cursor_next(PUCHI_ARG1, PUCHI_ARG2);
     top--;
     sexp_check_exception();
     break;
   case SEXP_OP_STRING_CURSOR_PREV:
-    if (! sexp_stringp(_ARG1))
-      sexp_raise("string-cursor-prev: not a string", sexp_list1(ctx, _ARG1));
-    else if (! sexp_string_cursorp(_ARG2))
-      sexp_raise("string-cursor-prev: not a string-cursor", sexp_list1(ctx, _ARG2));
-    _ARG2 = sexp_string_cursor_prev(_ARG1, _ARG2);
+    if (! sexp_stringp(PUCHI_ARG1))
+      sexp_raise("string-cursor-prev: not a string", sexp_list1(ctx, PUCHI_ARG1));
+    else if (! sexp_string_cursorp(PUCHI_ARG2))
+      sexp_raise("string-cursor-prev: not a string-cursor", sexp_list1(ctx, PUCHI_ARG2));
+    PUCHI_ARG2 = sexp_string_cursor_prev(PUCHI_ARG1, PUCHI_ARG2);
     top--;
     sexp_check_exception();
     break;
   case SEXP_OP_STRING_CURSOR_END:
-    if (! sexp_stringp(_ARG1))
-      sexp_raise("string-cursor-end: not a string", sexp_list1(ctx, _ARG1));
-    _ARG1 = sexp_make_string_cursor(sexp_string_size(_ARG1));
+    if (! sexp_stringp(PUCHI_ARG1))
+      sexp_raise("string-cursor-end: not a string", sexp_list1(ctx, PUCHI_ARG1));
+    PUCHI_ARG1 = sexp_make_string_cursor(sexp_string_size(PUCHI_ARG1));
     break;
   case SEXP_OP_BYTES_LENGTH:
-    if (! sexp_bytesp(_ARG1))
-      sexp_raise("bytes-length: not a byte-vector", sexp_list1(ctx, _ARG1));
-    _ARG1 = sexp_make_fixnum(sexp_bytes_length(_ARG1));
+    if (! sexp_bytesp(PUCHI_ARG1))
+      sexp_raise("bytes-length: not a byte-vector", sexp_list1(ctx, PUCHI_ARG1));
+    PUCHI_ARG1 = sexp_make_fixnum(sexp_bytes_length(PUCHI_ARG1));
     break;
   case SEXP_OP_STRING_LENGTH:
-    if (! sexp_stringp(_ARG1))
-      sexp_raise("string-length: not a string", sexp_list1(ctx, _ARG1));
-    _ARG1 = sexp_make_fixnum(sexp_string_length(_ARG1));
+    if (! sexp_stringp(PUCHI_ARG1))
+      sexp_raise("string-length: not a string", sexp_list1(ctx, PUCHI_ARG1));
+    PUCHI_ARG1 = sexp_make_fixnum(sexp_string_length(PUCHI_ARG1));
     break;
   case SEXP_OP_MAKE_PROCEDURE:
     sexp_context_top(ctx) = top;
-    _ALIGN_IP();
-    _ARG1 = sexp_make_procedure(ctx, _WORD0, _WORD1, _WORD2, _ARG1);
+    PUCHI_ALIGN_IP();
+    PUCHI_ARG1 = sexp_make_procedure(ctx, PUCHI_WORD0, PUCHI_WORD1, PUCHI_WORD2, PUCHI_ARG1);
     ip += (3 * sizeof(sexp));
     break;
   case SEXP_OP_MAKE_VECTOR:
     sexp_context_top(ctx) = top;
-    if (! sexp_fixnump(_ARG1))
-      sexp_raise("make-vector: not an integer", sexp_list1(ctx, _ARG1));
-    if (sexp_unbox_fixnum(_ARG1) < 0)
-      sexp_raise("make-vector: length must be non-negative", sexp_list1(ctx, _ARG1));
-    _ARG2 = sexp_make_vector(ctx, _ARG1, _ARG2);
+    if (! sexp_fixnump(PUCHI_ARG1))
+      sexp_raise("make-vector: not an integer", sexp_list1(ctx, PUCHI_ARG1));
+    if (sexp_unbox_fixnum(PUCHI_ARG1) < 0)
+      sexp_raise("make-vector: length must be non-negative", sexp_list1(ctx, PUCHI_ARG1));
+    PUCHI_ARG2 = sexp_make_vector(ctx, PUCHI_ARG1, PUCHI_ARG2);
     top--;
     break;
   case SEXP_OP_MAKE_EXCEPTION:
     sexp_context_top(ctx) = top;
-    _ARG5 = sexp_make_exception(ctx, _ARG1, _ARG2, _ARG3, _ARG4, _ARG5);
+    PUCHI_ARG5 = sexp_make_exception(ctx, PUCHI_ARG1, PUCHI_ARG2, PUCHI_ARG3, PUCHI_ARG4, PUCHI_ARG5);
     top -= 4;
     break;
   case SEXP_OP_AND:
-    _ARG2 = sexp_make_boolean((_ARG1 != SEXP_FALSE) && (_ARG2 != SEXP_FALSE));
+    PUCHI_ARG2 = sexp_make_boolean((PUCHI_ARG1 != SEXP_FALSE) && (PUCHI_ARG2 != SEXP_FALSE));
     top--;
     break;
   case SEXP_OP_EOFP:
-    _ARG1 = sexp_make_boolean(_ARG1 == SEXP_EOF); break;
+    PUCHI_ARG1 = sexp_make_boolean(PUCHI_ARG1 == SEXP_EOF); break;
   case SEXP_OP_NULLP:
-    _ARG1 = sexp_make_boolean(sexp_nullp(_ARG1)); break;
+    PUCHI_ARG1 = sexp_make_boolean(sexp_nullp(PUCHI_ARG1)); break;
   case SEXP_OP_FIXNUMP:
-    _ARG1 = sexp_make_boolean(sexp_fixnump(_ARG1)); break;
+    PUCHI_ARG1 = sexp_make_boolean(sexp_fixnump(PUCHI_ARG1)); break;
   case SEXP_OP_SYMBOLP:
-    _ARG1 = sexp_make_boolean(sexp_symbolp(_ARG1)); break;
+    PUCHI_ARG1 = sexp_make_boolean(sexp_symbolp(PUCHI_ARG1)); break;
   case SEXP_OP_CHARP:
-    _ARG1 = sexp_make_boolean(sexp_charp(_ARG1)); break;
+    PUCHI_ARG1 = sexp_make_boolean(sexp_charp(PUCHI_ARG1)); break;
   case SEXP_OP_ISA:
-    tmp1 = _ARG1, tmp2 = _ARG2;
+    tmp1 = PUCHI_ARG1, tmp2 = PUCHI_ARG2;
     if (! sexp_typep(tmp2)) sexp_raise("is-a?: not a type", tmp2);
     top--;
     goto do_check_type;
   case SEXP_OP_TYPEP:
-    _ALIGN_IP();
-    tmp1 = _ARG1, tmp2 = sexp_type_by_index(ctx, _UWORD0);
+    PUCHI_ALIGN_IP();
+    tmp1 = PUCHI_ARG1, tmp2 = sexp_type_by_index(ctx, PUCHI_UWORD0);
     ip += sizeof(sexp);
   do_check_type:
-    _ARG1 = sexp_make_boolean(sexp_check_type(ctx, tmp1, tmp2));
+    PUCHI_ARG1 = sexp_make_boolean(sexp_check_type(ctx, tmp1, tmp2));
     break;
   case SEXP_OP_MAKE:
-    _ALIGN_IP();
+    PUCHI_ALIGN_IP();
     sexp_context_top(ctx) = top;
-    _PUSH(sexp_alloc_tagged(ctx, _UWORD1, _UWORD0));
+    PUCHI_PUSH(sexp_alloc_tagged(ctx, PUCHI_UWORD1, PUCHI_UWORD0));
     /* initialize fields to void */
-    for (i=(_UWORD1-sexp_sizeof_header)/sizeof(sexp_uint_t) - 1; i>=0; i--)
-      sexp_slot_set(_ARG1, i, SEXP_VOID);
+    for (i=(PUCHI_UWORD1-sexp_sizeof_header)/sizeof(sexp_uint_t) - 1; i>=0; i--)
+      sexp_slot_set(PUCHI_ARG1, i, SEXP_VOID);
     ip += sizeof(sexp)*2;
     break;
   case SEXP_OP_SLOT_REF:
-    _ALIGN_IP();
-    if (! sexp_check_type(ctx, _ARG1, sexp_type_by_index(ctx, _UWORD0)))
-      sexp_raise("slot-ref: bad type", sexp_list2(ctx, sexp_type_name_by_index(ctx, _UWORD0), _ARG1));
-    _ARG1 = sexp_slot_ref(_ARG1, _UWORD1);
+    PUCHI_ALIGN_IP();
+    if (! sexp_check_type(ctx, PUCHI_ARG1, sexp_type_by_index(ctx, PUCHI_UWORD0)))
+      sexp_raise("slot-ref: bad type", sexp_list2(ctx, sexp_type_name_by_index(ctx, PUCHI_UWORD0), PUCHI_ARG1));
+    PUCHI_ARG1 = sexp_slot_ref(PUCHI_ARG1, PUCHI_UWORD1);
     ip += sizeof(sexp)*2;
     break;
   case SEXP_OP_SLOT_SET:
-    _ALIGN_IP();
-    if (! sexp_check_type(ctx, _ARG1, sexp_type_by_index(ctx, _UWORD0)))
-      sexp_raise("slot-set!: bad type", sexp_list2(ctx, sexp_type_name_by_index(ctx, _UWORD0), _ARG1));
-    else if (sexp_immutablep(_ARG1))
-      sexp_raise("slot-set!: immutable object", sexp_list1(ctx, _ARG1));
-    sexp_slot_set(_ARG1, _UWORD1, _ARG2);
+    PUCHI_ALIGN_IP();
+    if (! sexp_check_type(ctx, PUCHI_ARG1, sexp_type_by_index(ctx, PUCHI_UWORD0)))
+      sexp_raise("slot-set!: bad type", sexp_list2(ctx, sexp_type_name_by_index(ctx, PUCHI_UWORD0), PUCHI_ARG1));
+    else if (sexp_immutablep(PUCHI_ARG1))
+      sexp_raise("slot-set!: immutable object", sexp_list1(ctx, PUCHI_ARG1));
+    sexp_slot_set(PUCHI_ARG1, PUCHI_UWORD1, PUCHI_ARG2);
     ip += sizeof(sexp)*2;
     top-=2;
     break;
   case SEXP_OP_SLOTN_REF:
-    if (! sexp_typep(_ARG1))
-      sexp_raise("slotn-ref: not a record type", sexp_list1(ctx, _ARG1));
-    else if (! sexp_check_type(ctx, _ARG2, _ARG1))
-      sexp_raise("slotn-ref: bad type", sexp_list1(ctx, _ARG2));
-    if (! sexp_fixnump(_ARG3))
-      for (i = 0, tmp1 = sexp_type_slots(_ARG1); sexp_pairp(tmp1); tmp1 = sexp_cdr(tmp1), ++i)
-        if (sexp_car(tmp1) == _ARG3) { _ARG3 = sexp_make_fixnum(i); break; }
-    if (! sexp_fixnump(_ARG3))
-      sexp_raise("slotn-ref: not an integer", sexp_list1(ctx, _ARG3));
-    if (sexp_vectorp(sexp_type_getters(_ARG1))) {
-      if (sexp_unbox_fixnum(_ARG3) < 0 || sexp_unbox_fixnum(_ARG3) >= (sexp_sint_t)sexp_vector_length(sexp_type_getters(_ARG1)))
-        sexp_raise("slotn-ref: slot out of bounds", sexp_list2(ctx, _ARG3, sexp_make_fixnum(sexp_type_field_len_base(_ARG1))));
-      tmp1 = sexp_vector_ref(sexp_type_getters(_ARG1), _ARG3);
+    if (! sexp_typep(PUCHI_ARG1))
+      sexp_raise("slotn-ref: not a record type", sexp_list1(ctx, PUCHI_ARG1));
+    else if (! sexp_check_type(ctx, PUCHI_ARG2, PUCHI_ARG1))
+      sexp_raise("slotn-ref: bad type", sexp_list1(ctx, PUCHI_ARG2));
+    if (! sexp_fixnump(PUCHI_ARG3))
+      for (i = 0, tmp1 = sexp_type_slots(PUCHI_ARG1); sexp_pairp(tmp1); tmp1 = sexp_cdr(tmp1), ++i)
+        if (sexp_car(tmp1) == PUCHI_ARG3) { PUCHI_ARG3 = sexp_make_fixnum(i); break; }
+    if (! sexp_fixnump(PUCHI_ARG3))
+      sexp_raise("slotn-ref: not an integer", sexp_list1(ctx, PUCHI_ARG3));
+    if (sexp_vectorp(sexp_type_getters(PUCHI_ARG1))) {
+      if (sexp_unbox_fixnum(PUCHI_ARG3) < 0 || sexp_unbox_fixnum(PUCHI_ARG3) >= (sexp_sint_t)sexp_vector_length(sexp_type_getters(PUCHI_ARG1)))
+        sexp_raise("slotn-ref: slot out of bounds", sexp_list2(ctx, PUCHI_ARG3, sexp_make_fixnum(sexp_type_field_len_base(PUCHI_ARG1))));
+      tmp1 = sexp_vector_ref(sexp_type_getters(PUCHI_ARG1), PUCHI_ARG3);
       if (sexp_opcodep(tmp1))
-        _ARG3 = ((sexp_proc2)sexp_opcode_func(tmp1))(ctx, tmp1, 1, _ARG2);
+        PUCHI_ARG3 = ((sexp_proc2)sexp_opcode_func(tmp1))(ctx, tmp1, 1, PUCHI_ARG2);
       else
-        sexp_raise("slotn-ref: no getter defined", sexp_list1(ctx, _ARG3));
+        sexp_raise("slotn-ref: no getter defined", sexp_list1(ctx, PUCHI_ARG3));
     } else {
-      if (sexp_unbox_fixnum(_ARG3) < 0 || sexp_unbox_fixnum(_ARG3) >= sexp_type_field_len_base(_ARG1))
-        sexp_raise("slotn-ref: slot out of bounds", sexp_list2(ctx, _ARG3, sexp_make_fixnum(sexp_type_field_len_base(_ARG1))));
-      _ARG3 = sexp_slot_ref(_ARG2, sexp_unbox_fixnum(_ARG3));
+      if (sexp_unbox_fixnum(PUCHI_ARG3) < 0 || sexp_unbox_fixnum(PUCHI_ARG3) >= sexp_type_field_len_base(PUCHI_ARG1))
+        sexp_raise("slotn-ref: slot out of bounds", sexp_list2(ctx, PUCHI_ARG3, sexp_make_fixnum(sexp_type_field_len_base(PUCHI_ARG1))));
+      PUCHI_ARG3 = sexp_slot_ref(PUCHI_ARG2, sexp_unbox_fixnum(PUCHI_ARG3));
     }
     top-=2;
-    if (!_ARG1) _ARG1 = SEXP_VOID;
+    if (!PUCHI_ARG1) PUCHI_ARG1 = SEXP_VOID;
     else sexp_check_exception();
     break;
   case SEXP_OP_SLOTN_SET:
-    if (! sexp_typep(_ARG1))
-      sexp_raise("slotn-set!: not a record type", sexp_list1(ctx, _ARG1));
-    else if (! sexp_check_type(ctx, _ARG2, _ARG1))
-      sexp_raise("slotn-set!: bad type", sexp_list1(ctx, _ARG2));
-    else if (sexp_immutablep(_ARG2))
-      sexp_raise("slotn-set!: immutable object", sexp_list1(ctx, _ARG2));
-    if (! sexp_fixnump(_ARG3))
-      for (i = 0, tmp1 = sexp_type_slots(_ARG1); sexp_pairp(tmp1); tmp1 = sexp_cdr(tmp1), ++i)
-        if (sexp_car(tmp1) == _ARG3) { _ARG3 = sexp_make_fixnum(i); break; }
-    if (! sexp_fixnump(_ARG3))
-      sexp_raise("slotn-set!: not an integer", sexp_list1(ctx, _ARG3));
-    if (sexp_vectorp(sexp_type_setters(_ARG1))) {
-      if (sexp_unbox_fixnum(_ARG3) < 0 || sexp_unbox_fixnum(_ARG3) >= (sexp_sint_t)sexp_vector_length(sexp_type_setters(_ARG1)))
-        sexp_raise("slotn-set!: slot out of bounds", sexp_list2(ctx, _ARG3, sexp_make_fixnum(sexp_type_field_len_base(_ARG1))));
-      tmp1 = sexp_vector_ref(sexp_type_setters(_ARG1), _ARG3);
+    if (! sexp_typep(PUCHI_ARG1))
+      sexp_raise("slotn-set!: not a record type", sexp_list1(ctx, PUCHI_ARG1));
+    else if (! sexp_check_type(ctx, PUCHI_ARG2, PUCHI_ARG1))
+      sexp_raise("slotn-set!: bad type", sexp_list1(ctx, PUCHI_ARG2));
+    else if (sexp_immutablep(PUCHI_ARG2))
+      sexp_raise("slotn-set!: immutable object", sexp_list1(ctx, PUCHI_ARG2));
+    if (! sexp_fixnump(PUCHI_ARG3))
+      for (i = 0, tmp1 = sexp_type_slots(PUCHI_ARG1); sexp_pairp(tmp1); tmp1 = sexp_cdr(tmp1), ++i)
+        if (sexp_car(tmp1) == PUCHI_ARG3) { PUCHI_ARG3 = sexp_make_fixnum(i); break; }
+    if (! sexp_fixnump(PUCHI_ARG3))
+      sexp_raise("slotn-set!: not an integer", sexp_list1(ctx, PUCHI_ARG3));
+    if (sexp_vectorp(sexp_type_setters(PUCHI_ARG1))) {
+      if (sexp_unbox_fixnum(PUCHI_ARG3) < 0 || sexp_unbox_fixnum(PUCHI_ARG3) >= (sexp_sint_t)sexp_vector_length(sexp_type_setters(PUCHI_ARG1)))
+        sexp_raise("slotn-set!: slot out of bounds", sexp_list2(ctx, PUCHI_ARG3, sexp_make_fixnum(sexp_type_field_len_base(PUCHI_ARG1))));
+      tmp1 = sexp_vector_ref(sexp_type_setters(PUCHI_ARG1), PUCHI_ARG3);
       if (sexp_opcodep(tmp1))
-        _ARG4 = ((sexp_proc3)sexp_opcode_func(tmp1))(ctx, tmp1, 2, _ARG2, _ARG4);
+        PUCHI_ARG4 = ((sexp_proc3)sexp_opcode_func(tmp1))(ctx, tmp1, 2, PUCHI_ARG2, PUCHI_ARG4);
       else
-        sexp_raise("slotn-set!: no setter defined", sexp_list1(ctx, _ARG3));
+        sexp_raise("slotn-set!: no setter defined", sexp_list1(ctx, PUCHI_ARG3));
     } else {
-      if (sexp_unbox_fixnum(_ARG3) < 0 || sexp_unbox_fixnum(_ARG3) >= sexp_type_field_len_base(_ARG1))
-        sexp_raise("slotn-set!: slot out of bounds", sexp_list2(ctx, _ARG3, sexp_make_fixnum(sexp_type_field_len_base(_ARG1))));
-      sexp_slot_set(_ARG2, sexp_unbox_fixnum(_ARG3), _ARG4);
+      if (sexp_unbox_fixnum(PUCHI_ARG3) < 0 || sexp_unbox_fixnum(PUCHI_ARG3) >= sexp_type_field_len_base(PUCHI_ARG1))
+        sexp_raise("slotn-set!: slot out of bounds", sexp_list2(ctx, PUCHI_ARG3, sexp_make_fixnum(sexp_type_field_len_base(PUCHI_ARG1))));
+      sexp_slot_set(PUCHI_ARG2, sexp_unbox_fixnum(PUCHI_ARG3), PUCHI_ARG4);
     }
     top-=4;
     sexp_check_exception();
     break;
   case SEXP_OP_CAR:
-    if (! sexp_pairp(_ARG1))
-      sexp_raise("car: not a pair", sexp_list1(ctx, _ARG1));
-    _ARG1 = sexp_car(_ARG1); break;
+    if (! sexp_pairp(PUCHI_ARG1))
+      sexp_raise("car: not a pair", sexp_list1(ctx, PUCHI_ARG1));
+    PUCHI_ARG1 = sexp_car(PUCHI_ARG1); break;
   case SEXP_OP_CDR:
-    if (! sexp_pairp(_ARG1))
-      sexp_raise("cdr: not a pair", sexp_list1(ctx, _ARG1));
-    _ARG1 = sexp_cdr(_ARG1); break;
+    if (! sexp_pairp(PUCHI_ARG1))
+      sexp_raise("cdr: not a pair", sexp_list1(ctx, PUCHI_ARG1));
+    PUCHI_ARG1 = sexp_cdr(PUCHI_ARG1); break;
   case SEXP_OP_SET_CAR:
-    if (! sexp_pairp(_ARG1))
-      sexp_raise("set-car!: not a pair", sexp_list1(ctx, _ARG1));
-    else if (sexp_immutablep(_ARG1))
-      sexp_raise("set-car!: immutable pair", sexp_list1(ctx, _ARG1));
-    sexp_car(_ARG1) = _ARG2;
+    if (! sexp_pairp(PUCHI_ARG1))
+      sexp_raise("set-car!: not a pair", sexp_list1(ctx, PUCHI_ARG1));
+    else if (sexp_immutablep(PUCHI_ARG1))
+      sexp_raise("set-car!: immutable pair", sexp_list1(ctx, PUCHI_ARG1));
+    sexp_car(PUCHI_ARG1) = PUCHI_ARG2;
     top-=2;
     break;
   case SEXP_OP_SET_CDR:
-    if (! sexp_pairp(_ARG1))
-      sexp_raise("set-cdr!: not a pair", sexp_list1(ctx, _ARG1));
-    else if (sexp_immutablep(_ARG1))
-      sexp_raise("set-cdr!: immutable pair", sexp_list1(ctx, _ARG1));
-    sexp_cdr(_ARG1) = _ARG2;
+    if (! sexp_pairp(PUCHI_ARG1))
+      sexp_raise("set-cdr!: not a pair", sexp_list1(ctx, PUCHI_ARG1));
+    else if (sexp_immutablep(PUCHI_ARG1))
+      sexp_raise("set-cdr!: immutable pair", sexp_list1(ctx, PUCHI_ARG1));
+    sexp_cdr(PUCHI_ARG1) = PUCHI_ARG2;
     top-=2;
     break;
   case SEXP_OP_CONS:
     sexp_context_top(ctx) = top;
-    _ARG2 = sexp_cons(ctx, _ARG1, _ARG2);
+    PUCHI_ARG2 = sexp_cons(ctx, PUCHI_ARG1, PUCHI_ARG2);
     top--;
     break;
   case SEXP_OP_ADD:
-    tmp1 = _ARG1, tmp2 = _ARG2;
+    tmp1 = PUCHI_ARG1, tmp2 = PUCHI_ARG2;
     sexp_context_top(ctx) = --top;
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
     if (sexp_fixnump(tmp1) && sexp_fixnump(tmp2)) {
       j = sexp_unbox_fixnum(tmp1) + sexp_unbox_fixnum(tmp2);
       if ((j < SEXP_MIN_FIXNUM) || (j > SEXP_MAX_FIXNUM))
-        _ARG1 = sexp_add(ctx, tmp1=sexp_fixnum_to_bignum(ctx, tmp1), tmp2);
+        PUCHI_ARG1 = sexp_add(ctx, tmp1=sexp_fixnum_to_bignum(ctx, tmp1), tmp2);
       else
-        _ARG1 = sexp_make_fixnum(j);
+        PUCHI_ARG1 = sexp_make_fixnum(j);
     }
     else {
-      _ARG1 = sexp_add(ctx, tmp1, tmp2);
+      PUCHI_ARG1 = sexp_add(ctx, tmp1, tmp2);
       sexp_check_exception();
     }
 #else
     if (sexp_fixnump(tmp1) && sexp_fixnump(tmp2))
-      _ARG1 = sexp_fx_add(tmp1, tmp2);
+      PUCHI_ARG1 = sexp_fx_add(tmp1, tmp2);
 #if !defined(PUCHI_INTEGER_ONLY)
     else if (sexp_flonump(tmp1) && sexp_flonump(tmp2))
-      _ARG1 = sexp_fp_add(ctx, tmp1, tmp2);
+      PUCHI_ARG1 = sexp_fp_add(ctx, tmp1, tmp2);
     else if (sexp_flonump(tmp1) && sexp_fixnump(tmp2))
-      _ARG1 = sexp_make_flonum(ctx, sexp_flonum_value(tmp1) + (double)sexp_unbox_fixnum(tmp2));
+      PUCHI_ARG1 = sexp_make_flonum(ctx, sexp_flonum_value(tmp1) + (double)sexp_unbox_fixnum(tmp2));
     else if (sexp_fixnump(tmp1) && sexp_flonump(tmp2))
-      _ARG1 = sexp_make_flonum(ctx, (double)sexp_unbox_fixnum(tmp1) + sexp_flonum_value(tmp2));
+      PUCHI_ARG1 = sexp_make_flonum(ctx, (double)sexp_unbox_fixnum(tmp1) + sexp_flonum_value(tmp2));
 #endif
     else sexp_raise("+: not a number", sexp_list2(ctx, tmp1, tmp2));
 #endif
     break;
   case SEXP_OP_SUB:
-    tmp1 = _ARG1, tmp2 = _ARG2;
+    tmp1 = PUCHI_ARG1, tmp2 = PUCHI_ARG2;
     sexp_context_top(ctx) = --top;
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
     if (sexp_fixnump(tmp1) && sexp_fixnump(tmp2)) {
       j = sexp_unbox_fixnum(tmp1) - sexp_unbox_fixnum(tmp2);
       if ((j < SEXP_MIN_FIXNUM) || (j > SEXP_MAX_FIXNUM))
-        _ARG1 = sexp_sub(ctx, tmp1=sexp_fixnum_to_bignum(ctx, tmp1), tmp2);
+        PUCHI_ARG1 = sexp_sub(ctx, tmp1=sexp_fixnum_to_bignum(ctx, tmp1), tmp2);
       else
-        _ARG1 = sexp_make_fixnum(j);
+        PUCHI_ARG1 = sexp_make_fixnum(j);
     }
     else {
-      _ARG1 = sexp_sub(ctx, tmp1, tmp2);
+      PUCHI_ARG1 = sexp_sub(ctx, tmp1, tmp2);
       sexp_check_exception();
     }
 #else
     if (sexp_fixnump(tmp1) && sexp_fixnump(tmp2))
-      _ARG1 = sexp_fx_sub(tmp1, tmp2);
+      PUCHI_ARG1 = sexp_fx_sub(tmp1, tmp2);
 #if !defined(PUCHI_INTEGER_ONLY)
     else if (sexp_flonump(tmp1) && sexp_flonump(tmp2))
-      _ARG1 = sexp_fp_sub(ctx, tmp1, tmp2);
+      PUCHI_ARG1 = sexp_fp_sub(ctx, tmp1, tmp2);
     else if (sexp_flonump(tmp1) && sexp_fixnump(tmp2))
-      _ARG1 = sexp_make_flonum(ctx, sexp_flonum_value(tmp1) - sexp_fixnum_to_double(tmp2));
+      PUCHI_ARG1 = sexp_make_flonum(ctx, sexp_flonum_value(tmp1) - sexp_fixnum_to_double(tmp2));
     else if (sexp_fixnump(tmp1) && sexp_flonump(tmp2))
-      _ARG1 = sexp_make_flonum(ctx, tmp1==SEXP_ZERO ? -sexp_flonum_value(tmp2) : sexp_fixnum_to_double(tmp1)-sexp_flonum_value(tmp2));
+      PUCHI_ARG1 = sexp_make_flonum(ctx, tmp1==SEXP_ZERO ? -sexp_flonum_value(tmp2) : sexp_fixnum_to_double(tmp1)-sexp_flonum_value(tmp2));
 #endif
     else sexp_raise("-: not a number", sexp_list2(ctx, tmp1, tmp2));
 #endif
     break;
   case SEXP_OP_MUL:
-    tmp1 = _ARG1, tmp2 = _ARG2;
+    tmp1 = PUCHI_ARG1, tmp2 = PUCHI_ARG2;
     sexp_context_top(ctx) = --top;
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
     if (sexp_fixnump(tmp1) && sexp_fixnump(tmp2)) {
       prod = lsint_mul_sint(lsint_from_sint(sexp_unbox_fixnum(tmp1)), sexp_unbox_fixnum(tmp2));
       if (!lsint_is_fixnum(prod))
-        _ARG1 = sexp_mul(ctx, tmp1=sexp_fixnum_to_bignum(ctx, tmp1), tmp2);
+        PUCHI_ARG1 = sexp_mul(ctx, tmp1=sexp_fixnum_to_bignum(ctx, tmp1), tmp2);
       else
-        _ARG1 = sexp_make_fixnum(lsint_to_sint(prod));
+        PUCHI_ARG1 = sexp_make_fixnum(lsint_to_sint(prod));
     }
     else {
-      _ARG1 = sexp_mul(ctx, tmp1, tmp2);
+      PUCHI_ARG1 = sexp_mul(ctx, tmp1, tmp2);
       sexp_check_exception();
     }
 #else
     if (sexp_fixnump(tmp1) && sexp_fixnump(tmp2))
-      _ARG1 = sexp_fx_mul(tmp1, tmp2);
+      PUCHI_ARG1 = sexp_fx_mul(tmp1, tmp2);
 #if !defined(PUCHI_INTEGER_ONLY)
     else if (sexp_flonump(tmp1) && sexp_flonump(tmp2))
-      _ARG1 = sexp_fp_mul(ctx, tmp1, tmp2);
+      PUCHI_ARG1 = sexp_fp_mul(ctx, tmp1, tmp2);
     else if (sexp_flonump(tmp1) && sexp_fixnump(tmp2))
-      _ARG1 = sexp_make_flonum(ctx, sexp_flonum_value(tmp1) * (double)sexp_unbox_fixnum(tmp2));
+      PUCHI_ARG1 = sexp_make_flonum(ctx, sexp_flonum_value(tmp1) * (double)sexp_unbox_fixnum(tmp2));
     else if (sexp_fixnump(tmp1) && sexp_flonump(tmp2))
-      _ARG1 = sexp_make_flonum(ctx, (double)sexp_unbox_fixnum(tmp1) * sexp_flonum_value(tmp2));
+      PUCHI_ARG1 = sexp_make_flonum(ctx, (double)sexp_unbox_fixnum(tmp1) * sexp_flonum_value(tmp2));
 #endif
     else sexp_raise("*: not a number", sexp_list2(ctx, tmp1, tmp2));
 #endif
     break;
   case SEXP_OP_DIV:
-    tmp1 = _ARG1, tmp2 = _ARG2;
+    tmp1 = PUCHI_ARG1, tmp2 = PUCHI_ARG2;
     sexp_context_top(ctx) = --top;
     if (tmp2 == SEXP_ZERO) {
 #if !defined(PUCHI_INTEGER_ONLY)
       if (sexp_flonump(tmp1) && sexp_flonum_value(tmp1) == 0.0)
-        _ARG1 = sexp_make_flonum(ctx, 0.0);
+        PUCHI_ARG1 = sexp_make_flonum(ctx, 0.0);
       else
 #endif
         sexp_raise("divide by zero", SEXP_NULL);
     } else if (sexp_fixnump(tmp1) && sexp_fixnump(tmp2)) {
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-      _ARG1 = sexp_make_ratio(ctx, tmp1, tmp2);
-      _ARG1 = sexp_ratio_normalize(ctx, _ARG1, SEXP_FALSE);
+      PUCHI_ARG1 = sexp_make_ratio(ctx, tmp1, tmp2);
+      PUCHI_ARG1 = sexp_ratio_normalize(ctx, PUCHI_ARG1, SEXP_FALSE);
 #else
 #if !defined(PUCHI_INTEGER_ONLY)
       tmp1 = sexp_fixnum_to_flonum(ctx, tmp1);
       tmp2 = sexp_fixnum_to_flonum(ctx, tmp2);
-      _ARG1 = sexp_fp_div(ctx, tmp1, tmp2);
-      if (sexp_flonum_value(_ARG1) == PUCHI_TRUNC(sexp_flonum_value(_ARG1)))
-        _ARG1 = sexp_make_fixnum(sexp_flonum_value(_ARG1));
+      PUCHI_ARG1 = sexp_fp_div(ctx, tmp1, tmp2);
+      if (sexp_flonum_value(PUCHI_ARG1) == PUCHI_TRUNC(sexp_flonum_value(PUCHI_ARG1)))
+        PUCHI_ARG1 = sexp_make_fixnum(sexp_flonum_value(PUCHI_ARG1));
 #else
       if (tmp1 == sexp_make_fixnum(SEXP_MIN_FIXNUM) && tmp2 == SEXP_NEG_ONE) {
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-        _ARG1 = sexp_fixnum_to_bignum(ctx, tmp1);
-        sexp_negate_exact(_ARG1);
+        PUCHI_ARG1 = sexp_fixnum_to_bignum(ctx, tmp1);
+        sexp_negate_exact(PUCHI_ARG1);
 #else
         sexp_raise("integer overflow", sexp_list2(ctx, tmp1, tmp2));
 #endif
       } else {
-        _ARG1 = sexp_fx_div(tmp1, tmp2);
+        PUCHI_ARG1 = sexp_fx_div(tmp1, tmp2);
       }
 #endif
 #endif
     }
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
     else {
-      _ARG1 = sexp_div(ctx, tmp1, tmp2);
+      PUCHI_ARG1 = sexp_div(ctx, tmp1, tmp2);
       sexp_check_exception();
     }
 #else
 #if !defined(PUCHI_INTEGER_ONLY)
     else if (sexp_flonump(tmp1) && sexp_flonump(tmp2))
-      _ARG1 = sexp_fp_div(ctx, tmp1, tmp2);
+      PUCHI_ARG1 = sexp_fp_div(ctx, tmp1, tmp2);
     else if (sexp_flonump(tmp1) && sexp_fixnump(tmp2))
-      _ARG1 = sexp_make_flonum(ctx, sexp_flonum_value(tmp1) / (double)sexp_unbox_fixnum(tmp2));
+      PUCHI_ARG1 = sexp_make_flonum(ctx, sexp_flonum_value(tmp1) / (double)sexp_unbox_fixnum(tmp2));
     else if (sexp_fixnump(tmp1) && sexp_flonump(tmp2))
-      _ARG1 = sexp_make_flonum(ctx, (double)sexp_unbox_fixnum(tmp1) / sexp_flonum_value(tmp2));
+      PUCHI_ARG1 = sexp_make_flonum(ctx, (double)sexp_unbox_fixnum(tmp1) / sexp_flonum_value(tmp2));
 #endif
     else sexp_raise("/: not a number", sexp_list2(ctx, tmp1, tmp2));
 #endif
     break;
   case SEXP_OP_QUOTIENT:
-    tmp1 = _ARG1, tmp2 = _ARG2;
+    tmp1 = PUCHI_ARG1, tmp2 = PUCHI_ARG2;
     sexp_context_top(ctx) = --top;
     if (sexp_fixnump(tmp1) && sexp_fixnump(tmp2)) {
       if (tmp2 == SEXP_ZERO)
         sexp_raise("divide by zero", SEXP_NULL);
       if (tmp1 == sexp_make_fixnum(SEXP_MIN_FIXNUM) && tmp2 == SEXP_NEG_ONE) {
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-        _ARG1 = sexp_fixnum_to_bignum(ctx, tmp1);
-        sexp_negate_exact(_ARG1);
+        PUCHI_ARG1 = sexp_fixnum_to_bignum(ctx, tmp1);
+        sexp_negate_exact(PUCHI_ARG1);
 #else
         sexp_raise("integer overflow", sexp_list2(ctx, tmp1, tmp2));
 #endif
       } else {
-        _ARG1 = sexp_fx_div(tmp1, tmp2);
+        PUCHI_ARG1 = sexp_fx_div(tmp1, tmp2);
       }
     }
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
     else {
-      _ARG1 = sexp_quotient(ctx, tmp1, tmp2);
+      PUCHI_ARG1 = sexp_quotient(ctx, tmp1, tmp2);
       sexp_check_exception();
     }
 #else
-    else sexp_raise("quotient: not an integer", sexp_list2(ctx, _ARG1, tmp2));
+    else sexp_raise("quotient: not an integer", sexp_list2(ctx, PUCHI_ARG1, tmp2));
 #endif
     break;
   case SEXP_OP_REMAINDER:
-    tmp1 = _ARG1, tmp2 = _ARG2;
+    tmp1 = PUCHI_ARG1, tmp2 = PUCHI_ARG2;
     sexp_context_top(ctx) = --top;
     if (sexp_fixnump(tmp1) && sexp_fixnump(tmp2)) {
       if (tmp2 == SEXP_ZERO)
         sexp_raise("divide by zero", SEXP_NULL);
-      _ARG1 = sexp_fx_rem(tmp1, tmp2);
+      PUCHI_ARG1 = sexp_fx_rem(tmp1, tmp2);
     }
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
     else {
-      _ARG1 = sexp_remainder(ctx, tmp1, tmp2);
+      PUCHI_ARG1 = sexp_remainder(ctx, tmp1, tmp2);
       sexp_check_exception();
     }
 #else
-    else sexp_raise("remainder: not an integer", sexp_list2(ctx, _ARG1, tmp2));
+    else sexp_raise("remainder: not an integer", sexp_list2(ctx, PUCHI_ARG1, tmp2));
 #endif
     break;
   case SEXP_OP_LT:
-    tmp1 = _ARG1, tmp2 = _ARG2;
+    tmp1 = PUCHI_ARG1, tmp2 = PUCHI_ARG2;
     sexp_context_top(ctx) = --top;
     if (sexp_fixnump(tmp1) && sexp_fixnump(tmp2)) {
       i = (sexp_sint_t)tmp1 < (sexp_sint_t)tmp2;
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-      _ARG1 = sexp_make_boolean(i);
+      PUCHI_ARG1 = sexp_make_boolean(i);
     } else {
-      _ARG1 = sexp_compare(ctx, tmp1, tmp2);
-      if (sexp_exceptionp(_ARG1)) {
-        if (PUCHI_STRCMP("can't compare NaN", sexp_string_data(sexp_exception_message(_ARG1))) == 0)
-          _ARG1 = SEXP_FALSE;
+      PUCHI_ARG1 = sexp_compare(ctx, tmp1, tmp2);
+      if (sexp_exceptionp(PUCHI_ARG1)) {
+        if (PUCHI_STRCMP("can't compare NaN", sexp_string_data(sexp_exception_message(PUCHI_ARG1))) == 0)
+          PUCHI_ARG1 = SEXP_FALSE;
         else
           goto call_error_handler;
       } else {
-        _ARG1 = sexp_make_boolean(sexp_unbox_fixnum(_ARG1) < 0);
+        PUCHI_ARG1 = sexp_make_boolean(sexp_unbox_fixnum(PUCHI_ARG1) < 0);
       }
     }
 #else
@@ -8442,25 +8501,25 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
       i = (double)sexp_unbox_fixnum(tmp1) < sexp_flonum_value(tmp2);
 #endif
     } else sexp_raise("<: not a number", sexp_list2(ctx, tmp1, tmp2));
-    _ARG1 = sexp_make_boolean(i);
+    PUCHI_ARG1 = sexp_make_boolean(i);
 #endif
     break;
   case SEXP_OP_LE:
-    tmp1 = _ARG1, tmp2 = _ARG2;
+    tmp1 = PUCHI_ARG1, tmp2 = PUCHI_ARG2;
     sexp_context_top(ctx) = --top;
     if (sexp_fixnump(tmp1) && sexp_fixnump(tmp2)) {
       i = (sexp_sint_t)tmp1 <= (sexp_sint_t)tmp2;
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-      _ARG1 = sexp_make_boolean(i);
+      PUCHI_ARG1 = sexp_make_boolean(i);
     } else {
-      _ARG1 = sexp_compare(ctx, tmp1, tmp2);
-      if (sexp_exceptionp(_ARG1)) {
-        if (PUCHI_STRCMP("can't compare NaN", sexp_string_data(sexp_exception_message(_ARG1))) == 0)
-          _ARG1 = SEXP_FALSE;
+      PUCHI_ARG1 = sexp_compare(ctx, tmp1, tmp2);
+      if (sexp_exceptionp(PUCHI_ARG1)) {
+        if (PUCHI_STRCMP("can't compare NaN", sexp_string_data(sexp_exception_message(PUCHI_ARG1))) == 0)
+          PUCHI_ARG1 = SEXP_FALSE;
         else
           goto call_error_handler;
       } else {
-        _ARG1 = sexp_make_boolean(sexp_unbox_fixnum(_ARG1) <= 0);
+        PUCHI_ARG1 = sexp_make_boolean(sexp_unbox_fixnum(PUCHI_ARG1) <= 0);
       }
     }
 #else
@@ -8473,16 +8532,16 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
       i = (double)sexp_unbox_fixnum(tmp1) <= sexp_flonum_value(tmp2);
 #endif
     } else sexp_raise("<=: not a number", sexp_list2(ctx, tmp1, tmp2));
-    _ARG1 = sexp_make_boolean(i);
+    PUCHI_ARG1 = sexp_make_boolean(i);
 #endif
     break;
   case SEXP_OP_EQN:
-    tmp1 = _ARG1, tmp2 = _ARG2;
+    tmp1 = PUCHI_ARG1, tmp2 = PUCHI_ARG2;
     sexp_context_top(ctx) = --top;
     if (sexp_fixnump(tmp1) && sexp_fixnump(tmp2)) {
       i = tmp1 == tmp2;
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-      _ARG1 = sexp_make_boolean(i);
+      PUCHI_ARG1 = sexp_make_boolean(i);
     } else {
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
       if (sexp_complexp(tmp1)) {
@@ -8490,14 +8549,14 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
             && sexp_flonum_value(sexp_complex_imag(tmp1)) == 0.0) {
           tmp1 = sexp_complex_real(tmp1);
         } else if (sexp_complexp(tmp2)) { /* both complex */
-          _ARG1 = sexp_make_boolean(
+          PUCHI_ARG1 = sexp_make_boolean(
             (sexp_compare(ctx, sexp_complex_real(tmp1), sexp_complex_real(tmp2))
              == SEXP_ZERO)
             && (sexp_compare(ctx, sexp_complex_imag(tmp1), sexp_complex_imag(tmp2))
                 == SEXP_ZERO));
           break;
         } else if (sexp_numberp(tmp2)) {
-          _ARG1 = SEXP_FALSE;
+          PUCHI_ARG1 = SEXP_FALSE;
           break;
         }
       }
@@ -8506,20 +8565,20 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
             && sexp_flonum_value(sexp_complex_imag(tmp2)) == 0.0) {
           tmp2 = sexp_complex_real(tmp2);
         } else if (sexp_numberp(tmp1)) {
-          _ARG1 = SEXP_FALSE;
+          PUCHI_ARG1 = SEXP_FALSE;
           break;
         }
       }
 #endif
       /* neither is complex */
-      _ARG1 = sexp_compare(ctx, tmp1, tmp2);
-      if (sexp_exceptionp(_ARG1)) {
-        if (PUCHI_STRCMP("can't compare NaN", sexp_string_data(sexp_exception_message(_ARG1))) == 0)
-          _ARG1 = SEXP_FALSE;
+      PUCHI_ARG1 = sexp_compare(ctx, tmp1, tmp2);
+      if (sexp_exceptionp(PUCHI_ARG1)) {
+        if (PUCHI_STRCMP("can't compare NaN", sexp_string_data(sexp_exception_message(PUCHI_ARG1))) == 0)
+          PUCHI_ARG1 = SEXP_FALSE;
         else
           goto call_error_handler;
       } else {
-        _ARG1 = sexp_make_boolean(_ARG1 == SEXP_ZERO);
+        PUCHI_ARG1 = sexp_make_boolean(PUCHI_ARG1 == SEXP_ZERO);
       }
     }
 #else
@@ -8532,130 +8591,130 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
       i = (double)sexp_unbox_fixnum(tmp1) == sexp_flonum_value(tmp2);
 #endif
     } else sexp_raise("=: not a number", sexp_list2(ctx, tmp1, tmp2));
-    _ARG1 = sexp_make_boolean(i);
+    PUCHI_ARG1 = sexp_make_boolean(i);
 #endif
     break;
   case SEXP_OP_EQ:
-    _ARG2 = sexp_make_boolean(_ARG1 == _ARG2);
+    PUCHI_ARG2 = sexp_make_boolean(PUCHI_ARG1 == PUCHI_ARG2);
     top--;
     break;
   case SEXP_OP_SCP:
-    _ARG1 = sexp_make_boolean(sexp_string_cursorp(_ARG1));
+    PUCHI_ARG1 = sexp_make_boolean(sexp_string_cursorp(PUCHI_ARG1));
     break;
   case SEXP_OP_SC_LT:
-    tmp1 = _ARG1, tmp2 = _ARG2;
+    tmp1 = PUCHI_ARG1, tmp2 = PUCHI_ARG2;
     sexp_context_top(ctx) = --top;
-    _ARG1 = sexp_make_boolean((sexp_sint_t)tmp1 < (sexp_sint_t)tmp2);
+    PUCHI_ARG1 = sexp_make_boolean((sexp_sint_t)tmp1 < (sexp_sint_t)tmp2);
     break;
   case SEXP_OP_SC_LE:
-    tmp1 = _ARG1, tmp2 = _ARG2;
+    tmp1 = PUCHI_ARG1, tmp2 = PUCHI_ARG2;
     sexp_context_top(ctx) = --top;
-    _ARG1 = sexp_make_boolean((sexp_sint_t)tmp1 <= (sexp_sint_t)tmp2);
+    PUCHI_ARG1 = sexp_make_boolean((sexp_sint_t)tmp1 <= (sexp_sint_t)tmp2);
     break;
   case SEXP_OP_CHAR2INT:
-    if (! sexp_charp(_ARG1))
-      sexp_raise("char->integer: not a character", sexp_list1(ctx, _ARG1));
-    _ARG1 = sexp_make_fixnum(sexp_unbox_character(_ARG1));
+    if (! sexp_charp(PUCHI_ARG1))
+      sexp_raise("char->integer: not a character", sexp_list1(ctx, PUCHI_ARG1));
+    PUCHI_ARG1 = sexp_make_fixnum(sexp_unbox_character(PUCHI_ARG1));
     break;
   case SEXP_OP_INT2CHAR:
-    if (! sexp_fixnump(_ARG1))
-      sexp_raise("integer->char: not an integer", sexp_list1(ctx, _ARG1));
-    _ARG1 = sexp_make_character(sexp_unbox_fixnum(_ARG1));
+    if (! sexp_fixnump(PUCHI_ARG1))
+      sexp_raise("integer->char: not an integer", sexp_list1(ctx, PUCHI_ARG1));
+    PUCHI_ARG1 = sexp_make_character(sexp_unbox_fixnum(PUCHI_ARG1));
     break;
   case SEXP_OP_CHAR_UPCASE:
-    if (! sexp_charp(_ARG1))
-      sexp_raise("char-upcase: not a character", sexp_list1(ctx, _ARG1));
-    _ARG1 = sexp_make_character(sexp_toupper(sexp_unbox_character(_ARG1)));
+    if (! sexp_charp(PUCHI_ARG1))
+      sexp_raise("char-upcase: not a character", sexp_list1(ctx, PUCHI_ARG1));
+    PUCHI_ARG1 = sexp_make_character(sexp_toupper(sexp_unbox_character(PUCHI_ARG1)));
     break;
   case SEXP_OP_CHAR_DOWNCASE:
-    if (! sexp_charp(_ARG1))
-      sexp_raise("char-downcase: not a character", sexp_list1(ctx, _ARG1));
-    _ARG1 = sexp_make_character(sexp_tolower(sexp_unbox_character(_ARG1)));
+    if (! sexp_charp(PUCHI_ARG1))
+      sexp_raise("char-downcase: not a character", sexp_list1(ctx, PUCHI_ARG1));
+    PUCHI_ARG1 = sexp_make_character(sexp_tolower(sexp_unbox_character(PUCHI_ARG1)));
     break;
   case SEXP_OP_WRITE_CHAR:
-    if (! sexp_charp(_ARG1))
-      sexp_raise("write-char: not a character", sexp_list1(ctx, _ARG1));
-    if (! sexp_oportp(_ARG2))
-      sexp_raise("write-char: not an output-port", sexp_list1(ctx, _ARG2));
+    if (! sexp_charp(PUCHI_ARG1))
+      sexp_raise("write-char: not a character", sexp_list1(ctx, PUCHI_ARG1));
+    if (! sexp_oportp(PUCHI_ARG2))
+      sexp_raise("write-char: not an output-port", sexp_list1(ctx, PUCHI_ARG2));
     sexp_context_top(ctx) = top;
-    if (sexp_unbox_character(_ARG1) >= 0x80)
-      i = sexp_write_utf8_char(ctx, sexp_unbox_character(_ARG1), _ARG2);
+    if (sexp_unbox_character(PUCHI_ARG1) >= 0x80)
+      i = sexp_write_utf8_char(ctx, sexp_unbox_character(PUCHI_ARG1), PUCHI_ARG2);
     else
-    i = sexp_write_char(ctx, sexp_unbox_character(_ARG1), _ARG2);
+    i = sexp_write_char(ctx, sexp_unbox_character(PUCHI_ARG1), PUCHI_ARG2);
     if ((int)i == EOF) {
-      if (!sexp_port_openp(_ARG2))
-        sexp_raise("write-char: port is closed", _ARG2);
+      if (!sexp_port_openp(PUCHI_ARG2))
+        sexp_raise("write-char: port is closed", PUCHI_ARG2);
       else
-      sexp_raise("failed to write char to port", _ARG2);
+      sexp_raise("failed to write char to port", PUCHI_ARG2);
     }
     top--;
-    _ARG1 = SEXP_VOID;
+    PUCHI_ARG1 = SEXP_VOID;
     break;
   case SEXP_OP_WRITE_STRING:
-    if (sexp_stringp(_ARG1))
-      tmp1 = sexp_string_bytes(_ARG1);
-    else if (sexp_bytesp(_ARG1))
-      tmp1 = _ARG1;
+    if (sexp_stringp(PUCHI_ARG1))
+      tmp1 = sexp_string_bytes(PUCHI_ARG1);
+    else if (sexp_bytesp(PUCHI_ARG1))
+      tmp1 = PUCHI_ARG1;
     else
-      sexp_raise("write-string: not a string or bytes", sexp_list1(ctx, _ARG1));
-    if (_ARG2 == SEXP_TRUE)
-      _ARG2 = sexp_make_fixnum(sexp_bytes_length(tmp1));
-    else if (! sexp_fixnump(_ARG2))
-      sexp_raise("write-string: not an integer", sexp_list1(ctx, _ARG2));
-    if (sexp_unbox_fixnum(_ARG2) < 0 || sexp_unbox_fixnum(_ARG2) > (sexp_sint_t)sexp_bytes_length(tmp1))
-      sexp_raise("write-string: not a valid string count", sexp_list2(ctx, tmp1, _ARG2));
-    if (! sexp_oportp(_ARG3))
-      sexp_raise("write-string: not an output-port", sexp_list1(ctx, _ARG3));
-    if (!sexp_port_openp(_ARG3))
-      sexp_raise("write-string: port is closed", _ARG3);
+      sexp_raise("write-string: not a string or bytes", sexp_list1(ctx, PUCHI_ARG1));
+    if (PUCHI_ARG2 == SEXP_TRUE)
+      PUCHI_ARG2 = sexp_make_fixnum(sexp_bytes_length(tmp1));
+    else if (! sexp_fixnump(PUCHI_ARG2))
+      sexp_raise("write-string: not an integer", sexp_list1(ctx, PUCHI_ARG2));
+    if (sexp_unbox_fixnum(PUCHI_ARG2) < 0 || sexp_unbox_fixnum(PUCHI_ARG2) > (sexp_sint_t)sexp_bytes_length(tmp1))
+      sexp_raise("write-string: not a valid string count", sexp_list2(ctx, tmp1, PUCHI_ARG2));
+    if (! sexp_oportp(PUCHI_ARG3))
+      sexp_raise("write-string: not an output-port", sexp_list1(ctx, PUCHI_ARG3));
+    if (!sexp_port_openp(PUCHI_ARG3))
+      sexp_raise("write-string: port is closed", PUCHI_ARG3);
     sexp_context_top(ctx) = top;
-    i = sexp_write_string_n(ctx, sexp_bytes_data(tmp1), sexp_unbox_fixnum(_ARG2), _ARG3);
+    i = sexp_write_string_n(ctx, sexp_bytes_data(tmp1), sexp_unbox_fixnum(PUCHI_ARG2), PUCHI_ARG3);
     tmp1 = sexp_make_fixnum(i);     /* return the number of bytes written */
     top-=2;
-    _ARG1 = tmp1;
+    PUCHI_ARG1 = tmp1;
     break;
   case SEXP_OP_READ_CHAR:
-    if (! sexp_iportp(_ARG1))
-      sexp_raise("read-char: not an input-port", sexp_list1(ctx, _ARG1));
+    if (! sexp_iportp(PUCHI_ARG1))
+      sexp_raise("read-char: not an input-port", sexp_list1(ctx, PUCHI_ARG1));
     sexp_context_top(ctx) = top;
-    i = sexp_read_char(ctx, _ARG1);
+    i = sexp_read_char(ctx, PUCHI_ARG1);
     if ((int)i == EOF) {
-      if (!sexp_port_openp(_ARG1)) {
-        sexp_raise("read-char: port is closed", _ARG1);
+      if (!sexp_port_openp(PUCHI_ARG1)) {
+        sexp_raise("read-char: port is closed", PUCHI_ARG1);
       } else {
-        _ARG1 = SEXP_EOF;
+        PUCHI_ARG1 = SEXP_EOF;
       }
     } else if (i >= 0x80) {
-      _ARG1 = sexp_read_utf8_char(ctx, _ARG1, i);
+      PUCHI_ARG1 = sexp_read_utf8_char(ctx, PUCHI_ARG1, i);
     } else {
-      if (i == '\n') sexp_port_line(_ARG1)++;
-      _ARG1 = sexp_make_character(i);
+      if (i == '\n') sexp_port_line(PUCHI_ARG1)++;
+      PUCHI_ARG1 = sexp_make_character(i);
     }
     sexp_check_exception();
     break;
   case SEXP_OP_PEEK_CHAR:
-    if (! sexp_iportp(_ARG1))
-      sexp_raise("peek-char: not an input-port", sexp_list1(ctx, _ARG1));
+    if (! sexp_iportp(PUCHI_ARG1))
+      sexp_raise("peek-char: not an input-port", sexp_list1(ctx, PUCHI_ARG1));
     sexp_context_top(ctx) = top;
-    i = sexp_read_char(ctx, _ARG1);
+    i = sexp_read_char(ctx, PUCHI_ARG1);
     if ((int)i == EOF) {
-      if (!sexp_port_openp(_ARG1))
-        sexp_raise("peek-char: port is closed", _ARG1);
+      if (!sexp_port_openp(PUCHI_ARG1))
+        sexp_raise("peek-char: port is closed", PUCHI_ARG1);
       else
-        _ARG1 = SEXP_EOF;
+        PUCHI_ARG1 = SEXP_EOF;
     } else if (i >= 0x80) {
-      tmp1 = sexp_read_utf8_char(ctx, _ARG1, i);
-      sexp_push_utf8_char(ctx, sexp_unbox_character(tmp1), _ARG1);
-      _ARG1 = tmp1;
+      tmp1 = sexp_read_utf8_char(ctx, PUCHI_ARG1, i);
+      sexp_push_utf8_char(ctx, sexp_unbox_character(tmp1), PUCHI_ARG1);
+      PUCHI_ARG1 = tmp1;
     } else {
-      sexp_push_char(ctx, i, _ARG1);
-      _ARG1 = sexp_make_character(i);
+      sexp_push_char(ctx, i, PUCHI_ARG1);
+      PUCHI_ARG1 = sexp_make_character(i);
     }
     sexp_check_exception();
     break;
   case SEXP_OP_RET:
     i = sexp_unbox_fixnum(stack[fp]);
-    stack[fp-i] = _ARG1;
+    stack[fp-i] = PUCHI_ARG1;
     top = fp-i+1;
     self = stack[fp+2];
     bc = sexp_procedure_code(self);
@@ -8673,7 +8732,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
 
  end_loop:
   sexp_gc_release3(ctx);
-  tmp1 = _ARG1;
+  tmp1 = PUCHI_ARG1;
   sexp_context_top(ctx) = --top;
   return tmp1;
 }
@@ -9202,7 +9261,7 @@ sexp sexp_make_lit (sexp ctx, sexp value) {
 
 #define SEXP_STACK_SIZE (sexp_sizeof(stack)+sizeof(sexp)*SEXP_INIT_STACK_SIZE)
 
-static void sexp_add_path (sexp ctx, const char *str) {
+static inline void sexp_add_path (sexp ctx, const char *str) {
   const char *colon;
   if (str && *str) {
     colon = PUCHI_STRCHR(str, ':');
@@ -11028,8 +11087,8 @@ sexp sexp_thread_parameters (sexp ctx, sexp self, sexp_sint_t n) {
   return res ? res : SEXP_NULL;
 }
 
-sexp sexp_thread_parameters_set (sexp ctx, sexp self, sexp_sint_t n, sexp new) {
-  sexp_context_params(ctx) = new;
+sexp sexp_thread_parameters_set (sexp ctx, sexp self, sexp_sint_t n, sexp new_params) {
+  sexp_context_params(ctx) = new_params;
   return SEXP_VOID;
 }
 
@@ -12176,7 +12235,7 @@ sexp sexp_bignum_sqrt_estimate (sexp ctx, sexp a) {
 
   adata_hi = sexp_bignum_data(a)[alen - 1];
   for (i = sizeof(sexp_uint_t)*8-1; i > 0; i--)
-    if (adata_hi & (1ul << i))
+    if (adata_hi & ((sexp_uint_t)1 << i))
       break;
   nbits = sizeof(sexp_uint_t) * 8 * (alen - 1) + i + 1;
 
@@ -13428,6 +13487,10 @@ sexp sexp_compare (sexp ctx, sexp a, sexp b) {
   return r;
 }
 
+#endif
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Woverlength-strings"
 #endif
 static const char puchi_init7_scm[] =
   ";; trimmed for puchi amalgamation - file/load/library stubs\n"
@@ -14759,6 +14822,13 @@ static const char puchi_init7_scm[] =
   "                       (if (eqv? x -0.0) 3.141592653589793 x))\n"
   "                    (atan1 (/ y x))))))))\n"
 ;
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Woverlength-strings"
+#endif
 static const char puchi_meta7_scm[] =
   ";; trimmed for puchi amalgamation - include-shared via PUCHI_TEST; (chibi) skips disk init-7\n"
   ";; meta.scm -- meta language for describing modules\n"
@@ -15240,6 +15310,9 @@ static const char puchi_meta7_scm[] =
   "                      (current-environment)\n"
   "                      (list (list 'export 'cond-expand))))))\n"
 ;
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 static sexp puchi_eval_scheme_text(sexp ctx, const char *text, sexp_sint_t len, sexp env,
                                    int mark_source) {
@@ -15565,6 +15638,14 @@ sexp sexp_enable_modules(sexp ctx, const puchi_module_ops *ops) {
 } /* extern "C" implementation */
 #endif
 
+#endif
+
+#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 #endif
 
 #endif
