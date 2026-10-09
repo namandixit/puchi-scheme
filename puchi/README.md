@@ -112,6 +112,7 @@ On Windows the sanitizer pass needs the Clang ASan runtime DLL on PATH (the bat 
 | `tools/puchi_*.py` | Mechanical helpers (HOST ABI gen from manifest, features scrub, strip, …) |
 | `tools/build_puchi_tests.bat` | **Mandatory verify** (Windows): amalgamate + MSVC + Clang + Clang ASan/UBSan (tag `asan`) |
 | `tools/build_puchi_tests.sh` | **Mandatory verify** (Linux): amalgamate + GCC + Clang + Clang ASan/UBSan (tag `asan`) |
+| `test/puchi_impl.c`, `test/puchi_impl_host.c` | The two body TUs. `puchi_impl.c` defines `PUCHI_TEST` (harness and its clibs link it). `puchi_impl_host.c` is built the way an embedder builds it (no `PUCHI_TEST`); the smoke tests link it. **Never mix them**: `PUCHI_TEST` changes `puchi.h`'s type numbering and struct layouts, so a TU and a body built with different settings disagree about type checks. |
 
 ## Numeric modes
 

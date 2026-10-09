@@ -160,8 +160,9 @@ do_suite() {
 
   echo "=== [$tag][integer] C checks ==="
   run "$cc" "${cf[@]}" -DPUCHI_INTEGER_ONLY -c $TEST/puchi_impl.c -o "${p}_impl_integer.o"
+  run "$cc" "${cf[@]}" -DPUCHI_INTEGER_ONLY -c $TEST/puchi_impl_host.c -o "${p}_implh_integer.o"
   run "$cc" "${cf[@]}" -c $TEST/puchi_integer_smoke.c -o "${p}_integer_smoke.o"
-  run "$cc" "${cf[@]}" -o "${p}_integer_smoke" "${p}_integer_smoke.o" "${p}_impl_integer.o" "${ldf[@]}"
+  run "$cc" "${cf[@]}" -o "${p}_integer_smoke" "${p}_integer_smoke.o" "${p}_implh_integer.o" "${ldf[@]}"
   run "${p}_integer_smoke"
 
   echo "=== [$tag][integer] harness + r5rs + basic ==="
@@ -173,8 +174,9 @@ do_suite() {
 
   echo "=== [$tag][default] C checks ==="
   run "$cc" "${cf[@]}" -c $TEST/puchi_impl.c -o "${p}_impl_default.o"
+  run "$cc" "${cf[@]}" -c $TEST/puchi_impl_host.c -o "${p}_implh_default.o"
   run "$cc" "${cf[@]}" -c $TEST/puchi_slim_smoke.c -o "${p}_slim_smoke.o"
-  run "$cc" "${cf[@]}" -o "${p}_slim_smoke" "${p}_slim_smoke.o" "${p}_impl_default.o" "${ldf[@]}"
+  run "$cc" "${cf[@]}" -o "${p}_slim_smoke" "${p}_slim_smoke.o" "${p}_implh_default.o" "${ldf[@]}"
   run "${p}_slim_smoke"
   run "$cc" "${cf[@]}" -c $TEST/puchi_static_smoke.c -o "${p}_static_smoke.o"
   run "$cc" "${cf[@]}" -o "${p}_static_smoke" "${p}_static_smoke.o" "${ldf[@]}"
@@ -189,13 +191,14 @@ do_suite() {
 
   echo "=== [$tag][tower] C checks ==="
   run "$cc" "${cf[@]}" -DPUCHI_ENABLE_NUMERICAL_TOWER -c $TEST/puchi_impl.c -o "${p}_impl_tower.o"
+  run "$cc" "${cf[@]}" -DPUCHI_ENABLE_NUMERICAL_TOWER -c $TEST/puchi_impl_host.c -o "${p}_implh_tower.o"
   run "$cc" "${cf[@]}" -c $TEST/puchi_smoke.c -o "${p}_smoke.o"
-  run "$cc" "${cf[@]}" -o "${p}_smoke" "${p}_smoke.o" "${p}_impl_tower.o" "${ldf[@]}"
+  run "$cc" "${cf[@]}" -o "${p}_smoke" "${p}_smoke.o" "${p}_implh_tower.o" "${ldf[@]}"
   run "${p}_smoke"
 
   echo "=== [$tag][tower] two-host ==="
   run "$cc" "${cf[@]}" -c $TEST/puchi_two_host_smoke.c -o "${p}_two_host_smoke.o"
-  run "$cc" "${cf[@]}" -o "${p}_two_host_smoke" "${p}_two_host_smoke.o" "${p}_impl_tower.o" "${ldf[@]}"
+  run "$cc" "${cf[@]}" -o "${p}_two_host_smoke" "${p}_two_host_smoke.o" "${p}_implh_tower.o" "${ldf[@]}"
   run "${p}_two_host_smoke"
 
   echo "=== [$tag][tower] harness ==="

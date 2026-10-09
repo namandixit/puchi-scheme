@@ -137,9 +137,11 @@ set CC=cl
 echo === [%TAG%][integer] C checks ===
 cl %CF% /DPUCHI_INTEGER_ONLY /Fo%OUT%\%TAG%_impl_integer.obj /c %TEST%\puchi_impl.c
 if %ERRORLEVEL% NEQ 0 exit /b 1
+cl %CF% /DPUCHI_INTEGER_ONLY /Fo%OUT%\%TAG%_implh_integer.obj /c %TEST%\puchi_impl_host.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
 cl %CF% /Fo%OUT%\%TAG%_integer_smoke.obj /c %TEST%\puchi_integer_smoke.c
 if %ERRORLEVEL% NEQ 0 exit /b 1
-cl %CF% /Fe:%OUT%\%TAG%_integer_smoke.exe %OUT%\%TAG%_integer_smoke.obj %OUT%\%TAG%_impl_integer.obj
+cl %CF% /Fe:%OUT%\%TAG%_integer_smoke.exe %OUT%\%TAG%_integer_smoke.obj %OUT%\%TAG%_implh_integer.obj
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_integer_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -159,9 +161,11 @@ if %ERRORLEVEL% NEQ 0 exit /b 1
 echo === [%TAG%][default] C checks ===
 cl %CF% /Fo%OUT%\%TAG%_impl_default.obj /c %TEST%\puchi_impl.c
 if %ERRORLEVEL% NEQ 0 exit /b 1
+cl %CF% /Fo%OUT%\%TAG%_implh_default.obj /c %TEST%\puchi_impl_host.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
 cl %CF% /Fo%OUT%\%TAG%_slim_smoke.obj /c %TEST%\puchi_slim_smoke.c
 if %ERRORLEVEL% NEQ 0 exit /b 1
-cl %CF% /Fe:%OUT%\%TAG%_slim_smoke.exe %OUT%\%TAG%_slim_smoke.obj %OUT%\%TAG%_impl_default.obj
+cl %CF% /Fe:%OUT%\%TAG%_slim_smoke.exe %OUT%\%TAG%_slim_smoke.obj %OUT%\%TAG%_implh_default.obj
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_slim_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -187,9 +191,11 @@ if %ERRORLEVEL% NEQ 0 exit /b 1
 echo === [%TAG%][tower] C checks ===
 cl %CF% /DPUCHI_ENABLE_NUMERICAL_TOWER /Fo%OUT%\%TAG%_impl_tower.obj /c %TEST%\puchi_impl.c
 if %ERRORLEVEL% NEQ 0 exit /b 1
+cl %CF% /DPUCHI_ENABLE_NUMERICAL_TOWER /Fo%OUT%\%TAG%_implh_tower.obj /c %TEST%\puchi_impl_host.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
 cl %CF% /Fo%OUT%\%TAG%_smoke.obj /c %TEST%\puchi_smoke.c
 if %ERRORLEVEL% NEQ 0 exit /b 1
-cl %CF% /Fe:%OUT%\%TAG%_smoke.exe %OUT%\%TAG%_smoke.obj %OUT%\%TAG%_impl_tower.obj
+cl %CF% /Fe:%OUT%\%TAG%_smoke.exe %OUT%\%TAG%_smoke.obj %OUT%\%TAG%_implh_tower.obj
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -197,7 +203,7 @@ if %ERRORLEVEL% NEQ 0 exit /b 1
 echo === [%TAG%][tower] two-host ===
 cl %CF% /Fo%OUT%\%TAG%_two_host_smoke.obj /c %TEST%\puchi_two_host_smoke.c
 if %ERRORLEVEL% NEQ 0 exit /b 1
-cl %CF% /Fe:%OUT%\%TAG%_two_host_smoke.exe %OUT%\%TAG%_two_host_smoke.obj %OUT%\%TAG%_impl_tower.obj
+cl %CF% /Fe:%OUT%\%TAG%_two_host_smoke.exe %OUT%\%TAG%_two_host_smoke.obj %OUT%\%TAG%_implh_tower.obj
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_two_host_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -240,9 +246,11 @@ goto do_clb
 echo === [%TAG%][integer] C checks ===
 clang %CF% -DPUCHI_INTEGER_ONLY -c %TEST%\puchi_impl.c -o "%OUT%\%TAG%_impl_integer.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
+clang %CF% -DPUCHI_INTEGER_ONLY -c %TEST%\puchi_impl_host.c -o "%OUT%\%TAG%_implh_integer.o"
+if %ERRORLEVEL% NEQ 0 exit /b 1
 clang %CF% -c %TEST%\puchi_integer_smoke.c -o "%OUT%\%TAG%_integer_smoke.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
-clang %CF% -o "%OUT%\%TAG%_integer_smoke.exe" "%OUT%\%TAG%_integer_smoke.o" "%OUT%\%TAG%_impl_integer.o"
+clang %CF% -o "%OUT%\%TAG%_integer_smoke.exe" "%OUT%\%TAG%_integer_smoke.o" "%OUT%\%TAG%_implh_integer.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_integer_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -262,9 +270,11 @@ if %ERRORLEVEL% NEQ 0 exit /b 1
 echo === [%TAG%][default] C checks ===
 clang %CF% -c %TEST%\puchi_impl.c -o "%OUT%\%TAG%_impl_default.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
+clang %CF% -c %TEST%\puchi_impl_host.c -o "%OUT%\%TAG%_implh_default.o"
+if %ERRORLEVEL% NEQ 0 exit /b 1
 clang %CF% -c %TEST%\puchi_slim_smoke.c -o "%OUT%\%TAG%_slim_smoke.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
-clang %CF% -o "%OUT%\%TAG%_slim_smoke.exe" "%OUT%\%TAG%_slim_smoke.o" "%OUT%\%TAG%_impl_default.o"
+clang %CF% -o "%OUT%\%TAG%_slim_smoke.exe" "%OUT%\%TAG%_slim_smoke.o" "%OUT%\%TAG%_implh_default.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_slim_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -290,9 +300,11 @@ if %ERRORLEVEL% NEQ 0 exit /b 1
 echo === [%TAG%][tower] C checks ===
 clang %CF% -DPUCHI_ENABLE_NUMERICAL_TOWER -c %TEST%\puchi_impl.c -o "%OUT%\%TAG%_impl_tower.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
+clang %CF% -DPUCHI_ENABLE_NUMERICAL_TOWER -c %TEST%\puchi_impl_host.c -o "%OUT%\%TAG%_implh_tower.o"
+if %ERRORLEVEL% NEQ 0 exit /b 1
 clang %CF% -c %TEST%\puchi_smoke.c -o "%OUT%\%TAG%_smoke.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
-clang %CF% -o "%OUT%\%TAG%_smoke.exe" "%OUT%\%TAG%_smoke.o" "%OUT%\%TAG%_impl_tower.o"
+clang %CF% -o "%OUT%\%TAG%_smoke.exe" "%OUT%\%TAG%_smoke.o" "%OUT%\%TAG%_implh_tower.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -300,7 +312,7 @@ if %ERRORLEVEL% NEQ 0 exit /b 1
 echo === [%TAG%][tower] two-host ===
 clang %CF% -c %TEST%\puchi_two_host_smoke.c -o "%OUT%\%TAG%_two_host_smoke.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
-clang %CF% -o "%OUT%\%TAG%_two_host_smoke.exe" "%OUT%\%TAG%_two_host_smoke.o" "%OUT%\%TAG%_impl_tower.o"
+clang %CF% -o "%OUT%\%TAG%_two_host_smoke.exe" "%OUT%\%TAG%_two_host_smoke.o" "%OUT%\%TAG%_implh_tower.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_two_host_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
