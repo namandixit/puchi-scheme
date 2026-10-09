@@ -57,7 +57,7 @@ bash puchi/tools/build_puchi_tests.sh
 4. **Linux only:** re-runs it once more under **Clang ThreadSanitizer** (`halt_on_error=1`), which checks the parallel contexts for data races. TSan uses 16 contexts instead of 64 (`PUCHI_HARNESS_THREADS=n`, 1–64; unset means 64): 64 contexts of `lib-tests-embed` under TSan exceed 16 GB and get OOM-killed. TSan has no Windows runtime, so `build_puchi_tests.bat` has no such pass, and it cannot be combined with ASan, hence a separate pass. GCC also supports `-fsanitize=thread`; clang is used to match the ASan pass.
 5. **Linux only:** re-runs it under **Clang MemorySanitizer** (uninitialized reads; origin tracking on, 16 contexts like TSan). Clang-only and Linux-only; cannot be combined with ASan or TSan.
 
-The ASan pass also enables `-fsanitize=local-bounds`. The remaining non-UB UBSan checks (`implicit-conversion`, `unsigned-integer-overflow`, `unsigned-shift-base`, `float-divide-by-zero`) are **not** a gate: they fire hundreds of times on intentional Chibi C (tagged-pointer arithmetic, hashing, bit ops, `(/ 1. 0.)` → `+inf.0`). `build_puchi_tests.sh ubsan` runs them as a report-only audit (tests must still pass) and prints distinct sites per file; full logs go to `test/build/ubsan-audit/`. It is on demand only, not part of the no-argument gate.
+The ASan pass also enables `-fsanitize=local-bounds`. The other non-UB UBSan checks (`implicit-conversion`, `unsigned-integer-overflow`, `unsigned-shift-base`, `float-divide-by-zero`) were audited once and are **deliberately not enabled**: they flag only intentional C (the `~PUCHI_FIXNUM_TAG` mask in `puchi_unbox_fixnum` alone is ~88% of the reports; the rest is hash/bignum wraparound, UTF-8 bytes stored in `char`, and `(/ 1. 0.)` → `+inf.0`) and found no real bug. Gating on them would need hundreds of suppressions, so do not re-add them without a new finding.
 
 Both scripts need the generated FFI stubs under `lib/` (gitignored). Build
 Chibi normally once (`make`), or point `generate_harness_stubs.sh` at any
@@ -96,7 +96,7 @@ Every harness script: single-threaded first, then 64 parallel contexts.
 
 **Permanently out of scope** (all configs): `tests/ffi/`, `tests/snow/`, `tests/net-tests.scm`, `tests/memory/`, install/CLI (`tests/install/`, `tests/run/`), `tests/build/build-tests.sh`, and `(chibi process)` / `(chibi system)` / `(chibi tar)` / filesystem lib tests (no dlopen, process spawn, sockets, or disk VFS in the amalgamation).
 
-On Windows the sanitizer pass needs the Clang ASan runtime DLL on PATH (the bat adds `$(clang -print-resource-dir)/lib/windows` automatically). On Linux it needs Clang's sanitizer runtime (Debian/Ubuntu: `libclang-rt-<ver>-dev`). `build_puchi_tests.sh asan` (or `gcc`, `clang`, `tsan`, `msan`, `ubsan`) re-runs just that pass; no arguments runs the full gate. TSan needs the same clang runtime package. Linux ASan also checks leaks (LSan); `test/lsan.supp` lists the upstream stub leaks it skips (never `puchi.h` code).
+On Windows the sanitizer pass needs the Clang ASan runtime DLL on PATH (the bat adds `$(clang -print-resource-dir)/lib/windows` automatically). On Linux it needs Clang's sanitizer runtime (Debian/Ubuntu: `libclang-rt-<ver>-dev`). `build_puchi_tests.sh asan` (or `gcc`, `clang`, `tsan`, `msan`) re-runs just that pass; no arguments runs the full gate. TSan needs the same clang runtime package. Linux ASan also checks leaks (LSan); `test/lsan.supp` lists the upstream stub leaks it skips (never `puchi.h` code).
 
 ## Layout
 
