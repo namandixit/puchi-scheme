@@ -46,6 +46,20 @@ Puchi keeps those checks honest on x86: `SEXP_USE_ALIGNED_BYTECODE` is forced on
 
 Linking without running is not enough. `check_amalgamate.sh` only checks drift — it does **not** replace the gate script.
 
+### Order of operations (mandatory)
+
+The gate regenerates `puchi.h` in place, and the file is half-written while
+amalgamation runs. Never stage or commit while the gate is running. Always:
+
+1. **Amalgamate:** `bash puchi/tools/amalgamate.sh` (wait for `[puchi] done.`).
+2. **Commit and push** the change together with the regenerated `puchi.h`.
+3. **Run the gate:** `puchi\tools\build_puchi_tests.bat` (Windows) or
+   `bash puchi/tools/build_puchi_tests.sh` (Linux); it must exit 0.
+4. **Verify:** after it succeeds, `git status --short puchi/puchi.h` must
+   print nothing — the gate's own amalgamation reproduced the committed header
+   byte for byte. If it shows `M`, the committed `puchi.h` is stale or partial:
+   go back to step 1.
+
 | Suite | Integer (`PUCHI_INTEGER_ONLY`) | Default (flonums) | Tower (`PUCHI_ENABLE_NUMERICAL_TOWER`) |
 |-------|--------------------------------|-------------------|----------------------------------------|
 | C preflight | yes | yes | yes (+ two-host) |
