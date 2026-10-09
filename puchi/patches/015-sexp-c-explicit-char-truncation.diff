@@ -1,0 +1,38 @@
+--- sexp.c
++++ sexp.c
+@@ -2624,7 +2624,7 @@
+       res = sexp_read_incomplete_error(ctx, "premature end of string", SEXP_NULL, in);
+       break;
+     }
+-    buf[i++] = c;
++    buf[i++] = (char)c;
+   maybe_expand:
+     if (i+4 >= size) {       /* expand buffer w/ malloc(), later free() it */
+       tmp = (char*) sexp_malloc(size*2);
+@@ -2655,7 +2655,7 @@
+ #endif
+ 
+   if (init != EOF)
+-    buf[i++] = init;
++    buf[i++] = (char)init;
+ 
+   for (c = sexp_read_char(ctx, in); ; c = sexp_read_char(ctx, in)) {
+ #if SEXP_USE_FOLD_CASE_SYMS
+@@ -2666,7 +2666,7 @@
+       sexp_push_char(ctx, c, in);
+       break;
+     }
+-    buf[i++] = c;
++    buf[i++] = (char)c;
+     if (i >= size) {       /* expand buffer w/ malloc(), later free() it */
+       tmp = (char*) sexp_malloc(size*2);
+       if (!tmp) {res = sexp_global(ctx, SEXP_G_OOM_ERROR); break;}
+@@ -3439,7 +3439,7 @@
+     if (sexp_global(ctx, SEXP_G_SQUARE_BRACKETS_SYM) == SEXP_FALSE)
+       goto symbol;
+   case '(':
+-    line = (sexp_port_sourcep(in) ? sexp_port_line(in) : -1);
++    line = (sexp_port_sourcep(in) ? (int)sexp_port_line(in) : -1);
+     res = SEXP_NULL;
+     tmp = sexp_read_raw(ctx, in, shares);
+     while ((tmp != SEXP_EOF) && (tmp != SEXP_CLOSE) && (tmp != SEXP_RAWDOT)) {

@@ -799,10 +799,10 @@ union puchi_flonum_conv {
 #define puchi_make_boolean(x) ((x) ? PUCHI_TRUE : PUCHI_FALSE)
 #define puchi_unbox_boolean(x) (((x) == PUCHI_FALSE) ? 0 : 1)
 #define puchi_make_fixnum(n)    ((puchi) ((((puchi_sint_t)(n))*(puchi_sint_t)((puchi_sint_t)1<<PUCHI_FIXNUM_BITS)) | PUCHI_FIXNUM_TAG))
-#define puchi_unbox_fixnum(n)   (((puchi_sint_t)((puchi_uint_t)(n) & ~PUCHI_FIXNUM_TAG))/(puchi_sint_t)((puchi_sint_t)1<<PUCHI_FIXNUM_BITS))
+#define puchi_unbox_fixnum(n)   (((puchi_sint_t)((puchi_uint_t)(n) & ~(puchi_uint_t)PUCHI_FIXNUM_TAG))/(puchi_sint_t)((puchi_sint_t)1<<PUCHI_FIXNUM_BITS))
 #define PUCHI_ZERO    puchi_make_fixnum(0)
 #define puchi_make_string_cursor(n)    ((puchi) ((((puchi_sint_t)(n))*(puchi_sint_t)(1uL<<PUCHI_STRING_CURSOR_BITS)) | PUCHI_STRING_CURSOR_TAG))
-#define puchi_unbox_string_cursor(n)   (((puchi_sint_t)((puchi_uint_t)(n) & ~PUCHI_STRING_CURSOR_TAG))/(puchi_sint_t)(1uL<<PUCHI_STRING_CURSOR_BITS))
+#define puchi_unbox_string_cursor(n)   (((puchi_sint_t)((puchi_uint_t)(n) & ~(puchi_uint_t)PUCHI_STRING_CURSOR_TAG))/(puchi_sint_t)(1uL<<PUCHI_STRING_CURSOR_BITS))
 #define puchi_string_cursor_to_fixnum(n) puchi_make_fixnum(puchi_unbox_string_cursor(n))
 #define puchi_make_character(n)  ((puchi) ((((puchi_sint_t)(n))<<PUCHI_EXTENDED_BITS) + PUCHI_CHAR_TAG))
 #define puchi_unbox_character(n) ((int) (((puchi_sint_t)(n))>>PUCHI_EXTENDED_BITS))
@@ -892,7 +892,7 @@ enum puchi_uniform_vector_type {
 #define puchi_string_maybe_null_data(x) (puchi_not(x) ? NULL : puchi_string_data(x))
 #define puchi_string_to_bytes(ctx, x)  puchi_string_bytes(x)
 #define puchi_bytes_ref(x, i)    (puchi_make_fixnum((unsigned char)puchi_bytes_data(x)[puchi_unbox_fixnum(i)]))
-#define puchi_bytes_set(x, i, v) (puchi_bytes_data(x)[puchi_unbox_fixnum(i)] = puchi_unbox_fixnum(v))
+#define puchi_bytes_set(x, i, v) (puchi_bytes_data(x)[puchi_unbox_fixnum(i)] = (char)puchi_unbox_fixnum(v))
 #define puchi_port_stream_ops(p)   (puchi_pred_field(p, port, puchi_portp, stream_ops))
 #define puchi_port_stream_udata(p) (puchi_pred_field(p, port, puchi_portp, stream_udata))
 #define puchi_port_openp(p)      (puchi_pred_field(p, port, puchi_portp, openp))
@@ -7191,7 +7191,7 @@ static sexp sexp_read_string (sexp ctx, sexp in, int sentinel) {
       res = sexp_read_incomplete_error(ctx, "premature end of string", SEXP_NULL, in);
       break;
     }
-    buf[i++] = c;
+    buf[i++] = (char)c;
   maybe_expand:
     if (i+4 >= size) {       /* expand buffer w/ SEXP_MALLOC(ctx, ), later SEXP_FREE(ctx, ) it */
       tmp = (char*) SEXP_MALLOC(ctx, size*2);
@@ -7220,7 +7220,7 @@ static sexp sexp_read_symbol (sexp ctx, sexp in, int init, int internp) {
   init = (foldp ? sexp_tolower(init) : init);
 
   if (init != EOF)
-    buf[i++] = init;
+    buf[i++] = (char)init;
 
   for (c = sexp_read_char(ctx, in); ; c = sexp_read_char(ctx, in)) {
     if (foldp) c = sexp_tolower(c);
@@ -7229,7 +7229,7 @@ static sexp sexp_read_symbol (sexp ctx, sexp in, int init, int internp) {
       sexp_push_char(ctx, c, in);
       break;
     }
-    buf[i++] = c;
+    buf[i++] = (char)c;
     if (i >= size) {       /* expand buffer w/ SEXP_MALLOC(ctx, ), later SEXP_FREE(ctx, ) it */
       tmp = (char*) SEXP_MALLOC(ctx, size*2);
       if (!tmp) {res = sexp_global(ctx, SEXP_G_OOM_ERROR); break;}
@@ -7856,7 +7856,7 @@ static sexp sexp_read_raw (sexp ctx, sexp in, sexp *shares) {
     if (sexp_global(ctx, SEXP_G_SQUARE_BRACKETS_SYM) == SEXP_FALSE)
       goto symbol;
   case '(':
-    line = (sexp_port_sourcep(in) ? sexp_port_line(in) : -1);
+    line = (sexp_port_sourcep(in) ? (int)sexp_port_line(in) : -1);
     res = SEXP_NULL;
     tmp = sexp_read_raw(ctx, in, shares);
     while ((tmp != SEXP_EOF) && (tmp != SEXP_CLOSE) && (tmp != SEXP_RAWDOT)) {
