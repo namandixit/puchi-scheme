@@ -34,7 +34,8 @@
 #   ffi/, snow/, net-tests, memory/, install/, run/, build-tests.sh
 #   (chibi process)/(chibi system)/(chibi tar)/filesystem lib tests
 #
-# Every harness script run: single-threaded first, then 64 parallel contexts.
+# Every harness script run: single-threaded first, then 64 parallel contexts
+# (16 under tsan and msan, which multiply memory use).
 set -euo pipefail
 
 TOOLS="$(cd "$(dirname "$0")" && pwd)"
@@ -132,7 +133,7 @@ do_suite() {
           -fsanitize=local-bounds -fno-sanitize-recover=all)
       ;;
     tsan)
-      # Data-race net for the 64 parallel contexts the harness runs. Linux only
+      # Data-race net for the parallel contexts the harness runs. Linux only
       # (TSan has no Windows runtime). Cannot be combined with ASan, so it is
       # its own pass. Clang, to match the ASan pass.
       cc="$CC_CLANG"
@@ -237,15 +238,7 @@ for tag in "$@"; do
 done
 
 # README "Order of operations", step 4: the gate's own amalgamation must have
-# reproduced the committed header byte for byte. Compared against HEAD, so a
-# regenerated-but-uncommitted (or only staged) puchi.h fails too.
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
-   ! git diff --quiet HEAD -- puchi/puchi.h; then
-  echo "error: puchi/puchi.h differs from HEAD after the gate." >&2
-  git --no-pager diff --stat HEAD -- puchi/puchi.h >&2
-  echo "  Commit and push the regenerated header, then rerun (see README," >&2
-  echo "  'Order of operations')." >&2
-  exit 1
-fi
+# reproduced the committed header byte for byte.
+bash "$TOOLS/verify_header_clean.sh"
 
 echo "=== puchi suites passed: $* ==="

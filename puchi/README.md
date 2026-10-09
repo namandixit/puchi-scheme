@@ -80,7 +80,8 @@ amalgamation runs. Never stage or commit while the gate is running. Always:
 3. **Run the gate:** `puchi\tools\build_puchi_tests.bat` (Windows) or
    `bash puchi/tools/build_puchi_tests.sh` (Linux); it must exit 0.
 4. **Verify:** after it succeeds, `git status --short puchi/puchi.h` must
-   print nothing — the gate's own amalgamation reproduced the committed header
+   print nothing (both gate scripts now check this themselves via
+   `tools/verify_header_clean.sh`) — the gate's own amalgamation reproduced the committed header
    byte for byte. If it shows `M`, the committed `puchi.h` is stale or partial:
    go back to step 1.
 
@@ -95,7 +96,7 @@ amalgamation runs. Never stage or commit while the gate is running. Always:
 | `tests/unicode-tests.scm` | no — same | no — same | yes |
 | `puchi/test/lib-tests-embed.scm` | no — Complex / digitless `+i` on import | no — same | yes (curated SRFI/chibi minus OS + missing FFI) |
 
-Every harness script: single-threaded first, then 64 parallel contexts.
+Every harness script: single-threaded first, then 64 parallel contexts (16 under the Linux-only TSan and MSan passes).
 
 **Permanently out of scope** (all configs): `tests/ffi/`, `tests/snow/`, `tests/net-tests.scm`, `tests/memory/`, install/CLI (`tests/install/`, `tests/run/`), `tests/build/build-tests.sh`, and `(chibi process)` / `(chibi system)` / `(chibi tar)` / filesystem lib tests (no dlopen, process spawn, sockets, or disk VFS in the amalgamation).
 

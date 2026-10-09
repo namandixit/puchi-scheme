@@ -84,6 +84,10 @@ if %ERRORLEVEL% NEQ 0 exit /b 1
 call :do_suite asan
 if %ERRORLEVEL% NEQ 0 exit /b 1
 
+echo === verify puchi.h unchanged ^(README order of operations, step 4^) ===
+"C:\Program Files\Git\bin\bash.exe" -lc "./puchi/tools/verify_header_clean.sh"
+if %ERRORLEVEL% NEQ 0 exit /b 1
+
 echo === all three puchi configs passed ^(msvc + clang + clang ASan/UBSan^) ===
 endlocal
 exit /b 0
