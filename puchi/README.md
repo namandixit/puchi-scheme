@@ -54,6 +54,7 @@ bash puchi/tools/build_puchi_tests.sh
 1. **Amalgamates** (`amalgamate.sh` → regenerates `puchi.h`)
 2. Runs the **full suite** under **MSVC** and **Clang** — **GCC** and **Clang** on Linux (all three numeric configs; binaries are **executed**, not only linked)
 3. Re-runs the **same suite** under **Clang ASan + UBSan** with `-fno-sanitize-recover=all` (any sanitizer hit fails the script).
+4. **Linux only:** re-runs it once more under **Clang ThreadSanitizer** (`halt_on_error=1`), which checks the 64 parallel contexts for data races. TSan has no Windows runtime, so `build_puchi_tests.bat` has no such pass, and it cannot be combined with ASan, hence a separate pass. GCC also supports `-fsanitize=thread`; clang is used to match the ASan pass.
 
 Both scripts need the generated FFI stubs under `lib/` (gitignored). Build
 Chibi normally once (`make`), or point `generate_harness_stubs.sh` at any
@@ -92,7 +93,7 @@ Every harness script: single-threaded first, then 64 parallel contexts.
 
 **Permanently out of scope** (all configs): `tests/ffi/`, `tests/snow/`, `tests/net-tests.scm`, `tests/memory/`, install/CLI (`tests/install/`, `tests/run/`), `tests/build/build-tests.sh`, and `(chibi process)` / `(chibi system)` / `(chibi tar)` / filesystem lib tests (no dlopen, process spawn, sockets, or disk VFS in the amalgamation).
 
-On Windows the sanitizer pass needs the Clang ASan runtime DLL on PATH (the bat adds `$(clang -print-resource-dir)/lib/windows` automatically). On Linux it needs Clang's sanitizer runtime (Debian/Ubuntu: `libclang-rt-<ver>-dev`). `build_puchi_tests.sh asan` re-runs just that pass; no arguments runs the full gate. Linux ASan also checks leaks (LSan); `test/lsan.supp` lists the upstream stub leaks it skips (never `puchi.h` code).
+On Windows the sanitizer pass needs the Clang ASan runtime DLL on PATH (the bat adds `$(clang -print-resource-dir)/lib/windows` automatically). On Linux it needs Clang's sanitizer runtime (Debian/Ubuntu: `libclang-rt-<ver>-dev`). `build_puchi_tests.sh asan` (or `gcc`, `clang`, `tsan`) re-runs just that pass; no arguments runs the full gate. TSan needs the same clang runtime package. Linux ASan also checks leaks (LSan); `test/lsan.supp` lists the upstream stub leaks it skips (never `puchi.h` code).
 
 ## Layout
 

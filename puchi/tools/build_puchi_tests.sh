@@ -4,8 +4,9 @@
 #   1) amalgamate
 #   2) full suite under GCC + Clang (all three numeric configs, execute)
 #   3) same suite again under Clang ASan+UBSan
-# Run from anywhere:  bash puchi/tools/build_puchi_tests.sh [gcc|clang|asan ...]
-#   (no args = all three; the gate. Naming suites is for re-running one.)
+#   4) same suite again under Clang ThreadSanitizer (Linux only; no Windows runtime)
+# Run from anywhere:  bash puchi/tools/build_puchi_tests.sh [gcc|clang|asan|tsan ...]
+#   (no args = all four; the gate. Naming suites is for re-running one.)
 # Requires: gcc and clang on PATH (CC_GCC= / CC_CLANG= override), python3,
 #           patch, the generated lib/**/*.c FFI stubs (see below), and the
 #           Clang sanitizer runtime (Debian/Ubuntu: libclang-rt-<ver>-dev).
@@ -44,6 +45,8 @@ mkdir -p "$OUT"
 
 CC_GCC="${CC_GCC:-gcc}"
 # Leak checks (LSan, part of ASan on Linux) skip known upstream stub leaks.
+# TSan: abort on the first race (like -fno-sanitize-recover for ASan/UBSan).
+export TSAN_OPTIONS="halt_on_error=1${TSAN_OPTIONS:+:$TSAN_OPTIONS}"
 export LSAN_OPTIONS="suppressions=$ROOT/puchi/test/lsan.supp:print_suppressions=0${LSAN_OPTIONS:+:$LSAN_OPTIONS}"
 CC_CLANG="${CC_CLANG:-clang}"
 
@@ -126,6 +129,13 @@ do_suite() {
       cf=(-O1 -g -fno-omit-frame-pointer -fsanitize=address -fsanitize=undefined
           -fno-sanitize-recover=all)
       ;;
+    tsan)
+      # Data-race net for the 64 parallel contexts the harness runs. Linux only
+      # (TSan has no Windows runtime). Cannot be combined with ASan, so it is
+      # its own pass. Clang, to match the ASan pass.
+      cc="$CC_CLANG"
+      cf=(-O1 -g -fno-omit-frame-pointer -fsanitize=thread)
+      ;;
     *)
       echo "unknown compiler tag: $tag" >&2
       return 1
@@ -202,7 +212,7 @@ do_suite() {
 }
 
 if [[ $# -eq 0 ]]; then
-  set -- gcc clang asan
+  set -- gcc clang asan tsan
 fi
 for tag in "$@"; do
   do_suite "$tag"
