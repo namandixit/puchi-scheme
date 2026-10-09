@@ -8,7 +8,6 @@
 #ifndef PUCHI_INTEGER_ONLY
 #define PUCHI_INTEGER_ONLY
 #endif
-#define PUCHI_IMPLEMENTATION
 #include "../puchi.h"
 
 PUCHI_DIAG_HARNESS_PEDANTIC_OFF

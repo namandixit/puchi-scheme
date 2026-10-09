@@ -27,12 +27,17 @@ from puchi_host_embed import (
     trim_init7_load_port,
 )
 from puchi_strip_gunk import (
+    assert_host_api_decls_are_manifest,
     assert_no_chibi_api_leak,
     assert_finalize_fileno_macro,
     assert_no_enum_tag_typedef_aliases,
+    assert_no_external_sexp_funcs,
     assert_no_os_residue,
     assert_no_process_globals,
     assert_no_project_includes,
+    assert_no_sexp_tokens_outside_impl,
+    assert_no_vm_enums_in_host_abi,
+    filter_dead_auto_test_wrappers,
     scrub_amalgamation_residue,
     scrub_shipped_always_zero_defines,
     trim_init7_dead_arms,
@@ -337,6 +342,281 @@ def splice_min_fixnum_overflow(vm_c: str) -> str:
     return text.replace(old, new)
 
 
+def _sexp_type_frag() -> str:
+    """One C type fragment for file-scope sexp_* declarators.
+
+    `struct|enum|union` tags are a single fragment so we never treat
+    statement keywords like `return` as types (bare \\w+ would).
+    """
+    return (
+        r"(?:(?:struct|enum|union)[ \t]+\w+|"
+        r"void|int|char|long|short|float|double|size_t|sexp|"
+        r"sexp_\w+|unsigned|signed|const|volatile|SEXP_\w+|\w+_t)"
+    )
+
+
+def _sexp_type_tok() -> str:
+    # Alias used by two-line return-type matcher (single fragment, no struct tag).
+    return (
+        r"(?:void|int|char|long|short|float|double|size_t|sexp|"
+        r"sexp_\w+|unsigned|signed|const|volatile|SEXP_\w+|\w+_t)"
+    )
+
+
+def _sexp_storage_is_internal(storage: str) -> bool:
+    toks = storage.split() if storage else []
+    return "static" in toks or "SEXP_API" in toks
+
+
+def _sexp_storage_to_static(storage: str) -> str:
+    """Drop extern; ensure static is present. SEXP_API left alone by caller."""
+    parts = [p for p in (storage.split() if storage else []) if p != "extern"]
+    if "static" not in parts:
+        parts.insert(0, "static")
+    return " ".join(parts) + " "
+
+
+def _sexp_close_proto_span(lines: list[str], start: int, open_paren_line: int) -> int | None:
+    """Return index of last line of a sexp_* prototype starting at start.
+
+    Handles same-line `) {` / `);`, multi-line protos, and Allman `)\\n{`.
+    open_paren_line is the line index that contains the opening `(`.
+    """
+    depth = 0
+    seen_open = False
+    j = open_paren_line
+    while j < len(lines) and j < open_paren_line + 24:
+        bare = lines[j].rstrip("\r\n")
+        for ch in bare:
+            if ch == "(":
+                depth += 1
+                seen_open = True
+            elif ch == ")":
+                depth -= 1
+        if seen_open and depth == 0:
+            # Proto closed on this line.
+            if re.search(r"\)[ \t]*(;|\{)", bare):
+                return j
+            # Allman: `)` ends this line; next non-empty is `{`.
+            k = j + 1
+            while k < len(lines) and k < j + 4:
+                nxt = lines[k].rstrip("\r\n").strip()
+                if nxt == "":
+                    k += 1
+                    continue
+                if nxt.startswith("{"):
+                    return k
+                break
+            # Decl ended with `)` only (unusual); treat as closed.
+            if re.search(r"\)[ \t]*$", bare):
+                return j
+            return j
+        j += 1
+    return None
+
+
+def make_sexp_funcs_static(src: str) -> str:
+    """Prepend static to file-scope sexp_* defs, objects, and bare decls.
+
+    Rule-based (name matches sexp_*), not an allowlist. Skips lines that
+    already have static / SEXP_API. Covers same-line, multi-line, and Allman
+    function shapes, plus file-scope objects (`sexp_foo = …` / `sexp_foo[]`)
+    and `extern … sexp_foo;` → `static … sexp_foo;`.
+
+    Line-oriented (no catastrophic backtracking on large .c files).
+    """
+    type_frag = _sexp_type_frag()
+    type_tok = _sexp_type_tok()
+    type_seq = rf"(?:{type_frag}\b[ \t\*]+)+"
+    # One group for the whole storage prefix (not a repeated capture — that
+    # would keep only the last token and drop a leading `static`).
+    storage_g = r"((?:(?:SEXP_API|extern|inline|static)\b[ \t]*)*)"
+
+    # Object / data: no `(` after name — `type sexp_name[…] = …;` or `;`
+    obj_pat = re.compile(
+        rf"^([ \t]*){storage_g}({type_seq})(sexp_\w+)"
+        rf"((?:[ \t]*\[[^\]]*\])*)[ \t]*(=|;)"
+    )
+    # Function start: type… sexp_name(
+    fn_start = re.compile(
+        rf"^([ \t]*){storage_g}({type_seq})(sexp_\w+)[ \t]*\("
+    )
+    # Two-line return type: "sexp" / "void" then "sexp_foo ("
+    ret_only = re.compile(
+        rf"^([ \t]*){storage_g}({type_tok})\s*$"
+    )
+    name_start = re.compile(rf"^([ \t]*)(sexp_\w+)[ \t]*\(")
+
+    lines = src.splitlines(keepends=True)
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        bare = line.rstrip("\r\n")
+
+        # --- file-scope objects / extern object decls ---
+        mobj = obj_pat.match(bare)
+        if mobj:
+            indent, storage, typ, name, dims, end = mobj.groups()
+            storage = storage or ""
+            suffix = bare[mobj.end() :]
+            if _sexp_storage_is_internal(storage):
+                out.append(line)
+            else:
+                # Space before `=`; none before bare `;`.
+                sp = " " if end == "=" else ""
+                out.append(
+                    f"{indent}{_sexp_storage_to_static(storage)}"
+                    f"{typ.strip()} {name}{dims}{sp}{end}{suffix}\n"
+                )
+            i += 1
+            continue
+
+        # --- function: type… sexp_name( on this line (possibly multi-line) ---
+        mfn = fn_start.match(bare)
+        if mfn:
+            indent, storage, typ, name = mfn.groups()
+            storage = storage or ""
+            end_i = _sexp_close_proto_span(lines, i, i)
+            if end_i is None:
+                out.append(line)
+                i += 1
+                continue
+            if _sexp_storage_is_internal(storage):
+                for k in range(i, end_i + 1):
+                    out.append(lines[k])
+                i = end_i + 1
+                continue
+            # Inject static on the first declarator line; keep the rest.
+            # Rebuild first line: keep original text but ensure leading static.
+            # Prefer surgical prepend after indent rather than full rebuild
+            # (preserves spacing / line wraps on continuations).
+            if bare.lstrip().startswith("extern "):
+                # rare: extern sexp_foo(...);
+                stripped = re.sub(
+                    r"^([ \t]*)extern\b[ \t]*",
+                    r"\1static ",
+                    bare,
+                    count=1,
+                )
+                out.append(stripped + "\n")
+            else:
+                out.append(f"{indent}static {bare[len(indent):]}\n")
+            for k in range(i + 1, end_i + 1):
+                out.append(lines[k])
+            i = end_i + 1
+            continue
+
+        # --- two-line return type + sexp_name( ---
+        mret = ret_only.match(bare)
+        if mret and i + 1 < len(lines):
+            bare2 = lines[i + 1].rstrip("\r\n")
+            m2 = name_start.match(bare2)
+            if m2:
+                indent, storage, typ = mret.groups()
+                storage = storage or ""
+                end_i = _sexp_close_proto_span(lines, i, i + 1)
+                if end_i is None:
+                    out.append(line)
+                    i += 1
+                    continue
+                if _sexp_storage_is_internal(storage):
+                    for k in range(i, end_i + 1):
+                        out.append(lines[k])
+                    i = end_i + 1
+                    continue
+                # Collapse to one static line when the name line closes the proto
+                # on the same line; otherwise prepend static on the type line.
+                if end_i == i + 1 and re.search(r"\)[ \t]*(;|\{)", bare2):
+                    m_close = re.match(
+                        rf"^([ \t]*)(sexp_\w+)[ \t]*\((.*)\)[ \t]*(;|{{)(.*)$",
+                        bare2,
+                    )
+                    if m_close:
+                        _i2, name, args, end, suffix = m_close.groups()
+                        out.append(
+                            f"{indent}static {typ} {name}({args}) {end}{suffix}\n"
+                        )
+                        i = end_i + 1
+                        continue
+                out.append(f"{indent}static {bare[len(indent):]}\n")
+                for k in range(i + 1, end_i + 1):
+                    out.append(lines[k])
+                i = end_i + 1
+                continue
+
+        out.append(line)
+        i += 1
+    return "".join(out)
+
+
+def find_external_sexp_linkage(src: str) -> list[str]:
+    """Return sexp_* function/object names with non-static linkage in src.
+
+    Same shapes as make_sexp_funcs_static (multi-line, Allman, objects,
+    bare extern). Used by the amalgamation assert.
+    """
+    type_frag = _sexp_type_frag()
+    type_tok = _sexp_type_tok()
+    type_seq = rf"(?:{type_frag}\b[ \t\*]+)+"
+    storage_g = r"((?:(?:SEXP_API|extern|inline|static)\b[ \t]*)*)"
+    obj_pat = re.compile(
+        rf"^[ \t]*{storage_g}({type_seq})(sexp_\w+)"
+        rf"(?:[ \t]*\[[^\]]*\])*[ \t]*(=|;)"
+    )
+    fn_start = re.compile(
+        rf"^[ \t]*{storage_g}({type_seq})(sexp_\w+)[ \t]*\("
+    )
+    ret_only = re.compile(rf"^[ \t]*{storage_g}({type_tok})\s*$")
+    name_start = re.compile(rf"^[ \t]*(sexp_\w+)[ \t]*\(")
+
+    lines = src.splitlines()
+    leaks: list[str] = []
+    i = 0
+    while i < len(lines):
+        bare = lines[i]
+
+        mobj = obj_pat.match(bare)
+        if mobj:
+            storage = mobj.group(1) or ""
+            name = mobj.group(3)
+            if not _sexp_storage_is_internal(storage):
+                leaks.append(name)
+            i += 1
+            continue
+
+        mfn = fn_start.match(bare)
+        if mfn:
+            storage = mfn.group(1) or ""
+            name = mfn.group(3)
+            end_i = _sexp_close_proto_span(lines, i, i)
+            if end_i is None:
+                i += 1
+                continue
+            if not _sexp_storage_is_internal(storage):
+                leaks.append(name)
+            i = end_i + 1
+            continue
+
+        mret = ret_only.match(bare)
+        if mret and i + 1 < len(lines) and name_start.match(lines[i + 1]):
+            storage = mret.group(1) or ""
+            m2 = name_start.match(lines[i + 1])
+            assert m2 is not None
+            name = m2.group(1)
+            end_i = _sexp_close_proto_span(lines, i, i + 1)
+            if end_i is None:
+                i += 1
+                continue
+            if not _sexp_storage_is_internal(storage):
+                leaks.append(name)
+            i = end_i + 1
+            continue
+
+        i += 1
+    return leaks
+
+
 def scrub_features_h(text: str) -> str:
     """Mechanical host scrub of upstream features.h (replaces 005-features-host.diff)."""
     text = normalize_newlines(text)
@@ -566,7 +846,18 @@ def scrub_features_h(text: str) -> str:
     )
     if api_old not in text:
         raise SystemExit("scrub_features_h: SEXP_API block not found")
-    text = text.replace(api_old, "#define SEXP_API    extern\n", 1)
+    # Impl TU: sexp_* are file-private. TEST_CLIB TUs only see decls and call
+    # through puchi_* / puchi_TEST_* aliases — keep those decls extern so MSVC
+    # does not require a local static definition (C2129).
+    text = text.replace(
+        api_old,
+        "#if defined(PUCHI_TEST_CLIB)\n"
+        "#define SEXP_API    extern\n"
+        "#else\n"
+        "#define SEXP_API    static\n"
+        "#endif\n",
+        1,
+    )
 
     abi_start = text.find("/************************************************************************/\n"
                           "/* Feature signature.")
@@ -1109,6 +1400,9 @@ def main() -> None:
     p = sub.add_parser("post-strip-puchi")
     p.add_argument("path")
 
+    p = sub.add_parser("make-sexp-static")
+    p.add_argument("path")
+
     args = ap.parse_args()
     if args.cmd == "trim-init":
         text = Path(args.input).read_text(encoding="utf-8")
@@ -1160,6 +1454,9 @@ def main() -> None:
         text = brand_puchi_features(path.read_text(encoding="utf-8"))
         text = fold_always_zero_type_slots(text)
         write_text_lf(path, text)
+    elif args.cmd == "make-sexp-static":
+        path = Path(args.path)
+        write_text_lf(path, make_sexp_funcs_static(path.read_text(encoding="utf-8")))
     elif args.cmd == "post-strip-puchi":
         path = Path(args.path)
         text = normalize_newlines(path.read_text(encoding="utf-8"))
@@ -1168,13 +1465,18 @@ def main() -> None:
         text = scrub_sexp_use_comments(text)
         text = scrub_shipped_always_zero_defines(text)
         text = scrub_amalgamation_residue(text)
+        text = filter_dead_auto_test_wrappers(text)
         assert_no_project_includes(text)
         assert_no_os_residue(text)
         assert_no_sexp_use(text)
         assert_no_process_globals(text)
         assert_no_chibi_api_leak(text)
+        assert_no_vm_enums_in_host_abi(text)
+        assert_host_api_decls_are_manifest(text)
         assert_finalize_fileno_macro(text)
         assert_no_enum_tag_typedef_aliases(text)
+        assert_no_sexp_tokens_outside_impl(text)
+        assert_no_external_sexp_funcs(text)
         write_text_lf(path, text)
 
 

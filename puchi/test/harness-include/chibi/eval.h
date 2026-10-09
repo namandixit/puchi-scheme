@@ -6,6 +6,13 @@
 #ifndef PUCHI_TEST
 #define PUCHI_TEST 1
 #endif
+#ifndef PUCHI_IMPLEMENTATION
+#define PUCHI_IMPLEMENTATION 1
+#endif
+/* Decls for stubs; bodies live in puchi_impl.c (no PUCHI_TEST_CLIB there). */
+#ifndef PUCHI_TEST_CLIB
+#define PUCHI_TEST_CLIB 1
+#endif
 
 /* Stubs such as lib/srfi/151/bit.c still #if SEXP_USE_BIGNUMS. puchi.h has
  * no SEXP_USE_* knobs; bridge tower mode so bitmaps are not fixnum-only.

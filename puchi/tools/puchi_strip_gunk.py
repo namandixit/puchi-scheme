@@ -6,6 +6,7 @@ C body forks live in puchi/patches/; feature scrubbing is mechanical
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from puchi_host_embed import ALWAYS_ZERO_STRIP
 
@@ -281,13 +282,45 @@ def assert_no_os_residue(puchi_h: str) -> None:
         )
 
 
-def assert_no_chibi_api_leak(puchi_h: str) -> None:
-    """Always-visible section must not export Chibi SEXP_API or typedef … sexp."""
+def _always_visible_prefix(puchi_h: str) -> str:
+    """Prefix before CRT/diag (first IMPL||TEST) — Host + TEST decls only."""
     gate = "#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)"
     idx = puchi_h.find(gate)
     if idx < 0:
         raise SystemExit("puchi.h missing PUCHI_IMPLEMENTATION || PUCHI_TEST gate")
-    pre = puchi_h[:idx]
+    return puchi_h[:idx]
+
+
+def assert_no_sexp_tokens_outside_impl(puchi_h: str) -> None:
+    """Host/TEST/CRT prefix (before IMPLEMENTATION-only sexp surface) has no sexp_*."""
+    pre = None
+    for m in re.finditer(r"#if\s+defined\(PUCHI_IMPLEMENTATION\)", puchi_h):
+        after = puchi_h[m.end() :]
+        # Skip CRT/diag gates: #if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)
+        if re.match(r"\s*\|\|", after):
+            continue
+        pre = puchi_h[: m.start()]
+        break
+    if pre is None:
+        pre = puchi_h
+    code = _strip_c_comments(pre)
+    hits = []
+    if re.search(r"\bsexp_", code):
+        hits.append("sexp_*")
+    if re.search(r"\bSEXP_", code):
+        hits.append("SEXP_*")
+    if re.search(r"\bsexp\b", code):
+        hits.append("sexp")
+    if hits:
+        raise SystemExit(
+            "puchi.h outside PUCHI_IMPLEMENTATION still has Chibi names: "
+            + ", ".join(hits)
+        )
+
+
+def assert_no_chibi_api_leak(puchi_h: str) -> None:
+    """Always-visible section must not export Chibi SEXP_API or typedef … sexp."""
+    pre = _always_visible_prefix(puchi_h)
     code = _strip_c_comments(pre)
     hits = []
     if "SEXP_API" in code:
@@ -301,6 +334,81 @@ def assert_no_chibi_api_leak(puchi_h: str) -> None:
         )
 
 
+def assert_no_vm_enums_in_host_abi(puchi_h: str) -> None:
+    """Bare hosts must not see opcode / opcode-class / core-form enums."""
+    pre = _strip_c_comments(_always_visible_prefix(puchi_h))
+    hits = []
+    for pat, label in (
+        (r"\bPUCHI_OP_[A-Z0-9_]+\b", "PUCHI_OP_*"),
+        (r"\bPUCHI_OPC_[A-Z0-9_]+\b", "PUCHI_OPC_*"),
+        (r"\bPUCHI_CORE_[A-Z0-9_]+\b", "PUCHI_CORE_*"),
+        (r"\benum\s+puchi_opcode_names\b", "enum puchi_opcode_names"),
+        (r"\benum\s+puchi_opcode_classes\b", "enum puchi_opcode_classes"),
+        (r"\benum\s+puchi_core_form_names\b", "enum puchi_core_form_names"),
+        (r"\bpuchi_proc[3-7]\b", "puchi_proc3..7"),
+    ):
+        if re.search(pat, pre):
+            hits.append(label)
+    if hits:
+        raise SystemExit(
+            "puchi.h always-visible section still has VM/compiler surface: "
+            + ", ".join(hits)
+        )
+
+
+def assert_host_api_decls_are_manifest(puchi_h: str) -> None:
+    """Every always-visible PUCHI_API decl must be a HOST manifest fn or product."""
+    root = Path(__file__).resolve().parents[1]
+    man = (root / "product" / "puchi_host_symbols.txt").read_text(encoding="utf-8")
+    allowed: set[str] = set()
+    for line in man.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        kind = parts[0]
+        if kind == "function" and len(parts) >= 2:
+            name = parts[1]
+            if name.startswith("sexp_"):
+                allowed.add("puchi_" + name[5:])
+        elif kind == "product" and len(parts) >= 2:
+            allowed.add(parts[1])
+    # Product entrypoints also listed in the generator.
+    allowed.update(
+        {
+            "puchi_create_context",
+            "puchi_delete_context",
+            "puchi_load_default_libs",
+            "puchi_enable_modules",
+            "puchi_make_eval_context_host",
+            "puchi_port_name",
+            "puchi_port_set_name",
+            "puchi_port_set_sourcep",
+            "puchi_port_set_no_close",
+            "puchi_context_parent",
+            "puchi_context_set_parent",
+            "puchi_context_set_tailp",
+            "puchi_context_set_env",
+            "puchi_set_global",
+            "puchi_set_standard_ports",
+            "puchi_stack_trace",
+        }
+    )
+    pre = _always_visible_prefix(puchi_h)
+    decls = set(
+        re.findall(r"PUCHI_API\s+[^\n]*?\b(puchi_[A-Za-z0-9_]+)\s*\(", pre)
+    )
+    # Harness-only decls (under #if PUCHI_TEST) are not HOST manifest entries.
+    decls = {d for d in decls if not d.startswith("puchi_TEST_")}
+    extra = sorted(decls - allowed)
+    if extra:
+        raise SystemExit(
+            "puchi.h always-visible PUCHI_API decls not on HOST manifest/product: "
+            + ", ".join(extra[:20])
+            + ("…" if len(extra) > 20 else "")
+        )
+
+
 def assert_finalize_fileno_macro(puchi_h: str) -> None:
     """PUCHI_FINALIZE_FILENO must keep the Chibi callee name when non-NULL."""
     if re.search(r"#define\s+PUCHI_FINALIZE_FILENO\s+puchi_finalize_fileno\b", puchi_h):
@@ -310,16 +418,226 @@ def assert_finalize_fileno_macro(puchi_h: str) -> None:
         )
 
 
+def filter_dead_auto_test_wrappers(puchi_h: str) -> str:
+    """Drop auto puchi_TEST_* wrappers whose sexp_* bodies were strip-deleted.
+
+    Hand-written puchi_TEST_* (product/) are left alone. Also drops matching
+    auto decls and TEST_CLIB aliases for the same stems.
+    """
+    gate = "#if defined(PUCHI_IMPLEMENTATION) && !defined(PUCHI_TEST_CLIB)"
+    start = puchi_h.find(gate)
+    if start < 0:
+        return puchi_h
+    depth = 0
+    end = len(puchi_h)
+    for m in re.finditer(r"^[ \t]*#(if|ifdef|ifndef|endif)\b", puchi_h[start:], re.M):
+        tok = m.group(1)
+        if tok in ("if", "ifdef", "ifndef"):
+            depth += 1
+        else:
+            depth -= 1
+            if depth == 0:
+                end = start + m.start()
+                break
+    body = puchi_h[start:end]
+    live = set(
+        re.findall(
+            r"^[ \t]*(?:static\s+|SEXP_API\s+|inline\s+)*"
+            r"[\w\s\*]+\b(sexp_\w+)\s*\([^;{]*\)\s*\{",
+            body,
+            re.M,
+        )
+    )
+    hand = {
+        "puchi_TEST_add_static_libraries",
+        "puchi_TEST_load_op",
+        "puchi_TEST_current_module_path_op",
+        "puchi_TEST_load_module_file_op",
+        "puchi_TEST_add_module_directory_op",
+    }
+
+    def keep_test_name(tname: str) -> bool:
+        if tname in hand:
+            return True
+        if not tname.startswith("puchi_TEST_"):
+            return True
+        stem = tname[len("puchi_TEST_") :]
+        return f"sexp_{stem}" in live
+
+    def matching_endif(src: str, if_pos: int) -> int:
+        depth_b = 0
+        for m in re.finditer(r"^[ \t]*#(if|ifdef|ifndef|endif)\b", src[if_pos:], re.M):
+            tok = m.group(1)
+            if tok in ("if", "ifdef", "ifndef"):
+                depth_b += 1
+            else:
+                depth_b -= 1
+                if depth_b == 0:
+                    return if_pos + m.start()
+        return -1
+
+    def filter_test_api_chunk(chunk: str) -> str:
+        parts = re.split(r"(?=^PUCHI_API\b|^#if\b|^#endif\b)", chunk, flags=re.M)
+        kept: list[str] = [parts[0]] if parts else []
+        i = 1
+        while i < len(parts):
+            part = parts[i]
+            block = part
+            if part.startswith("#if"):
+                j = i + 1
+                depth_b = 1
+                while j < len(parts) and depth_b:
+                    if parts[j].startswith("#if"):
+                        depth_b += 1
+                    elif parts[j].startswith("#endif"):
+                        depth_b -= 1
+                    block += parts[j]
+                    j += 1
+                i = j
+            else:
+                i += 1
+            m = re.search(r"\b(puchi_TEST_\w+)\s*\(", block)
+            if m and not keep_test_name(m.group(1)):
+                continue
+            kept.append(block)
+        return "".join(kept)
+
+    # Remove auto wrapper definitions (between markers).
+    wrap_start = puchi_h.find(
+        "/* ==== auto puchi_TEST_* wrappers -> sexp_* (generated) ===="
+    )
+    if wrap_start >= 0:
+        region_if = puchi_h.rfind("#if defined(PUCHI_TEST)", 0, wrap_start)
+        region_end = matching_endif(puchi_h, region_if) if region_if >= 0 else -1
+        if region_if >= 0 and region_end > wrap_start:
+            chunk = puchi_h[wrap_start:region_end]
+            puchi_h = (
+                puchi_h[:wrap_start]
+                + filter_test_api_chunk(chunk)
+                + puchi_h[region_end:]
+            )
+
+    # Remove auto decls for dead stems (same #if PUCHI_TEST as hand decls).
+    decl_mark = (
+        "/* ==== auto puchi_TEST_* decls for non-HOST SEXP_API (generated) ===="
+    )
+    decl_start = puchi_h.find(decl_mark)
+    if decl_start >= 0:
+        # Auto decls sit inside an open #if PUCHI_TEST; rewrite until that endif.
+        region_if = puchi_h.rfind("#if defined(PUCHI_TEST)", 0, decl_start)
+        decl_end = matching_endif(puchi_h, region_if) if region_if >= 0 else -1
+        if decl_end > decl_start:
+            chunk = puchi_h[decl_start:decl_end]
+            puchi_h = (
+                puchi_h[:decl_start]
+                + filter_test_api_chunk(chunk)
+                + puchi_h[decl_end:]
+            )
+
+    # Drop TEST_CLIB aliases pointing at removed TEST wrappers.
+    alias_mark = (
+        "/* ==== TEST_CLIB: sexp_* -> puchi_* / puchi_TEST_* (generated) ===="
+    )
+    alias_start = puchi_h.find(alias_mark)
+    if alias_start < 0:
+        alias_start = puchi_h.find(
+            "/* ==== TEST_CLIB sexp_* -> puchi_* / puchi_TEST_* aliases ===="
+        )
+    if alias_start >= 0:
+        region_if = puchi_h.find("#if defined(PUCHI_TEST_CLIB)", alias_start)
+        if region_if < 0:
+            region_if = puchi_h.rfind("#if defined(PUCHI_TEST_CLIB)", 0, alias_start + 200)
+        alias_end = matching_endif(puchi_h, region_if) if region_if >= 0 else -1
+        if alias_end > alias_start:
+            chunk = puchi_h[alias_start:alias_end]
+            out_lines: list[str] = []
+            lines = chunk.splitlines(keepends=True)
+            i = 0
+            while i < len(lines):
+                head = lines[i].lstrip()
+                gated = head.startswith("#ifndef sexp_") or head.startswith(
+                    "#if !defined(sexp_"
+                )
+                if (
+                    gated
+                    and i + 2 < len(lines)
+                    and "puchi_TEST_" in lines[i + 1]
+                    and lines[i + 2].lstrip().startswith("#endif")
+                ):
+                    m = re.search(r"\b(puchi_TEST_\w+)\b", lines[i + 1])
+                    if m and not keep_test_name(m.group(1)):
+                        i += 3
+                        continue
+                out_lines.append(lines[i])
+                i += 1
+            puchi_h = (
+                puchi_h[:alias_start] + "".join(out_lines) + puchi_h[alias_end:]
+            )
+
+    return puchi_h
+
+
+def assert_no_external_sexp_funcs(puchi_h: str) -> None:
+    """Under IMPLEMENTATION bodies, sexp_* funcs/objects must not be External.
+
+    Uses the same multi-line / Allman / object recognition as
+    make_sexp_funcs_static (lazy-imported to avoid a circular import).
+    """
+    # Lazy import: puchi_amalgamate_helpers imports this module at load time.
+    from puchi_amalgamate_helpers import find_external_sexp_linkage
+
+    gate = "#if defined(PUCHI_IMPLEMENTATION) && !defined(PUCHI_TEST_CLIB)"
+    start = puchi_h.find(gate)
+    if start < 0:
+        raise SystemExit(
+            "puchi.h: missing IMPLEMENTATION && !PUCHI_TEST_CLIB body region"
+        )
+    # Match the closing #endif by nesting (comment on endif is optional).
+    depth = 0
+    end = -1
+    for m in re.finditer(r"^[ \t]*#(if|ifdef|ifndef|endif)\b", puchi_h[start:], re.M):
+        tok = m.group(1)
+        if tok in ("if", "ifdef", "ifndef"):
+            depth += 1
+        else:
+            depth -= 1
+            if depth == 0:
+                end = start + m.start()
+                break
+    if end < 0:
+        raise SystemExit(
+            "puchi.h: unclosed IMPLEMENTATION && !PUCHI_TEST_CLIB body region"
+        )
+    body = puchi_h[start:end]
+    leaks = find_external_sexp_linkage(body)
+    if leaks:
+        uniq = sorted(set(leaks))
+        raise SystemExit(
+            "puchi.h: non-static sexp_* linkage under IMPLEMENTATION: "
+            + ", ".join(uniq[:30])
+            + ("…" if len(uniq) > 30 else "")
+        )
+
+
 def assert_no_enum_tag_typedef_aliases(puchi_h: str) -> None:
     """Enum-tag typedef aliases collide with globals (e.g. sexp_opcode_names)."""
-    gate = "#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)"
-    i = puchi_h.find(gate)
+    gate = "#if defined(PUCHI_IMPLEMENTATION)"
+    # Prefer the sexp decl surface marker comment if present.
+    i = puchi_h.find("#endif /* PUCHI_IMPLEMENTATION (sexp decl surface) */")
     if i < 0:
-        return
-    j = puchi_h.find("#endif /* PUCHI_IMPLEMENTATION || PUCHI_TEST (sexp decl surface) */", i)
-    if j < 0:
-        return
-    block = puchi_h[i:j]
+        i = puchi_h.find(gate)
+        if i < 0:
+            return
+        j = puchi_h.find("#endif", i + len(gate))
+        if j < 0:
+            return
+        block = puchi_h[i:j]
+    else:
+        # Walk back to the matching #if for the sexp decl surface block.
+        start = puchi_h.rfind("#if defined(PUCHI_IMPLEMENTATION)", 0, i)
+        if start < 0:
+            return
+        block = puchi_h[start:i]
     if re.search(r"^\s*typedef\s+enum\b", block, re.M):
         raise SystemExit(
             "puchi.h sexp surface: typedef enum … sexp_* aliases are forbidden"
@@ -343,6 +661,42 @@ def _drop_define_lines(src: str, names: tuple[str, ...]) -> str:
     for name in names:
         src = re.sub(rf"#\s*define\s+{name}\b[^\n]*\n", "", src)
     return src
+
+
+def _puchi_macro_or_enum_names(src: str) -> set[str]:
+    """PUCHI_* names defined as #define or enum members in this header."""
+    names = set(re.findall(r"^\s*#\s*define\s+(PUCHI_[A-Z0-9_]+)\b", src, re.M))
+    # Enum rows may be bare or prefixed with a /* n hex */ comment.
+    names |= set(
+        re.findall(
+            r"^\s*(?:/\*[^*]*\*/\s*)?(PUCHI_[A-Z0-9_]+)\s*(?:,|=|/\*|$)",
+            src,
+            re.M,
+        )
+    )
+    return names
+
+
+def _scrub_dangling_sexp_aliases(src: str) -> str:
+    """Drop SEXP_* → PUCHI_* aliases whose PUCHI_* target no longer exists.
+
+    Aliases are generated before strip-dead-backends removes DL / promises /
+    green-threads / etc. SEXP_TEST is always dropped: it collides with the
+    PUCHI_TEST feature gate and is not a type tag in the host ABI.
+    """
+    defined = _puchi_macro_or_enum_names(src)
+    out: list[str] = []
+    for line in src.splitlines(keepends=True):
+        m = re.match(
+            r"#\s*define\s+(SEXP_[A-Z0-9_]+)\s+(PUCHI_[A-Z0-9_]+)\s*$",
+            line,
+        )
+        if m:
+            sexp_name, puchi_name = m.group(1), m.group(2)
+            if sexp_name == "SEXP_TEST" or puchi_name not in defined:
+                continue
+        out.append(line)
+    return "".join(out)
 
 
 def _drop_prototype_lines(src: str, names: tuple[str, ...]) -> str:
@@ -690,8 +1044,9 @@ def scrub_amalgamation_residue(src: str) -> str:
         "sexp_valid_object_type_p",
     )
 
+    # Tolerate `static` from make_sexp_funcs_static (otherwise leaves `static #define`).
     src = re.sub(
-        r"int sexp_valid_object_p\s*\(sexp ctx, sexp x\)\s*\{[^}]*\}\n",
+        r"[ \t]*(?:static\s+)?int sexp_valid_object_p\s*\(sexp ctx, sexp x\)\s*\{[^}]*\}\n",
         "",
         src,
     )
@@ -755,12 +1110,35 @@ def scrub_amalgamation_residue(src: str) -> str:
                 f"scrub_amalgamation_residue: missing harness stub #{pname}"
             )
 
-    src = re.sub(r"^[ \t]*sexp_gc_init\s*\(\s*\)\s*;\n", "", src, flags=re.M)
+    # Upstream sexp.h forward-declares sexp_alloc for separate gc.c / sexp.c
+    # TUs. Amalgamation defines it static in gc.c before all callers — the bare
+    # extern prototype only triggers C4211 (extern decl, static def). Drop it.
     src = re.sub(
-        r"void sexp_gc_init\s*\(\s*void\s*\)\s*\{\s*\}\n",
+        r"^[ \t]*void\*\s*sexp_alloc\s*\(\s*sexp\s+ctx\s*,\s*size_t\s+size\s*\)\s*;\n",
         "",
         src,
+        flags=re.M,
     )
+
+    src = re.sub(r"^[ \t]*sexp_gc_init\s*\(\s*\)\s*;\n", "", src, flags=re.M)
+    # Bodies may be static after make_sexp_funcs_static; drop empty stubs.
+    src = re.sub(
+        r"^[ \t]*(?:static\s+)?void sexp_gc_init\s*\(\s*void\s*\)\s*\{[^\n]*\}\n",
+        "",
+        src,
+        flags=re.M,
+    )
+    # Drop non-empty sexp_gc_init (GLOBAL_HEAP / conservative arms already folded).
+    src = re.sub(
+        r"^[ \t]*(?:static\s+)?void sexp_gc_init\s*\(\s*void\s*\)\s*\{.*?\n\}\n",
+        "",
+        src,
+        flags=re.M | re.S,
+    )
+    # Stray storage-class left if a later scrub ate the rest of a decl line.
+    src = re.sub(r"^[ \t]*static[ \t]*\n(?=[ \t]*/\*)", "", src, flags=re.M)
+    src = re.sub(r"^[ \t]*static[ \t]*\n(?=[ \t]*#)", "", src, flags=re.M)
+    src = re.sub(r"^[ \t]*static[ \t]+(?=#define\b)", "", src, flags=re.M)
 
     src = _scrub_opcodes_and_vm(src)
     src = _scrub_dl_fields(src)
@@ -768,6 +1146,7 @@ def scrub_amalgamation_residue(src: str) -> str:
     src = _scrub_nested_guards_and_banners(src)
     src = _scrub_huff_isymbol_minifloat(src)
     src = _scrub_misc_comments_and_gates(src)
+    src = _scrub_dangling_sexp_aliases(src)
 
     src = src.replace(
         "/* ==== sexp.h (bignum.h inlined mid-file under SEXP_USE_BIGNUMS) ==== */",
@@ -795,19 +1174,27 @@ def scrub_amalgamation_residue(src: str) -> str:
         "(infnan_kind = classify_infnan(str))",
     )
     src = src.replace("class == 'n'", "infnan_kind == 'n'")
-    thread_old = (
-        "sexp sexp_thread_parameters_set (sexp ctx, sexp self, sexp_sint_t n, sexp new) {\n"
-        "  sexp_context_params(ctx) = new;\n"
+    # Rename param `new` (C++ keyword). Tolerate static/whitespace from the
+    # make_sexp_funcs_static pass.
+    thread_m = re.search(
+        r"^((?:static\s+)?)sexp\s+sexp_thread_parameters_set\s*\(\s*"
+        r"sexp\s+ctx,\s*sexp\s+self,\s*sexp_sint_t\s+n,\s*sexp\s+"
+        r"new(\s*\)\s*\{)\n(\s*)sexp_context_params\(ctx\)\s*=\s*new;",
+        src,
+        re.M,
     )
-    thread_new = (
-        "sexp sexp_thread_parameters_set (sexp ctx, sexp self, sexp_sint_t n, sexp new_params) {\n"
-        "  sexp_context_params(ctx) = new_params;\n"
-    )
-    if thread_old not in src:
+    if not thread_m:
         raise SystemExit(
             "scrub_amalgamation_residue: sexp_thread_parameters_set not found"
         )
-    src = src.replace(thread_old, thread_new, 1)
+    src = (
+        src[: thread_m.start()]
+        + f"{thread_m.group(1)}sexp sexp_thread_parameters_set ("
+        f"sexp ctx, sexp self, sexp_sint_t n, sexp new_params"
+        f"{thread_m.group(2)}\n"
+        f"{thread_m.group(3)}sexp_context_params(ctx) = new_params;"
+        + src[thread_m.end() :]
+    )
 
     src = _scrub_vm_reserved_macros(src)
     src = _scrub_statement_macros_extra_semi(src)
@@ -830,9 +1217,28 @@ def scrub_amalgamation_residue(src: str) -> str:
         (r'"RESERVE"', "opcode name RESERVE"),
         (r'"YIELD"', "opcode name YIELD"),
         (r'"FORCE"', "opcode name FORCE"),
+        (r"#\s*define\s+SEXP_DL\b", "SEXP_DL alias"),
+        (r"#\s*define\s+SEXP_PROMISE\b", "SEXP_PROMISE alias"),
+        (r"#\s*define\s+SEXP_TEST\s+PUCHI_TEST\b", "SEXP_TEST→PUCHI_TEST alias"),
+        (r"#\s*define\s+SEXP_G_THREADS_", "SEXP_G_THREADS_* alias"),
+        (r"#\s*define\s+SEXP_G_THREAD_TERMINATE_ERROR\b", "thread-terminate alias"),
+        (r"#\s*define\s+SEXP_G_IO_BLOCK_(?:ONCE_)?ERROR\b", "IO_BLOCK alias"),
+        (r"#\s*define\s+SEXP_G_ATOMIC_P\b", "SEXP_G_ATOMIC_P alias"),
     ):
         if re.search(pat, src):
             raise SystemExit(f"scrub_amalgamation_residue: leftover {label}")
+
+    defined = _puchi_macro_or_enum_names(src)
+    for m in re.finditer(
+        r"#\s*define\s+(SEXP_[A-Z0-9_]+)\s+(PUCHI_[A-Z0-9_]+)\s*$",
+        src,
+        re.M,
+    ):
+        if m.group(2) not in defined:
+            raise SystemExit(
+                f"scrub_amalgamation_residue: dangling alias "
+                f"{m.group(1)} → {m.group(2)}"
+            )
 
     return src
 
@@ -1090,6 +1496,16 @@ def _scrub_misc_comments_and_gates(src: str) -> str:
         '   "YIELD", "FORCE", "RET", "DONE", "SC?", "SC<", "SC<="',
         '"WRITE-CHAR", "WRITE-STRING", "READ-CHAR", "PEEK-CHAR",\n'
         '   "RET", "DONE", "SC?", "SC<", "SC<="',
+    )
+
+    # SEXP_API → static makes the decl internal; the definition must match
+    # (Clang errors on static decl + non-static object def; MSVC is softer).
+    src = re.sub(
+        r"^(?![ \t]*static\b)([ \t]*)const char\*\*[ \t]+sexp_opcode_names[ \t]*=",
+        r"\1static const char** sexp_opcode_names =",
+        src,
+        count=1,
+        flags=re.M,
     )
 
     return src

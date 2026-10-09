@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <math.h>
 #include "puchi_test_diagnostics.h"
-#define PUCHI_IMPLEMENTATION
 #include "../puchi.h"
 
 PUCHI_DIAG_HARNESS_PEDANTIC_OFF

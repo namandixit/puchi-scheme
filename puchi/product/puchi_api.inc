@@ -51,22 +51,22 @@ static sexp puchi_load_init7_into_env(sexp ctx, sexp env) {
   return env;
 }
 
-puchi puchi_create_context(puchi_uint_t heap_size, puchi_uint_t heap_max_size, const puchi_host *host) {
+PUCHI_API puchi puchi_create_context(puchi_uint_t heap_size, puchi_uint_t heap_max_size, const puchi_host *host) {
   if (!host || !host->alloc || !host->free)
     puchi_default_fatal(NULL, PUCHI_FATAL_INTERNAL, "puchi_host alloc/free required");
   return sexp_make_eval_context_host(NULL, NULL, NULL, heap_size, heap_max_size, host);
 }
 
-puchi puchi_delete_context(puchi ctx) {
+PUCHI_API puchi puchi_delete_context(puchi ctx) {
   return sexp_destroy_context(ctx);
 }
 
-puchi puchi_load_default_libs(puchi ctx) {
+PUCHI_API puchi puchi_load_default_libs(puchi ctx) {
   if (!ctx || sexp_exceptionp(ctx)) return ctx;
   return puchi_load_init7_into_env(ctx, sexp_context_env(ctx));
 }
 
-puchi puchi_make_eval_context_host(puchi ctx, puchi stack, puchi env,
+PUCHI_API puchi puchi_make_eval_context_host(puchi ctx, puchi stack, puchi env,
                                    puchi_uint_t size, puchi_uint_t max_size,
                                    const puchi_host *host) {
   return sexp_make_eval_context_host(ctx, stack, env, size, max_size, host);

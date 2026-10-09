@@ -2,8 +2,15 @@
  * Minimal set for r7rs/syntax/division/unicode tests.
  * Numeric mode (/DPUCHI_*) must match puchi_harness.c.
  */
+/* TEST + IMPLEMENTATION + PUCHI_TEST_CLIB: sexp decls for stubs; bodies in puchi_impl.c. */
 #ifndef PUCHI_TEST
 #define PUCHI_TEST 1
+#endif
+#ifndef PUCHI_IMPLEMENTATION
+#define PUCHI_IMPLEMENTATION 1
+#endif
+#ifndef PUCHI_TEST_CLIB
+#define PUCHI_TEST_CLIB 1
 #endif
 
 #include <stdio.h>

@@ -1,0 +1,417 @@
+# puchi HOST allowlist — always-visible puchi_* / PUCHI_* surface.
+# Consumed by tools/puchi_gen_host_api.py and tools/puchi_strip_gunk.py.
+# kind name [params_or_proto...]
+#   typedef | enum | function | macro | product
+
+typedef	sexp_tag_t
+typedef	sexp_uint_t
+typedef	sexp_sint_t
+typedef	sexp_proc_num_args_t
+typedef	sexp
+typedef	sexp_proc1
+typedef	sexp_proc2
+typedef	sexp_luint_t
+typedef	sexp_lsint_t
+enum	sexp_uniform_vector_type
+enum	sexp_context_globals
+function	sexp_destroy_context	sexp sexp_destroy_context(sexp ctx);
+function	sexp_gc	sexp sexp_gc(sexp ctx, size_t *sum_freed);
+function	sexp_init	void sexp_init(void);
+function	sexp_make_child_context	sexp sexp_make_child_context(sexp context, sexp lambda);
+function	sexp_make_context	sexp sexp_make_context(sexp ctx, size_t size, size_t max_size, const puchi_host *host);
+function	sexp_make_eval_context	sexp sexp_make_eval_context(sexp context, sexp stack, sexp env, sexp_uint_t size, sexp_uint_t max_size);
+function	sexp_preserve_object	void sexp_preserve_object(sexp ctx, sexp x);
+function	sexp_release_object	void sexp_release_object(sexp ctx, sexp x);
+function	sexp_scheme_init	void sexp_scheme_init(void);
+function	sexp_apply	sexp sexp_apply(sexp context, sexp proc, sexp args);
+function	sexp_apply1	sexp sexp_apply1(sexp ctx, sexp f, sexp x);
+function	sexp_apply2	sexp sexp_apply2(sexp ctx, sexp f, sexp x, sexp y);
+function	sexp_apply3	sexp sexp_apply3(sexp ctx, sexp f, sexp x, sexp y, sexp z);
+function	sexp_eval_op	sexp sexp_eval_op(sexp context, sexp self, sexp_sint_t n, sexp obj, sexp env);
+function	sexp_eval_string	sexp sexp_eval_string(sexp context, const char *str, sexp_sint_t len, sexp env);
+function	sexp_current_environment	sexp sexp_current_environment(sexp ctx, sexp self, sexp_sint_t n);
+function	sexp_env_cell	sexp sexp_env_cell(sexp ctx, sexp env, sexp sym, int localp);
+function	sexp_env_cell_define	sexp sexp_env_cell_define(sexp ctx, sexp env, sexp name, sexp value, sexp* varenv);
+function	sexp_env_define	sexp sexp_env_define(sexp ctx, sexp env, sexp sym, sexp val);
+function	sexp_env_exports_op	sexp sexp_env_exports_op(sexp ctx, sexp self, sexp_sint_t n, sexp env);
+function	sexp_env_import_op	sexp sexp_env_import_op(sexp ctx, sexp self, sexp_sint_t n, sexp to, sexp from, sexp ls, sexp immutp);
+function	sexp_env_parent_op	sexp sexp_env_parent_op(sexp ctx, sexp self, sexp_sint_t n, sexp env);
+function	sexp_env_ref	sexp sexp_env_ref(sexp ctx, sexp env, sexp sym, sexp dflt);
+function	sexp_env_rename	sexp sexp_env_rename(sexp ctx, sexp env, sexp key, sexp value);
+function	sexp_extend_env	sexp sexp_extend_env(sexp ctx, sexp env, sexp vars, sexp value);
+function	sexp_make_env_op	sexp sexp_make_env_op(sexp context, sexp self, sexp_sint_t n);
+function	sexp_make_null_env_op	sexp sexp_make_null_env_op(sexp context, sexp self, sexp_sint_t n, sexp version);
+function	sexp_make_primitive_env_op	sexp sexp_make_primitive_env_op(sexp context, sexp self, sexp_sint_t n, sexp version);
+function	sexp_make_standard_env_op	sexp sexp_make_standard_env_op(sexp context, sexp self, sexp_sint_t n, sexp version);
+function	sexp_meta_environment	sexp sexp_meta_environment(sexp ctx, sexp self, sexp_sint_t n);
+function	sexp_parameter_ref	sexp sexp_parameter_ref(sexp ctx, sexp param);
+function	sexp_set_current_environment	sexp sexp_set_current_environment(sexp ctx, sexp self, sexp_sint_t n, sexp env);
+function	sexp_set_parameter	void sexp_set_parameter(sexp ctx, sexp env, sexp name, sexp value);
+function	sexp_define_foreign_aux	sexp sexp_define_foreign_aux(sexp ctx, sexp env, const char *name, int num_args, int flags, const char *fname, sexp_proc1 f, sexp data);
+function	sexp_define_foreign_param_aux	sexp sexp_define_foreign_param_aux(sexp ctx, sexp env, const char *name, int num_args, const char *fname, sexp_proc1 f, const char *param);
+function	sexp_define_foreign_proc_aux	sexp sexp_define_foreign_proc_aux(sexp ctx, sexp env, const char *name, int num_args, int flags, const char *fname, sexp_proc1 f, sexp data);
+function	sexp_lookup_type_op	sexp sexp_lookup_type_op(sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp id);
+function	sexp_make_constructor_op	sexp sexp_make_constructor_op(sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp type);
+function	sexp_make_cpointer	sexp sexp_make_cpointer(sexp ctx, sexp_uint_t type_id, void* value, sexp parent, int freep);
+function	sexp_make_foreign	sexp sexp_make_foreign(sexp ctx, const char *name, int num_args, int flags, const char *fname, sexp_proc1 f, sexp data);
+function	sexp_make_getter_op	sexp sexp_make_getter_op(sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp type, sexp index);
+function	sexp_make_setter_op	sexp sexp_make_setter_op(sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp type, sexp index);
+function	sexp_make_type_predicate_op	sexp sexp_make_type_predicate_op(sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp type);
+function	sexp_register_simple_type_op	sexp sexp_register_simple_type_op(sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp parent, sexp slots);
+function	sexp_register_type_op	sexp sexp_register_type_op(sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp parent, sexp slots, sexp fb, sexp felb, sexp flb, sexp flo, sexp fls, sexp sb, sexp so, sexp sc, sexp w, sexp wb, sexp wo, sexp ws, sexp we, sexp p, const char *fname, sexp_proc2 f);
+function	sexp_type_slot_offset_op	sexp sexp_type_slot_offset_op(sexp ctx, sexp self, sexp_sint_t n, sexp type, sexp index);
+function	sexp_file_exception	sexp sexp_file_exception(sexp ctx, sexp self, const char *msg, sexp x);
+function	sexp_get_stack_trace	sexp sexp_get_stack_trace(sexp ctx);
+function	sexp_make_exception	sexp sexp_make_exception(sexp ctx, sexp kind, sexp message, sexp irritants, sexp procedure, sexp source);
+function	sexp_maybe_wrap_error	sexp sexp_maybe_wrap_error(sexp ctx, sexp obj);
+function	sexp_print_exception_op	sexp sexp_print_exception_op(sexp ctx, sexp self, sexp_sint_t n, sexp exn, sexp out);
+function	sexp_print_exception_stack_trace_op	sexp sexp_print_exception_stack_trace_op(sexp ctx, sexp self, sexp_sint_t n, sexp exn, sexp out);
+function	sexp_range_exception	sexp sexp_range_exception(sexp ctx, sexp obj, sexp start, sexp end);
+function	sexp_read_error	sexp sexp_read_error(sexp ctx, const char *msg, sexp ir, sexp port);
+function	sexp_type_exception	sexp sexp_type_exception(sexp ctx, sexp self, sexp_uint_t type_id, sexp x);
+function	sexp_user_exception	sexp sexp_user_exception(sexp ctx, sexp self, const char *msg, sexp x);
+function	sexp_user_exception_ls	sexp sexp_user_exception_ls(sexp ctx, sexp self, const char *msg, int n, ...);
+function	sexp_xtype_exception	sexp sexp_xtype_exception(sexp ctx, sexp self, const char *msg, sexp x);
+function	sexp_close_port_op	sexp sexp_close_port_op(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+function	sexp_flush_output_op	sexp sexp_flush_output_op(sexp ctx, sexp self, sexp_sint_t n, sexp out);
+function	sexp_get_output_string_op	sexp sexp_get_output_string_op(sexp ctx, sexp self, sexp_sint_t n, sexp port);
+function	sexp_make_input_port	sexp sexp_make_input_port(sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name);
+function	sexp_make_output_port	sexp sexp_make_output_port(sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name);
+function	sexp_open_input_string_op	sexp sexp_open_input_string_op(sexp ctx, sexp self, sexp_sint_t n, sexp str);
+function	sexp_open_output_string_op	sexp sexp_open_output_string_op(sexp ctx, sexp self, sexp_sint_t n);
+function	sexp_read_from_string	sexp sexp_read_from_string(sexp ctx, const char *str, sexp_sint_t len);
+function	sexp_read_op	sexp sexp_read_op(sexp ctx, sexp self, sexp_sint_t n, sexp in);
+function	sexp_write_op	sexp sexp_write_op(sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp out);
+function	sexp_write_to_string	sexp sexp_write_to_string(sexp ctx, sexp obj);
+function	sexp_append2_op	sexp sexp_append2_op(sexp ctx, sexp self, sexp_sint_t n, sexp a, sexp b);
+function	sexp_assq_op	sexp sexp_assq_op(sexp ctx, sexp self, sexp_sint_t n, sexp x, sexp ls);
+function	sexp_compare	sexp sexp_compare(sexp ctx, sexp a, sexp b);
+function	sexp_cons_op	sexp sexp_cons_op(sexp ctx, sexp self, sexp_sint_t n, sexp head, sexp tail);
+function	sexp_copy_list_op	sexp sexp_copy_list_op(sexp ctx, sexp self, sexp_sint_t n, sexp ls);
+function	sexp_equalp_op	sexp sexp_equalp_op(sexp ctx, sexp self, sexp_sint_t n, sexp a, sexp b);
+function	sexp_length_op	sexp sexp_length_op(sexp ctx, sexp self, sexp_sint_t n, sexp ls);
+function	sexp_list2	sexp sexp_list2(sexp ctx, sexp a, sexp b);
+function	sexp_list3	sexp sexp_list3(sexp ctx, sexp a, sexp b, sexp c);
+function	sexp_listp_op	sexp sexp_listp_op(sexp ctx, sexp self, sexp_sint_t n, sexp obj);
+function	sexp_memq_op	sexp sexp_memq_op(sexp ctx, sexp self, sexp_sint_t n, sexp x, sexp ls);
+function	sexp_nreverse_op	sexp sexp_nreverse_op(sexp ctx, sexp self, sexp_sint_t n, sexp ls);
+function	sexp_reverse_op	sexp sexp_reverse_op(sexp ctx, sexp self, sexp_sint_t n, sexp ls);
+function	sexp_c_string	sexp sexp_c_string(sexp ctx, const char *str, sexp_sint_t slen);
+function	sexp_intern	sexp sexp_intern(sexp ctx, const char *str, sexp_sint_t len);
+function	sexp_list_to_uvector_op	sexp sexp_list_to_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp etype, sexp ls);
+function	sexp_list_to_vector_op	sexp sexp_list_to_vector_op(sexp ctx, sexp self, sexp_sint_t n, sexp ls);
+function	sexp_make_bytes_op	sexp sexp_make_bytes_op(sexp ctx, sexp self, sexp_sint_t n, sexp len, sexp i);
+function	sexp_make_ephemeron_op	sexp sexp_make_ephemeron_op(sexp ctx, sexp self, sexp_sint_t n, sexp key, sexp value);
+function	sexp_make_immutable_op	sexp sexp_make_immutable_op(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+function	sexp_make_string_op	sexp sexp_make_string_op(sexp ctx, sexp self, sexp_sint_t n, sexp len, sexp ch);
+function	sexp_make_uvector_op	sexp sexp_make_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp elt_type, sexp len);
+function	sexp_make_vector_op	sexp sexp_make_vector_op(sexp ctx, sexp self, sexp_sint_t n, sexp len, sexp dflt);
+function	sexp_string_cmp_op	sexp sexp_string_cmp_op(sexp ctx, sexp self, sexp_sint_t n, sexp a, sexp b, sexp ci);
+function	sexp_string_concatenate_op	sexp sexp_string_concatenate_op(sexp ctx, sexp self, sexp_sint_t n, sexp str_ls, sexp sep);
+function	sexp_string_cursor_offset	sexp sexp_string_cursor_offset(sexp ctx, sexp self, sexp_sint_t n, sexp cur);
+function	sexp_string_cursor_to_index	sexp sexp_string_cursor_to_index(sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp offset);
+function	sexp_string_index_to_cursor	sexp sexp_string_index_to_cursor(sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp index);
+function	sexp_string_to_number_op	sexp sexp_string_to_number_op(sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp b);
+function	sexp_string_to_symbol_op	sexp sexp_string_to_symbol_op(sexp ctx, sexp self, sexp_sint_t n, sexp str);
+function	sexp_string_utf8_index_ref	sexp sexp_string_utf8_index_ref(sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp i);
+function	sexp_string_utf8_index_set	sexp sexp_string_utf8_index_set(sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp i, sexp ch);
+function	sexp_string_utf8_length	sexp_uint_t sexp_string_utf8_length(unsigned char *p, long len);
+function	sexp_string_utf8_prev	char* sexp_string_utf8_prev(unsigned char *p);
+function	sexp_string_utf8_ref	sexp sexp_string_utf8_ref(sexp ctx, sexp str, sexp i);
+function	sexp_string_utf8_set	void sexp_string_utf8_set(sexp ctx, sexp str, sexp index, sexp ch);
+function	sexp_subbytes_op	sexp sexp_subbytes_op(sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp start, sexp end);
+function	sexp_substring_op	sexp sexp_substring_op(sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp start, sexp end);
+function	sexp_symbol_to_string_op	sexp sexp_symbol_to_string_op(sexp ctx, sexp self, sexp_sint_t n, sexp sym);
+function	sexp_utf8_char_byte_count	int sexp_utf8_char_byte_count(int c);
+function	sexp_utf8_encode_char	void sexp_utf8_encode_char(unsigned char* p, int len, int c);
+function	sexp_utf8_initial_byte_count	int sexp_utf8_initial_byte_count(int c);
+function	sexp_utf8_substring_op	sexp sexp_utf8_substring_op(sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp start, sexp end);
+function	sexp_acos	sexp sexp_acos(sexp ctx, sexp self, sexp_sint_t n, sexp z);
+function	sexp_add	sexp sexp_add(sexp ctx, sexp a, sexp b);
+function	sexp_asin	sexp sexp_asin(sexp ctx, sexp self, sexp_sint_t n, sexp z);
+function	sexp_atan	sexp sexp_atan(sexp ctx, sexp self, sexp_sint_t n, sexp z);
+function	sexp_bignum_to_double	double sexp_bignum_to_double(sexp a);
+function	sexp_bignum_to_sint	long long sexp_bignum_to_sint(sexp x);
+function	sexp_bignum_to_uint	unsigned long long sexp_bignum_to_uint(sexp x);
+function	sexp_ceiling	sexp sexp_ceiling(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+function	sexp_cos	sexp sexp_cos(sexp ctx, sexp self, sexp_sint_t n, sexp z);
+function	sexp_div	sexp sexp_div(sexp ctx, sexp a, sexp b);
+function	sexp_exact_sqrt	sexp sexp_exact_sqrt(sexp ctx, sexp self, sexp_sint_t n, sexp z);
+function	sexp_exact_to_inexact	sexp sexp_exact_to_inexact(sexp ctx, sexp self, sexp_sint_t n, sexp i);
+function	sexp_exp	sexp sexp_exp(sexp ctx, sexp self, sexp_sint_t n, sexp z);
+function	sexp_expt_op	sexp sexp_expt_op(sexp ctx, sexp self, sexp_sint_t n, sexp z1, sexp z2);
+function	sexp_flonum_value	float sexp_flonum_value(sexp x);
+function	sexp_floor	sexp sexp_floor(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+function	sexp_inexact_sqrt	sexp sexp_inexact_sqrt(sexp ctx, sexp self, sexp_sint_t n, sexp z);
+function	sexp_inexact_to_exact	sexp sexp_inexact_to_exact(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+function	sexp_log	sexp sexp_log(sexp ctx, sexp self, sexp_sint_t n, sexp z);
+function	sexp_make_flonum	sexp sexp_make_flonum(sexp ctx, double f);
+function	sexp_make_integer	sexp sexp_make_integer(sexp ctx, long long x);
+function	sexp_make_unsigned_integer	sexp sexp_make_unsigned_integer(sexp ctx, unsigned long long x);
+function	sexp_mul	sexp sexp_mul(sexp ctx, sexp a, sexp b);
+function	sexp_quotient	sexp sexp_quotient(sexp ctx, sexp a, sexp b);
+function	sexp_ratio_to_double	double sexp_ratio_to_double(sexp ctx, sexp rat);
+function	sexp_remainder	sexp sexp_remainder(sexp ctx, sexp a, sexp b);
+function	sexp_round	sexp sexp_round(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+function	sexp_sin	sexp sexp_sin(sexp ctx, sexp self, sexp_sint_t n, sexp z);
+function	sexp_sqrt	sexp sexp_sqrt(sexp ctx, sexp self, sexp_sint_t n, sexp z);
+function	sexp_sub	sexp sexp_sub(sexp ctx, sexp a, sexp b);
+function	sexp_tan	sexp sexp_tan(sexp ctx, sexp self, sexp_sint_t n, sexp z);
+function	sexp_to_double	double sexp_to_double(sexp ctx, sexp x);
+function	sexp_trunc	sexp sexp_trunc(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+macro	SEXP_EOF	
+macro	SEXP_FALSE	
+macro	SEXP_NULL	
+macro	SEXP_TRUE	
+macro	SEXP_VOID	
+macro	sexp_at_eofp	(p)
+macro	sexp_bignump	(x)
+macro	sexp_booleanp	(x)
+macro	sexp_bytesp	(x)
+macro	sexp_c128vectorp	(x)
+macro	sexp_c64vectorp	(x)
+macro	sexp_charp	(x)
+macro	sexp_complexp	(x)
+macro	sexp_context_errorp	(x)
+macro	sexp_context_heap	(ctx)
+macro	sexp_context_interruptp	(x)
+macro	sexp_context_last_fp	(x)
+macro	sexp_context_tailp	(x)
+macro	sexp_context_top	(x)
+macro	sexp_context_tracep	(x)
+macro	sexp_contextp	(x)
+macro	sexp_env_cell_syntactic_p	(x)
+macro	sexp_env_global_p	(x)
+macro	sexp_env_local_p	(x)
+macro	sexp_env_syntactic_p	(x)
+macro	sexp_envp	(x)
+macro	sexp_equalp	(ctx, a, b)
+macro	sexp_exact_integerp	(x)
+macro	sexp_exactp	(x)
+macro	sexp_exceptionp	(x)
+macro	sexp_f32vectorp	(x)
+macro	sexp_f64vectorp	(x)
+macro	sexp_fixnump	(x)
+macro	sexp_flonump	(x)
+macro	sexp_fp_integerp	(x)
+macro	sexp_integerp	(x)
+macro	sexp_iportp	(x)
+macro	sexp_listp	(ctx, x)
+macro	sexp_lsymbolp	(x)
+macro	sexp_not	(x)
+macro	sexp_nullp	(x)
+macro	sexp_numberp	(x)
+macro	sexp_oportp	(x)
+macro	sexp_pairp	(x)
+macro	sexp_port_bidirp	(p)
+macro	sexp_port_binaryp	(p)
+macro	sexp_port_blockedp	(p)
+macro	sexp_port_customp	(x)
+macro	sexp_port_fold_casep	(p)
+macro	sexp_port_no_closep	(p)
+macro	sexp_port_openp	(p)
+macro	sexp_port_shutdownp	(p)
+macro	sexp_port_sourcep	(p)
+macro	sexp_portp	(x)
+macro	sexp_procedure_unused_rest_p	(x)
+macro	sexp_procedure_variable_transformer_p	(x)
+macro	sexp_procedure_variadic_p	(x)
+macro	sexp_procedurep	(x)
+macro	sexp_ratiop	(x)
+macro	sexp_realp	(x)
+macro	sexp_s16vectorp	(x)
+macro	sexp_s32vectorp	(x)
+macro	sexp_s64vectorp	(x)
+macro	sexp_s8vectorp	(x)
+macro	sexp_stream_portp	(x)
+macro	sexp_string_cmp	(ctx, a, b, c)
+macro	sexp_string_cursorp	(x)
+macro	sexp_stringp	(x)
+macro	sexp_symbolp	(x)
+macro	sexp_truep	(x)
+macro	sexp_u16vectorp	(x)
+macro	sexp_u1vectorp	(x)
+macro	sexp_u32vectorp	(x)
+macro	sexp_u64vectorp	(x)
+macro	sexp_u8vectorp	(x)
+macro	sexp_uvector_freep	(x)
+macro	sexp_uvectorp	(x)
+macro	sexp_vectorp	(x)
+macro	sexp_bytes_data	(x)
+macro	sexp_bytes_length	(x)
+macro	sexp_bytes_maybe_null_data	(x)
+macro	sexp_bytes_ref	(x, i)
+macro	sexp_bytes_set	(x, i, v)
+macro	sexp_caaar	(x)
+macro	sexp_caadr	(x)
+macro	sexp_caar	(x)
+macro	sexp_cadar	(x)
+macro	sexp_cadddr	(x)
+macro	sexp_caddr	(x)
+macro	sexp_cadr	(x)
+macro	sexp_car	(x)
+macro	sexp_cdaar	(x)
+macro	sexp_cdadr	(x)
+macro	sexp_cdar	(x)
+macro	sexp_cddar	(x)
+macro	sexp_cddddr	(x)
+macro	sexp_cdddr	(x)
+macro	sexp_cddr	(x)
+macro	sexp_cdr	(x)
+macro	sexp_context_env	(x)
+macro	sexp_global	(ctx,x)
+macro	sexp_length	(ctx, x)
+macro	sexp_port_cookie	(p)
+macro	sexp_string_bytes	(x)
+macro	sexp_string_concatenate	(ctx, ls, s)
+macro	sexp_string_cursor_next	(s, i)
+macro	sexp_string_cursor_prev	(s, i)
+macro	sexp_string_cursor_ref	(ctx, s, i)
+macro	sexp_string_cursor_set	(ctx, s, i, ch)
+macro	sexp_string_cursor_to_fixnum	(n)
+macro	sexp_string_data	(x)
+macro	sexp_string_length	(s)
+macro	sexp_string_maybe_null_data	(x)
+macro	sexp_string_offset	(x)
+macro	sexp_string_ref	(ctx, s, i)
+macro	sexp_string_set	(ctx, s, i, ch)
+macro	sexp_string_size	(x)
+macro	sexp_string_to_bytes	(ctx, x)
+macro	sexp_string_to_number	(ctx, s, b)
+macro	sexp_string_to_symbol	(ctx, s)
+macro	sexp_symbol_to_string	(ctx, s)
+macro	sexp_vector_data	(x)
+macro	sexp_vector_length	(x)
+macro	sexp_vector_ref	(x,i)
+macro	sexp_vector_set	(x,i,v)
+macro	sexp_list_to_vector	(ctx, x)
+macro	sexp_make_boolean	(x)
+macro	sexp_make_bytes	(ctx, l, i)
+macro	sexp_make_character	(n)
+macro	sexp_make_constructor	(ctx, a, b)
+macro	sexp_make_env	(ctx)
+macro	sexp_make_ephemeron	(ctx, k, v)
+macro	sexp_make_fileno	(ctx, fd, no_closep)
+macro	sexp_make_fixnum	(n)
+macro	sexp_make_flonum	(ctx, x)
+macro	sexp_make_getter	(ctx, a, b, c)
+macro	sexp_make_integer	(ctx, x)
+macro	sexp_make_null_env	(ctx, v)
+macro	sexp_make_primitive_env	(ctx, v)
+macro	sexp_make_procedure	(ctx, f, n, b, v)
+macro	sexp_make_reader_label	(n)
+macro	sexp_make_setter	(ctx, a, b, c)
+macro	sexp_make_standard_env	(ctx, v)
+macro	sexp_make_string	(ctx, l, c)
+macro	sexp_make_string_cursor	(n)
+macro	sexp_make_synclo	(ctx, a, b, c)
+macro	sexp_make_type_predicate	(ctx, a, b)
+macro	sexp_make_unsigned_integer	(ctx, x)
+macro	sexp_make_uvector	(ctx, et, l)
+macro	sexp_make_vector	(ctx, a, b)
+macro	sexp_unbox_boolean	(x)
+macro	sexp_unbox_character	(n)
+macro	sexp_unbox_fixnum	(n)
+macro	sexp_unbox_fx_abs	(a)
+macro	sexp_unbox_reader_label	(n)
+macro	sexp_unbox_string_cursor	(n)
+macro	sexp_alloc	(ctx, size)
+macro	sexp_alloc_atomic	(ctx, size)
+macro	sexp_alloc_bytecode	(ctx, i)
+macro	sexp_alloc_tagged	(ctx, size, tag)
+macro	sexp_alloc_type	(ctx, type, tag)
+macro	sexp_gc	(ctx, sum)
+macro	sexp_gc_preserve	(ctx, x, y)
+macro	sexp_gc_preserve1	(ctx, x)
+macro	sexp_gc_preserve2	(ctx, x, y)
+macro	sexp_gc_preserve3	(ctx, x, y, z)
+macro	sexp_gc_preserve4	(ctx, x, y, z, w)
+macro	sexp_gc_preserve5	(ctx, x, y, z, w, v)
+macro	sexp_gc_preserve6	(ctx, x, y, z, w, v, u)
+macro	sexp_gc_preserve7	(ctx, x, y, z, w, v, u, t)
+macro	sexp_gc_preserve_name	(ctx, x, y)
+macro	sexp_gc_release	(ctx, x, y)
+macro	sexp_gc_release1	(ctx)
+macro	sexp_gc_release2	(ctx)
+macro	sexp_gc_release3	(ctx)
+macro	sexp_gc_release4	(ctx)
+macro	sexp_gc_release5	(ctx)
+macro	sexp_gc_release6	(ctx)
+macro	sexp_gc_release7	(ctx)
+macro	sexp_gc_var	(x, y)
+macro	sexp_gc_var1	(x)
+macro	sexp_gc_var2	(x, y)
+macro	sexp_gc_var3	(x, y, z)
+macro	sexp_gc_var4	(x, y, z, w)
+macro	sexp_gc_var5	(x, y, z, w, v)
+macro	sexp_gc_var6	(x, y, z, w, v, u)
+macro	sexp_gc_var7	(x, y, z, w, v, u, t)
+macro	sexp_add_module_directory	(ctx, d, a)
+macro	sexp_close_port	(ctx, x)
+macro	sexp_define_foreign	(c,e,s,n,f)
+macro	sexp_define_foreign_opt	(c,e,s,n,f,p)
+macro	sexp_define_foreign_param	(c,e,s,n,f,p)
+macro	sexp_define_foreign_proc	(c,e,s,n,f)
+macro	sexp_define_foreign_proc_rest	(c,e,s,n,f)
+macro	sexp_eval	(ctx, x, e)
+macro	sexp_identifier_eq	(ctx, a, b, c, d)
+macro	sexp_identifier_to_symbol	(ctx, x)
+macro	sexp_warn_undefs	(ctx, from, to, res)
+macro	sexp_add	(ctx, a, b)
+macro	sexp_api_params	(self, n)
+macro	sexp_api_pass	(self, n)
+macro	sexp_append2	(ctx, a, b)
+macro	sexp_assert_type	(ctx, pred, type_id, obj)
+macro	sexp_assq	(ctx, a, b)
+macro	sexp_cons	(ctx, a, b)
+macro	sexp_copy_list	(ctx, x)
+macro	sexp_current_error_port	(ctx)
+macro	sexp_current_input_port	(ctx)
+macro	sexp_current_output_port	(ctx)
+macro	sexp_debug	(ctx, msg, obj)
+macro	sexp_destroy_context	(ctx)
+macro	sexp_div	(ctx, a, b)
+macro	sexp_expt	(ctx, a, b)
+macro	sexp_flush_output	(ctx, out)
+macro	sexp_get_output_string	(ctx, out)
+macro	sexp_memq	(ctx, a, b)
+macro	sexp_mul	(ctx, a, b)
+macro	sexp_nreverse	(ctx, x)
+macro	sexp_open_input_string	(ctx, s)
+macro	sexp_open_output_string	(ctx)
+macro	sexp_print_exception	(ctx, e, out)
+macro	sexp_read	(ctx, in)
+macro	sexp_reverse	(ctx, x)
+macro	sexp_sub	(ctx, a, b)
+macro	sexp_subbytes	(ctx, a, b, c)
+macro	sexp_substring	(ctx, s, i, j)
+macro	sexp_write	(ctx, obj, out)
+
+# product-owned (always HOST)
+product	puchi_create_context
+product	puchi_delete_context
+product	puchi_load_default_libs
+product	puchi_enable_modules
+product	puchi_make_eval_context_host
+product	puchi_port_name
+product	puchi_port_set_name
+product	puchi_port_set_sourcep
+product	puchi_port_set_no_close
+product	puchi_context_parent
+product	puchi_context_set_parent
+product	puchi_context_set_tailp
+product	puchi_context_set_env
+product	puchi_set_global
+product	puchi_set_standard_ports
+product	puchi_stack_trace
+function	sexp_alloc_tagged_aux	sexp sexp_alloc_tagged_aux(sexp ctx, size_t size, sexp_uint_t tag);
+# Callees of HOST macros (ABI renames sexp_* → puchi_*; wrappers required)
+function	sexp_add_module_directory_op	sexp sexp_add_module_directory_op(sexp ctx, sexp self, sexp_sint_t n, sexp dir, sexp appendp);
+function	sexp_buffered_write_char	int sexp_buffered_write_char(sexp ctx, int c, sexp p);
+function	sexp_buffered_write_string	int sexp_buffered_write_string(sexp ctx, const char *str, sexp p);
+function	sexp_identifier_eq_op	sexp sexp_identifier_eq_op(sexp ctx, sexp self, sexp_sint_t n, sexp a, sexp b, sexp c, sexp d);
+function	sexp_make_fileno_op	sexp sexp_make_fileno_op(sexp ctx, sexp self, sexp_sint_t n, sexp fd, sexp no_closep);
+function	sexp_make_procedure_op	sexp sexp_make_procedure_op(sexp ctx, sexp self, sexp_sint_t n, sexp flags, sexp num_args, sexp bc, sexp vars);
+function	sexp_make_synclo_op	sexp sexp_make_synclo_op(sexp ctx, sexp self, sexp_sint_t n, sexp env, sexp fv, sexp expr);
+function	sexp_syntactic_closure_expr_op	sexp sexp_syntactic_closure_expr_op(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+function	sexp_warn_undefs_op	sexp sexp_warn_undefs_op(sexp ctx, sexp self, sexp_sint_t n, sexp from, sexp to, sexp res);

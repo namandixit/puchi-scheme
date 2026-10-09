@@ -164,7 +164,7 @@ static int puchi_modules_enabled_p(sexp ctx) {
   return tmp != SEXP_VOID;
 }
 
-puchi puchi_enable_modules(puchi ctx, const puchi_module_ops *ops) {
+PUCHI_API puchi puchi_enable_modules(puchi ctx, const puchi_module_ops *ops) {
   sexp env, meta, tmp, sym;
   sexp_heap h;
   sexp_gc_var3(meta_gc, tmp_gc, sym_gc);

@@ -69,7 +69,11 @@ echo === prep harness clibs overlays ^(UBSan patches; fail on upstream drift^) =
 "C:\Program Files\Git\bin\bash.exe" -lc "./puchi/tools/prep_harness_clibs.sh"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 
-echo === compile clibs surface probe ^(PUCHI_TEST, no IMPLEMENTATION^) ===
+echo === compile isolation probes ^(bare / TEST-only / clibs decls^) ===
+cl /nologo /W4 /O2 /D_CRT_SECURE_NO_WARNINGS /Fo%OUT%\host_isolation_bare.obj /c %TEST%\test_host_isolation_bare.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
+cl /nologo /W4 /O2 /D_CRT_SECURE_NO_WARNINGS /Fo%OUT%\host_isolation_test_only.obj /c %TEST%\test_host_isolation_test_only.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
 cl /nologo /W4 /O2 /D_CRT_SECURE_NO_WARNINGS /DPUCHI_ENABLE_NUMERICAL_TOWER /Fo%OUT%\clibs_surface_probe.obj /c %TEST%\test_clibs_surface_probe.c
 if %ERRORLEVEL% NEQ 0 exit /b 1
 
@@ -131,7 +135,11 @@ set HF=/I%TEST%\harness-include
 set CC=cl
 
 echo === [%TAG%][integer] C checks ===
-cl %CF% /Fo%OUT%\ /Fe:%OUT%\%TAG%_integer_smoke.exe %TEST%\puchi_integer_smoke.c
+cl %CF% /DPUCHI_INTEGER_ONLY /Fo%OUT%\%TAG%_impl_integer.obj /c %TEST%\puchi_impl.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
+cl %CF% /Fo%OUT%\%TAG%_integer_smoke.obj /c %TEST%\puchi_integer_smoke.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
+cl %CF% /Fe:%OUT%\%TAG%_integer_smoke.exe %OUT%\%TAG%_integer_smoke.obj %OUT%\%TAG%_impl_integer.obj
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_integer_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -141,7 +149,7 @@ cl %CF% %HF% /DPUCHI_INTEGER_ONLY /Fo%OUT%\%TAG%_harness_integer.obj /c %TEST%\p
 if %ERRORLEVEL% NEQ 0 exit /b 1
 cl %CF% %HF% /DPUCHI_INTEGER_ONLY /Fo%OUT%\%TAG%_harness_clibs_integer.obj /c %TEST%\puchi_harness_clibs.c
 if %ERRORLEVEL% NEQ 0 exit /b 1
-cl %CF% /Fe:%OUT%\%TAG%_harness_integer.exe %OUT%\%TAG%_harness_integer.obj %OUT%\%TAG%_harness_clibs_integer.obj
+cl %CF% /Fe:%OUT%\%TAG%_harness_integer.exe %OUT%\%TAG%_harness_integer.obj %OUT%\%TAG%_harness_clibs_integer.obj %OUT%\%TAG%_impl_integer.obj
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_harness_integer.exe" -I lib -xchibi tests\r5rs-tests.scm
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -149,9 +157,19 @@ call :run_basi "%OUT%\%TAG%_harness_integer.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 
 echo === [%TAG%][default] C checks ===
-cl %CF% /Fo%OUT%\ /Fe:%OUT%\%TAG%_slim_smoke.exe %TEST%\puchi_slim_smoke.c
+cl %CF% /Fo%OUT%\%TAG%_impl_default.obj /c %TEST%\puchi_impl.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
+cl %CF% /Fo%OUT%\%TAG%_slim_smoke.obj /c %TEST%\puchi_slim_smoke.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
+cl %CF% /Fe:%OUT%\%TAG%_slim_smoke.exe %OUT%\%TAG%_slim_smoke.obj %OUT%\%TAG%_impl_default.obj
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_slim_smoke.exe"
+if %ERRORLEVEL% NEQ 0 exit /b 1
+cl %CF% /Fo%OUT%\%TAG%_static_smoke.obj /c %TEST%\puchi_static_smoke.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
+cl %CF% /Fe:%OUT%\%TAG%_static_smoke.exe %OUT%\%TAG%_static_smoke.obj
+if %ERRORLEVEL% NEQ 0 exit /b 1
+"%OUT%\%TAG%_static_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 
 echo === [%TAG%][default] harness + r5rs + basic ===
@@ -159,7 +177,7 @@ cl %CF% %HF% /Fo%OUT%\%TAG%_harness_default.obj /c %TEST%\puchi_harness.c
 if %ERRORLEVEL% NEQ 0 exit /b 1
 cl %CF% %HF% /Fo%OUT%\%TAG%_harness_clibs_default.obj /c %TEST%\puchi_harness_clibs.c
 if %ERRORLEVEL% NEQ 0 exit /b 1
-cl %CF% /Fe:%OUT%\%TAG%_harness_default.exe %OUT%\%TAG%_harness_default.obj %OUT%\%TAG%_harness_clibs_default.obj
+cl %CF% /Fe:%OUT%\%TAG%_harness_default.exe %OUT%\%TAG%_harness_default.obj %OUT%\%TAG%_harness_clibs_default.obj %OUT%\%TAG%_impl_default.obj
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_harness_default.exe" -I lib -xchibi tests\r5rs-tests.scm
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -167,13 +185,19 @@ call :run_basi "%OUT%\%TAG%_harness_default.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 
 echo === [%TAG%][tower] C checks ===
-cl %CF% /Fo%OUT%\ /Fe:%OUT%\%TAG%_smoke.exe %TEST%\puchi_smoke.c
+cl %CF% /DPUCHI_ENABLE_NUMERICAL_TOWER /Fo%OUT%\%TAG%_impl_tower.obj /c %TEST%\puchi_impl.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
+cl %CF% /Fo%OUT%\%TAG%_smoke.obj /c %TEST%\puchi_smoke.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
+cl %CF% /Fe:%OUT%\%TAG%_smoke.exe %OUT%\%TAG%_smoke.obj %OUT%\%TAG%_impl_tower.obj
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 
 echo === [%TAG%][tower] two-host ===
-cl %CF% /Fo%OUT%\ /Fe:%OUT%\%TAG%_two_host_smoke.exe %TEST%\puchi_two_host_smoke.c
+cl %CF% /Fo%OUT%\%TAG%_two_host_smoke.obj /c %TEST%\puchi_two_host_smoke.c
+if %ERRORLEVEL% NEQ 0 exit /b 1
+cl %CF% /Fe:%OUT%\%TAG%_two_host_smoke.exe %OUT%\%TAG%_two_host_smoke.obj %OUT%\%TAG%_impl_tower.obj
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_two_host_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -183,7 +207,7 @@ cl %CF% %HF% /DPUCHI_ENABLE_NUMERICAL_TOWER /Fo%OUT%\%TAG%_harness_tower.obj /c 
 if %ERRORLEVEL% NEQ 0 exit /b 1
 cl %CF% %HF% /DPUCHI_ENABLE_NUMERICAL_TOWER /Fo%OUT%\%TAG%_harness_clibs_tower.obj /c %TEST%\puchi_harness_clibs.c
 if %ERRORLEVEL% NEQ 0 exit /b 1
-cl %CF% /Fe:%OUT%\%TAG%_harness_tower.exe %OUT%\%TAG%_harness_tower.obj %OUT%\%TAG%_harness_clibs_tower.obj
+cl %CF% /Fe:%OUT%\%TAG%_harness_tower.exe %OUT%\%TAG%_harness_tower.obj %OUT%\%TAG%_harness_clibs_tower.obj %OUT%\%TAG%_impl_tower.obj
 if %ERRORLEVEL% NEQ 0 exit /b 1
 goto do_scm
 
@@ -214,7 +238,11 @@ goto do_clb
 
 :do_clb
 echo === [%TAG%][integer] C checks ===
-clang %CF% -o "%OUT%\%TAG%_integer_smoke.exe" %TEST%\puchi_integer_smoke.c
+clang %CF% -DPUCHI_INTEGER_ONLY -c %TEST%\puchi_impl.c -o "%OUT%\%TAG%_impl_integer.o"
+if %ERRORLEVEL% NEQ 0 exit /b 1
+clang %CF% -c %TEST%\puchi_integer_smoke.c -o "%OUT%\%TAG%_integer_smoke.o"
+if %ERRORLEVEL% NEQ 0 exit /b 1
+clang %CF% -o "%OUT%\%TAG%_integer_smoke.exe" "%OUT%\%TAG%_integer_smoke.o" "%OUT%\%TAG%_impl_integer.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_integer_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -224,7 +252,7 @@ clang %CF% %HF% -DPUCHI_INTEGER_ONLY -c %TEST%\puchi_harness.c -o "%OUT%\%TAG%_h
 if %ERRORLEVEL% NEQ 0 exit /b 1
 clang %CF% %HF% -DPUCHI_INTEGER_ONLY -c %TEST%\puchi_harness_clibs.c -o "%OUT%\%TAG%_harness_clibs_integer.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
-clang %CF% -o "%OUT%\%TAG%_harness_integer.exe" "%OUT%\%TAG%_harness_integer.o" "%OUT%\%TAG%_harness_clibs_integer.o"
+clang %CF% -o "%OUT%\%TAG%_harness_integer.exe" "%OUT%\%TAG%_harness_integer.o" "%OUT%\%TAG%_harness_clibs_integer.o" "%OUT%\%TAG%_impl_integer.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_harness_integer.exe" -I lib -xchibi tests\r5rs-tests.scm
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -232,9 +260,19 @@ call :run_basi "%OUT%\%TAG%_harness_integer.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 
 echo === [%TAG%][default] C checks ===
-clang %CF% -o "%OUT%\%TAG%_slim_smoke.exe" %TEST%\puchi_slim_smoke.c
+clang %CF% -c %TEST%\puchi_impl.c -o "%OUT%\%TAG%_impl_default.o"
+if %ERRORLEVEL% NEQ 0 exit /b 1
+clang %CF% -c %TEST%\puchi_slim_smoke.c -o "%OUT%\%TAG%_slim_smoke.o"
+if %ERRORLEVEL% NEQ 0 exit /b 1
+clang %CF% -o "%OUT%\%TAG%_slim_smoke.exe" "%OUT%\%TAG%_slim_smoke.o" "%OUT%\%TAG%_impl_default.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_slim_smoke.exe"
+if %ERRORLEVEL% NEQ 0 exit /b 1
+clang %CF% -c %TEST%\puchi_static_smoke.c -o "%OUT%\%TAG%_static_smoke.o"
+if %ERRORLEVEL% NEQ 0 exit /b 1
+clang %CF% -o "%OUT%\%TAG%_static_smoke.exe" "%OUT%\%TAG%_static_smoke.o"
+if %ERRORLEVEL% NEQ 0 exit /b 1
+"%OUT%\%TAG%_static_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 
 echo === [%TAG%][default] harness + r5rs + basic ===
@@ -242,7 +280,7 @@ clang %CF% %HF% -c %TEST%\puchi_harness.c -o "%OUT%\%TAG%_harness_default.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 clang %CF% %HF% -c %TEST%\puchi_harness_clibs.c -o "%OUT%\%TAG%_harness_clibs_default.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
-clang %CF% -o "%OUT%\%TAG%_harness_default.exe" "%OUT%\%TAG%_harness_default.o" "%OUT%\%TAG%_harness_clibs_default.o"
+clang %CF% -o "%OUT%\%TAG%_harness_default.exe" "%OUT%\%TAG%_harness_default.o" "%OUT%\%TAG%_harness_clibs_default.o" "%OUT%\%TAG%_impl_default.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_harness_default.exe" -I lib -xchibi tests\r5rs-tests.scm
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -250,13 +288,19 @@ call :run_basi "%OUT%\%TAG%_harness_default.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 
 echo === [%TAG%][tower] C checks ===
-clang %CF% -o "%OUT%\%TAG%_smoke.exe" %TEST%\puchi_smoke.c
+clang %CF% -DPUCHI_ENABLE_NUMERICAL_TOWER -c %TEST%\puchi_impl.c -o "%OUT%\%TAG%_impl_tower.o"
+if %ERRORLEVEL% NEQ 0 exit /b 1
+clang %CF% -c %TEST%\puchi_smoke.c -o "%OUT%\%TAG%_smoke.o"
+if %ERRORLEVEL% NEQ 0 exit /b 1
+clang %CF% -o "%OUT%\%TAG%_smoke.exe" "%OUT%\%TAG%_smoke.o" "%OUT%\%TAG%_impl_tower.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 
 echo === [%TAG%][tower] two-host ===
-clang %CF% -o "%OUT%\%TAG%_two_host_smoke.exe" %TEST%\puchi_two_host_smoke.c
+clang %CF% -c %TEST%\puchi_two_host_smoke.c -o "%OUT%\%TAG%_two_host_smoke.o"
+if %ERRORLEVEL% NEQ 0 exit /b 1
+clang %CF% -o "%OUT%\%TAG%_two_host_smoke.exe" "%OUT%\%TAG%_two_host_smoke.o" "%OUT%\%TAG%_impl_tower.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 "%OUT%\%TAG%_two_host_smoke.exe"
 if %ERRORLEVEL% NEQ 0 exit /b 1
@@ -266,7 +310,7 @@ clang %CF% %HF% -DPUCHI_ENABLE_NUMERICAL_TOWER -c %TEST%\puchi_harness.c -o "%OU
 if %ERRORLEVEL% NEQ 0 exit /b 1
 clang %CF% %HF% -DPUCHI_ENABLE_NUMERICAL_TOWER -c %TEST%\puchi_harness_clibs.c -o "%OUT%\%TAG%_harness_clibs_tower.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
-clang %CF% -o "%OUT%\%TAG%_harness_tower.exe" "%OUT%\%TAG%_harness_tower.o" "%OUT%\%TAG%_harness_clibs_tower.o"
+clang %CF% -o "%OUT%\%TAG%_harness_tower.exe" "%OUT%\%TAG%_harness_tower.o" "%OUT%\%TAG%_harness_clibs_tower.o" "%OUT%\%TAG%_impl_tower.o"
 if %ERRORLEVEL% NEQ 0 exit /b 1
 goto do_scm
 

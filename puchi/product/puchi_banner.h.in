@@ -6,14 +6,23 @@
  * Layout (stb-style):
  *   1) Banner — docs, includes, PUCHI_* libc/libm overrides, puchi_host types
  *   2) Host API — puchi_* / PUCHI_* types, macros, function decls (always visible)
- *   3) PUCHI_TEST — puchi_TEST_* harness symbols only
- *   4) PUCHI_IMPLEMENTATION || PUCHI_TEST — sexp_* aliases + stripped Chibi decls
- *   5) PUCHI_IMPLEMENTATION — Chibi .c bodies + puchi_* wrappers
+ *   3) PUCHI_TEST — puchi_TEST_* harness symbols only (no Chibi sexp names)
+ *   4) PUCHI_IMPLEMENTATION — sexp_* aliases + stripped Chibi decls
+ *   5) PUCHI_IMPLEMENTATION && !PUCHI_TEST_CLIB — .c bodies + wrappers
  *
- * Hosts should use only puchi_* / PUCHI_* (and puchi_TEST_* under PUCHI_TEST).
- * Never define PUCHI_TEST in production embeds. Under PUCHI_TEST (without
- * PUCHI_IMPLEMENTATION), sexp_* names are available for compiling Chibi lib
- * stubs against this header (see puchi/test/harness-include/chibi/eval.h).
+ * Lexical isolation: without PUCHI_IMPLEMENTATION, this header introduces only
+ * puchi_* / PUCHI_* names (plus puchi_TEST_* when PUCHI_TEST is defined).
+ * Chibi sexp_/SEXP_ names appear only under PUCHI_IMPLEMENTATION. Harness clibs
+ * compile stubs with PUCHI_TEST + PUCHI_IMPLEMENTATION + PUCHI_TEST_CLIB
+ * (decls only; see test/harness-include/chibi/eval.h). Never define PUCHI_TEST_CLIB
+ * in production embeds. The impl TU defines IMPLEMENTATION and may also define
+ * PUCHI_TEST so STATIC_LIBS paths compile.
+ *
+ * Hosts should use only documented puchi_* / PUCHI_* entrypoints and HOST-rated
+ * macros (see product/puchi_host_symbols.txt). Do not depend on VM opcode enums,
+ * core-form codes, heap/freelist layout details, or unmarked field accessors —
+ * some INTERNAL helpers remain as ABI glue for HOST macros. Never define
+ * PUCHI_TEST in production embeds.
  *
  * Chibi STATIC_LIBS is folded to defined(PUCHI_TEST), so some #if PUCHI_TEST
  * branches remain interleaved inside .c (include-shared).
@@ -41,6 +50,9 @@
  * In exactly one .c file:
  *
  *   #include <stdio.h>   // before puchi.h if using default PUCHI_SNPRINTF/...
+ *   // Optional (stb §4): file-private API — single translation unit only.
+ *   // Do NOT set PUCHI_STATIC in the multi-TU PUCHI_TEST harness / clibs.
+ *   // #define PUCHI_STATIC
  *   #define PUCHI_IMPLEMENTATION
  *   #include "puchi.h"
  *
@@ -218,7 +230,11 @@ extern "C" {
 #endif /* !PUCHI_INTEGER_ONLY */
 
 #ifndef PUCHI_NORETURN
+#if defined(_MSC_VER)
+#define PUCHI_NORETURN __declspec(noreturn)
+#else
 #define PUCHI_NORETURN _Noreturn
+#endif
 #endif
 
 /* ---- host callbacks (context create) ---- */
@@ -259,9 +275,9 @@ typedef struct puchi_module_ops {
   void (*free_buf)(void *userdata, char *buf);
 } puchi_module_ops;
 
-/* ---- install.h identity (amalgamate inlines these) ---- */
-#define sexp_default_module_path ""
-#define sexp_platform "puchi"
-#define sexp_architecture "portable"
-#define sexp_version "0.12.0"
-#define sexp_release_name "puchi"
+/* ---- install.h identity (puchi_* always visible; sexp_* aliases under IMPL) ---- */
+#define puchi_default_module_path ""
+#define puchi_platform "puchi"
+#define puchi_architecture "portable"
+#define puchi_version "0.12.0"
+#define puchi_release_name "puchi"

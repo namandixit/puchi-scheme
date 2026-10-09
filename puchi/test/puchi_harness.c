@@ -29,7 +29,6 @@
 #include "puchi_test_diagnostics.h"
 
 #define PUCHI_TEST 1
-#define PUCHI_IMPLEMENTATION
 #include "../puchi.h"
 
 /* puchi.h API + idiomatic C paths under -Weverything (see header). */
@@ -167,7 +166,7 @@ static const puchi_stream_ops puchi_mem_ops = {
 static puchi puchi_make_mem_port(puchi ctx, puchi_membuf *buf, int input) {
   puchi p = input ? puchi_make_input_port(ctx, &puchi_mem_ops, buf, PUCHI_FALSE)
                  : puchi_make_output_port(ctx, &puchi_mem_ops, buf, PUCHI_FALSE);
-  if (puchi_portp(p)) puchi_port_no_closep(p) = 1;
+  if (puchi_portp(p)) puchi_port_set_no_close(p, 1);
   return p;
 }
 
@@ -175,8 +174,7 @@ static void puchi_install_capture_ports(puchi ctx, puchi env, puchi_membuf *buf)
   puchi in = puchi_make_mem_port(ctx, buf, 1);
   puchi out = puchi_make_mem_port(ctx, buf, 0);
   puchi err = puchi_make_mem_port(ctx, buf, 0);
-  /* Non-HOST Chibi API: available under PUCHI_IMPLEMENTATION as sexp_*. */
-  sexp_set_standard_ports(ctx, env, in, out, err);
+  puchi_set_standard_ports(ctx, env, in, out, err);
 }
 
 #ifdef _WIN32
@@ -282,9 +280,8 @@ static puchi puchi_open_input_file_f(puchi ctx, puchi self, puchi_sint_t n, puch
     puchi_gc_release1(ctx);
   }
   if (puchi_portp(res)) {
-    /* Non-HOST field accessors: sexp_* under PUCHI_IMPLEMENTATION. */
-    sexp_port_name(res) = path;
-    puchi_port_sourcep(res) = 1;
+    puchi_port_set_name(res, path);
+    puchi_port_set_sourcep(res, 1);
   }
   return res;
 }
@@ -299,7 +296,7 @@ static puchi puchi_open_output_file_f(puchi ctx, puchi self, puchi_sint_t n, puc
    * cases; we store the path in the port name and register a closer below. */
   res = puchi_open_output_string(ctx);
   if (puchi_portp(res))
-    sexp_port_name(res) = path;
+    puchi_port_set_name(res, path);
   return res;
 }
 
@@ -309,7 +306,7 @@ static puchi puchi_close_output_file_flush(puchi ctx, puchi port) {
   const char *data;
   size_t len;
   if (!puchi_oportp(port)) return PUCHI_VOID;
-  name = sexp_port_name(port);
+  name = puchi_port_name(port);
   if (!puchi_stringp(name)) return PUCHI_VOID;
   str = puchi_get_output_string(ctx, port);
   if (!puchi_stringp(str)) return PUCHI_VOID;
@@ -323,7 +320,7 @@ static puchi puchi_close_output_file_flush(puchi ctx, puchi port) {
 }
 
 static puchi puchi_close_port_f(puchi ctx, puchi self, puchi_sint_t n, puchi port) {
-  if (puchi_oportp(port) && puchi_stringp(sexp_port_name(port))
+  if (puchi_oportp(port) && puchi_stringp(puchi_port_name(port))
       && !puchi_port_stream_ops(port)) {
     puchi r = puchi_close_output_file_flush(ctx, port);
     if (puchi_exceptionp(r)) return r;
@@ -401,10 +398,10 @@ static puchi puchi_load_source_string(puchi ctx, const char *text, size_t len, p
   if (puchi_exceptionp(in)) {
     res = in;
   } else {
-    puchi_port_sourcep(in) = 1;
+    puchi_port_set_sourcep(in, 1);
     ctx2 = puchi_make_eval_context(ctx, NULL, env, 0, 0);
-    sexp_context_parent(ctx2) = ctx;
-    puchi_context_tailp(ctx2) = 0;
+    puchi_context_set_parent(ctx2, ctx);
+    puchi_context_set_tailp(ctx2, 0);
     while ((x = puchi_read(ctx2, in)) != (puchi)PUCHI_EOF) {
       res = puchi_exceptionp(x) ? x : puchi_eval(ctx2, x, env);
       if (puchi_exceptionp(res)) break;
@@ -423,10 +420,10 @@ static puchi puchi_load_f(puchi ctx, puchi self, puchi_sint_t n, puchi source, p
   if (!env) env = puchi_context_env(ctx);
   puchi_assert_type(ctx, puchi_envp, PUCHI_ENV, env);
   if (puchi_iportp(source))
-    return sexp_load_op(ctx, self, n, source, env);
+    return puchi_TEST_load_op(ctx, self, n, source, env);
   puchi_assert_type(ctx, puchi_stringp, PUCHI_STRING, source);
   if (puchi_ends_with(puchi_string_data(source), puchi_TEST_so_extension))
-    return sexp_load_op(ctx, self, n, source, env);
+    return puchi_TEST_load_op(ctx, self, n, source, env);
   buf = puchi_read_file(puchi_string_data(source), &len);
   if (!buf)
     return puchi_file_exception(ctx, self, "couldn't open input file", source);
@@ -515,9 +512,9 @@ static void puchi_install_chibi_surface(puchi ctx, puchi env, int file_ops) {
     puchi_define_foreign(ctx, env, "delete-file", 1, puchi_delete_file_f);
   }
   puchi_define_foreign(ctx, env, "find-module-file", 1, puchi_find_module_file_f);
-  puchi_define_foreign_opt(ctx, env, "current-module-path", 1, sexp_current_module_path_op, PUCHI_FALSE);
-  puchi_define_foreign(ctx, env, "load-module-file", 2, sexp_load_module_file_op);
-  puchi_define_foreign(ctx, env, "add-module-directory", 2, sexp_add_module_directory_op);
+  puchi_define_foreign_opt(ctx, env, "current-module-path", 1, puchi_TEST_current_module_path_op, PUCHI_FALSE);
+  puchi_define_foreign(ctx, env, "load-module-file", 2, puchi_TEST_load_module_file_op);
+  puchi_define_foreign(ctx, env, "add-module-directory", 2, puchi_TEST_add_module_directory_op);
   puchi_define_foreign_opt(ctx, env, "load", 2, puchi_load_f, PUCHI_FALSE);
   puchi_define_foreign_opt(ctx, env, "%load", 2, puchi_load_f, PUCHI_FALSE);
 
@@ -552,7 +549,7 @@ static void puchi_install_harness_surface(puchi ctx) {
 static int puchi_check(puchi ctx, puchi x) {
   if (puchi_exceptionp(x)) {
     puchi_print_exception(ctx, x, puchi_current_error_port(ctx));
-    sexp_stack_trace(ctx, puchi_current_error_port(ctx));
+    puchi_stack_trace(ctx, puchi_current_error_port(ctx));
     return 70;
   }
   return 0;
@@ -684,8 +681,8 @@ static int puchi_harness_run(puchi_worker *w) {
 #if defined(_WIN32)
   {
     puchi win = puchi_intern(ctx, "windows", -1);
-    puchi_global(ctx, PUCHI_G_FEATURES) =
-      puchi_cons(ctx, win, puchi_global(ctx, PUCHI_G_FEATURES));
+    puchi_set_global(ctx, PUCHI_G_FEATURES,
+                     puchi_cons(ctx, win, puchi_global(ctx, PUCHI_G_FEATURES)));
   }
 #endif
 
@@ -724,14 +721,14 @@ static int puchi_harness_run(puchi_worker *w) {
     env = tmp;
     puchi_set_parameter(ctx, puchi_global(ctx, PUCHI_G_META_ENV),
                        puchi_global(ctx, PUCHI_G_INTERACTION_ENV_SYMBOL), env);
-    puchi_context_env(ctx) = env;
+    puchi_context_set_env(ctx, env);
     sym = puchi_intern(ctx, "repl-import", -1);
     tmp = puchi_env_ref(ctx, puchi_global(ctx, PUCHI_G_META_ENV), sym, PUCHI_VOID);
     sym = puchi_intern(ctx, "import", -1);
     if (puchi_check(ctx, puchi_env_define(ctx, env, sym, tmp))) { status = 70; goto done; }
     {
       puchi outp = puchi_env_ref(ctx, env, puchi_global(ctx, PUCHI_G_CUR_OUT_SYMBOL), PUCHI_FALSE);
-      if (sexp_opcodep(outp)) outp = puchi_parameter_ref(ctx, outp);
+      if (puchi_opcodep(outp)) outp = puchi_parameter_ref(ctx, outp);
       if (!puchi_oportp(outp))
         puchi_install_capture_ports(ctx, env, &w->capture);
     }
@@ -740,7 +737,7 @@ static int puchi_harness_run(puchi_worker *w) {
     if (puchi_check(ctx, env)) { status = 70; goto done; }
     puchi_set_parameter(ctx, puchi_global(ctx, PUCHI_G_META_ENV),
                        puchi_global(ctx, PUCHI_G_INTERACTION_ENV_SYMBOL), env);
-    puchi_context_env(ctx) = env;
+    puchi_context_set_env(ctx, env);
     sym = puchi_intern(ctx, "repl-import", -1);
     tmp = puchi_env_ref(ctx, puchi_global(ctx, PUCHI_G_META_ENV), sym, PUCHI_VOID);
     sym = puchi_intern(ctx, "import", -1);
@@ -765,7 +762,7 @@ static int puchi_harness_run(puchi_worker *w) {
 
   sym = puchi_intern(ctx, "load", -1);
   tmp = puchi_env_ref(ctx, puchi_global(ctx, PUCHI_G_META_ENV), sym, PUCHI_FALSE);
-  if (puchi_procedurep(tmp) || sexp_opcodep(tmp)) {
+  if (puchi_procedurep(tmp) || puchi_opcodep(tmp)) {
     sym = puchi_list2(ctx, puchi_c_string(ctx, a->script, -1), env);
     if (puchi_check(ctx, puchi_apply(ctx, tmp, sym))) { status = 70; goto done; }
   } else {

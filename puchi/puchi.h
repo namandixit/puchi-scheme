@@ -6,14 +6,23 @@
  * Layout (stb-style):
  *   1) Banner — docs, includes, PUCHI_* libc/libm overrides, puchi_host types
  *   2) Host API — puchi_* / PUCHI_* types, macros, function decls (always visible)
- *   3) PUCHI_TEST — puchi_TEST_* harness symbols only
- *   4) PUCHI_IMPLEMENTATION || PUCHI_TEST — sexp_* aliases + stripped Chibi decls
- *   5) PUCHI_IMPLEMENTATION — Chibi .c bodies + puchi_* wrappers
+ *   3) PUCHI_TEST — puchi_TEST_* harness symbols only (no Chibi sexp names)
+ *   4) PUCHI_IMPLEMENTATION — sexp_* aliases + stripped Chibi decls
+ *   5) PUCHI_IMPLEMENTATION && !PUCHI_TEST_CLIB — .c bodies + wrappers
  *
- * Hosts should use only puchi_* / PUCHI_* (and puchi_TEST_* under PUCHI_TEST).
- * Never define PUCHI_TEST in production embeds. Under PUCHI_TEST (without
- * PUCHI_IMPLEMENTATION), sexp_* names are available for compiling Chibi lib
- * stubs against this header (see puchi/test/harness-include/chibi/eval.h).
+ * Lexical isolation: without PUCHI_IMPLEMENTATION, this header introduces only
+ * puchi_* / PUCHI_* names (plus puchi_TEST_* when PUCHI_TEST is defined).
+ * Chibi sexp_/SEXP_ names appear only under PUCHI_IMPLEMENTATION. Harness clibs
+ * compile stubs with PUCHI_TEST + PUCHI_IMPLEMENTATION + PUCHI_TEST_CLIB
+ * (decls only; see test/harness-include/chibi/eval.h). Never define PUCHI_TEST_CLIB
+ * in production embeds. The impl TU defines IMPLEMENTATION and may also define
+ * PUCHI_TEST so STATIC_LIBS paths compile.
+ *
+ * Hosts should use only documented puchi_* / PUCHI_* entrypoints and HOST-rated
+ * macros (see product/puchi_host_symbols.txt). Do not depend on VM opcode enums,
+ * core-form codes, heap/freelist layout details, or unmarked field accessors —
+ * some INTERNAL helpers remain as ABI glue for HOST macros. Never define
+ * PUCHI_TEST in production embeds.
  *
  * Chibi STATIC_LIBS is folded to defined(PUCHI_TEST), so some #if PUCHI_TEST
  * branches remain interleaved inside .c (include-shared).
@@ -41,6 +50,9 @@
  * In exactly one .c file:
  *
  *   #include <stdio.h>   // before puchi.h if using default PUCHI_SNPRINTF/...
+ *   // Optional (stb §4): file-private API — single translation unit only.
+ *   // Do NOT set PUCHI_STATIC in the multi-TU PUCHI_TEST harness / clibs.
+ *   // #define PUCHI_STATIC
  *   #define PUCHI_IMPLEMENTATION
  *   #include "puchi.h"
  *
@@ -218,7 +230,11 @@ extern "C" {
 #endif
 
 #if !defined(PUCHI_NORETURN)
+#if defined(_MSC_VER)
+#define PUCHI_NORETURN __declspec(noreturn)
+#else
 #define PUCHI_NORETURN _Noreturn
+#endif
 #endif
 
 /* ---- host callbacks (context create) ---- */
@@ -259,12 +275,12 @@ typedef struct puchi_module_ops {
   void (*free_buf)(void *userdata, char *buf);
 } puchi_module_ops;
 
-/* ---- install.h identity (amalgamate inlines these) ---- */
-#define sexp_default_module_path ""
-#define sexp_platform "puchi"
-#define sexp_architecture "portable"
-#define sexp_version "0.12.0"
-#define sexp_release_name "puchi"
+/* ---- install.h identity (puchi_* always visible; sexp_* aliases under IMPL) ---- */
+#define puchi_default_module_path ""
+#define puchi_platform "puchi"
+#define puchi_architecture "portable"
+#define puchi_version "0.12.0"
+#define puchi_release_name "puchi"
 /* ==== puchi feature forces ==== */
 /* Forced by amalgamate.sh. Set PUCHI_* macros before including puchi.h.
  *
@@ -310,7 +326,7 @@ typedef struct puchi_module_ops {
 #define PUCHI_FLEXIBLE_ARRAY_SIZE 0
 #endif
 #if !defined(PUCHI_MAXIMUM_TYPES)
-#define PUCHI_MAXIMUM_TYPES ((sexp_tag_t)-1)
+#define PUCHI_MAXIMUM_TYPES ((puchi_tag_t)-1)
 #endif
 #if !defined(PUCHI_MARK_STACK_COUNT)
 #define PUCHI_MARK_STACK_COUNT 1024
@@ -320,30 +336,28 @@ typedef struct puchi_module_ops {
 #if defined(PUCHI_TEST)
 /* ==== puchi_TEST_* harness API ==== */
 /* Product-owned PUCHI_TEST API (harness STATIC_LIBS / include-shared).
- * Always-visible under #if PUCHI_TEST. Prefix: puchi_TEST_*. */
+ * Visible under #if PUCHI_TEST only. Prefix: puchi_TEST_*.
+ * No Chibi sexp names here — those aliases live under PUCHI_IMPLEMENTATION.
+ * Function decls are in puchi_test_api_decls.inc (after host ABI types). */
 #if !defined(puchi_TEST_so_extension)
 #define puchi_TEST_so_extension ".so"
 #endif
-/* Chibi sources still use sexp_so_extension under PUCHI_TEST */
-#define sexp_so_extension puchi_TEST_so_extension
 typedef char puchi_TEST_abi_identifier_t[8];
 typedef puchi_TEST_abi_identifier_t puchi_abi_identifier_t;
-typedef puchi_abi_identifier_t sexp_abi_identifier_t;
 #define PUCHI_TEST_ABI_IDENTIFIER "--------"
-#define SEXP_ABI_IDENTIFIER PUCHI_TEST_ABI_IDENTIFIER
 #define puchi_TEST_version_compatible(ctx, subver, genver) 1
 #define puchi_TEST_abi_compatible(ctx, subabi, genabi) 1
-#define sexp_version_compatible puchi_TEST_version_compatible
-#define sexp_abi_compatible puchi_TEST_abi_compatible
-/* STATIC_LIBS table install (Chibi sexp_add_static_libraries) */
-#define puchi_TEST_add_static_libraries sexp_add_static_libraries
 typedef struct puchi_library_entry_t puchi_TEST_library_entry_t;
 #endif
 
 /* ==== puchi host ABI (types/macros) ==== */
 /* ==== puchi host ABI (types / macros / constants; generated) ==== */
+#if defined(PUCHI_STATIC)
+#define PUCHI_API static
+#else
 #if !defined(PUCHI_API)
 #define PUCHI_API extern
+#endif
 #endif
 
 
@@ -351,6 +365,9 @@ typedef struct puchi_library_entry_t puchi_TEST_library_entry_t;
 #if defined(__cplusplus)
 #else
 #endif
+/* ABI glue: INTERNAL helpers required by HOST macros.
+ * Not a host calling convention — prefer documented
+ * puchi_* / PUCHI_* entrypoints and HOST-rated macros. */
 #define PUCHI_FIXNUM_BITS 1
 #define PUCHI_POINTER_BITS 2
 #define PUCHI_STRING_CURSOR_BITS 3
@@ -437,11 +454,6 @@ typedef struct puchi_struct *puchi;
 #define puchi_api_pass(self, n) , self, n
 typedef puchi (*puchi_proc1) (puchi, puchi, puchi_sint_t);
 typedef puchi (*puchi_proc2) (puchi, puchi, puchi_sint_t, puchi);
-typedef puchi (*puchi_proc3) (puchi, puchi, puchi_sint_t, puchi, puchi);
-typedef puchi (*puchi_proc4) (puchi, puchi, puchi_sint_t, puchi, puchi, puchi);
-typedef puchi (*puchi_proc5) (puchi, puchi, puchi_sint_t, puchi, puchi, puchi, puchi);
-typedef puchi (*puchi_proc6) (puchi, puchi, puchi_sint_t, puchi, puchi, puchi, puchi, puchi);
-typedef puchi (*puchi_proc7) (puchi, puchi, puchi_sint_t, puchi, puchi, puchi, puchi, puchi, puchi);
 #if defined(PUCHI_TEST)
 typedef puchi (*puchi_init_proc)(puchi, puchi, puchi_sint_t, puchi, const char*, const puchi_abi_identifier_t);
 #endif
@@ -702,7 +714,7 @@ struct puchi_struct {
 #define puchi_sizeof(x) (offsetof(struct puchi_struct, value) \
                          + sizeof(((puchi)0)->value.x))
 #define puchi_with_current_source(file, line)
-#define puchi_alloc_tagged(ctx, size, tag) sexp_alloc_tagged_aux(ctx, size, tag puchi_with_current_source(__FILE__, __LINE__))
+#define puchi_alloc_tagged(ctx, size, tag) puchi_alloc_tagged_aux(ctx, size, tag puchi_with_current_source(__FILE__, __LINE__))
 #define puchi_alloc_type(ctx, type, tag) puchi_alloc_tagged(ctx, puchi_sizeof(type), tag)
 #define puchi_alloc_bytecode(ctx, i) puchi_alloc_tagged(ctx, puchi_sizeof(bytecode) + i, PUCHI_BYTECODE)
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
@@ -987,8 +999,8 @@ enum puchi_context_globals {
 #define puchi_cdddr(x)     (puchi_cdr(puchi_cddr(x)))
 #define puchi_cadddr(x)    (puchi_cadr(puchi_cddr(x))) /* just these two */
 #define puchi_cddddr(x)    (puchi_cddr(puchi_cddr(x)))
-#define puchi_write_char(x, c, p) (puchi_port_buf(p) ? ((puchi_port_offset(p) < puchi_port_size(p)) ? ((((puchi_port_buf(p))[puchi_port_offset(p)++]) = (char)(c)), 0) : sexp_buffered_write_char(x, c, p)) : (puchi_port_stream_ops(p) && puchi_port_stream_ops(p)->write_char ? puchi_port_stream_ops(p)->write_char(puchi_port_stream_udata(p), c) : -1))
-#define puchi_write_string(x, s, p) (puchi_port_buf(p) ? sexp_buffered_write_string(x, s, p) : (puchi_port_stream_ops(p) && puchi_port_stream_ops(p)->write ? (int)puchi_port_stream_ops(p)->write(puchi_port_stream_udata(p), (const void*)(s), PUCHI_STRLEN(s)) : -1))
+#define puchi_write_char(x, c, p) (puchi_port_buf(p) ? ((puchi_port_offset(p) < puchi_port_size(p)) ? ((((puchi_port_buf(p))[puchi_port_offset(p)++]) = (char)(c)), 0) : puchi_buffered_write_char(x, c, p)) : (puchi_port_stream_ops(p) && puchi_port_stream_ops(p)->write_char ? puchi_port_stream_ops(p)->write_char(puchi_port_stream_udata(p), c) : -1))
+#define puchi_write_string(x, s, p) (puchi_port_buf(p) ? puchi_buffered_write_string(x, s, p) : (puchi_port_stream_ops(p) && puchi_port_stream_ops(p)->write ? (int)puchi_port_stream_ops(p)->write(puchi_port_stream_udata(p), (const void*)(s), PUCHI_STRLEN(s)) : -1))
 #define puchi_at_eofp(p)      (puchi_port_stream_ops(p) && puchi_port_stream_ops(p)->eof_p ? puchi_port_stream_ops(p)->eof_p(puchi_port_stream_udata(p)) : 0)
 #if defined(PUCHI_TEST)
 #else
@@ -999,15 +1011,15 @@ enum puchi_context_globals {
 #if defined(PUCHI_TEST)
 #else
 #endif
-#define puchi_string_ref(ctx, s, i)    (sexp_string_utf8_index_ref(ctx, NULL, 2, s, i))
+#define puchi_string_ref(ctx, s, i)    (puchi_string_utf8_index_ref(ctx, NULL, 2, s, i))
 #define puchi_string_set(ctx, s, i, ch) (puchi_string_utf8_index_set(ctx, NULL, 3, s, i, ch))
-#define puchi_string_cursor_ref(ctx, s, i)    (sexp_string_utf8_ref(ctx, s, i))
+#define puchi_string_cursor_ref(ctx, s, i)    (puchi_string_utf8_ref(ctx, s, i))
 #define puchi_string_cursor_set(ctx, s, i, ch)    (puchi_string_utf8_set(ctx, s, i, ch))
-#define puchi_string_cursor_next(s, i) puchi_make_string_cursor(puchi_unbox_string_cursor(i) + sexp_utf8_initial_byte_count(((unsigned char*)puchi_string_data(s))[puchi_unbox_string_cursor(i)]))
-#define puchi_string_cursor_prev(s, i) puchi_make_string_cursor(sexp_string_utf8_prev((unsigned char*)puchi_string_data(s)+puchi_unbox_string_cursor(i)) - puchi_string_data(s))
-#define puchi_string_length(s) sexp_string_utf8_length((unsigned char*)puchi_string_data(s), puchi_string_size(s))
-#define puchi_substring(ctx, s, i, j) sexp_utf8_substring_op(ctx, NULL, 3, s, i, j)
-#define puchi_assert_type(ctx, pred, type_id, obj) if (! pred(obj)) return sexp_type_exception(ctx, self, type_id, obj)
+#define puchi_string_cursor_next(s, i) puchi_make_string_cursor(puchi_unbox_string_cursor(i) + puchi_utf8_initial_byte_count(((unsigned char*)puchi_string_data(s))[puchi_unbox_string_cursor(i)]))
+#define puchi_string_cursor_prev(s, i) puchi_make_string_cursor(puchi_string_utf8_prev((unsigned char*)puchi_string_data(s)+puchi_unbox_string_cursor(i)) - puchi_string_data(s))
+#define puchi_string_length(s) puchi_string_utf8_length((unsigned char*)puchi_string_data(s), puchi_string_size(s))
+#define puchi_substring(ctx, s, i, j) puchi_utf8_substring_op(ctx, NULL, 3, s, i, j)
+#define puchi_assert_type(ctx, pred, type_id, obj) if (! pred(obj)) return puchi_type_exception(ctx, self, type_id, obj)
 #if PUCHI_DEBUG_GC > 1
 #else
 #endif
@@ -1015,175 +1027,62 @@ enum puchi_context_globals {
 #define puchi_current_output_port(ctx) puchi_parameter_ref(ctx, puchi_env_ref(ctx, puchi_context_env(ctx), puchi_global(ctx,PUCHI_G_CUR_OUT_SYMBOL), PUCHI_FALSE))
 #define puchi_current_error_port(ctx) puchi_parameter_ref(ctx, puchi_env_ref(ctx, puchi_context_env(ctx), puchi_global(ctx,PUCHI_G_CUR_ERR_SYMBOL), PUCHI_FALSE))
 #define puchi_debug(ctx, msg, obj) (puchi_portp(puchi_current_error_port(ctx)) ? (puchi_write_string(ctx, msg, puchi_current_error_port(ctx)), puchi_write(ctx, obj, puchi_current_error_port(ctx)), puchi_write_char(ctx, '\n', puchi_current_error_port(ctx))) : 0)
-#define puchi_read(ctx, in) sexp_read_op(ctx, NULL, 1, in)
-#define puchi_write(ctx, obj, out) sexp_write_op(ctx, NULL, 2, obj, out)
-#define puchi_print_exception(ctx, e, out) sexp_print_exception_op(ctx, NULL, 2, e, out)
-#define puchi_flush_output(ctx, out) sexp_flush_output_op(ctx, NULL, 1, out)
-#define puchi_equalp(ctx, a, b) sexp_equalp_op(ctx, NULL, 2, a, b)
-#define puchi_listp(ctx, x) sexp_listp_op(ctx, NULL, 1, x)
-#define puchi_length(ctx, x) sexp_length_op(ctx, NULL, 1, x)
-#define puchi_reverse(ctx, x) sexp_reverse_op(ctx, NULL, 1, x)
-#define puchi_nreverse(ctx, x) sexp_nreverse_op(ctx, NULL, 1, x)
-#define puchi_copy_list(ctx, x) sexp_copy_list_op(ctx, NULL, 1, x)
-#define puchi_cons(ctx, a, b) sexp_cons_op(ctx, NULL, 2, a, b)
-#define puchi_append2(ctx, a, b) sexp_append2_op(ctx, NULL, 2, a, b)
-#define puchi_make_vector(ctx, a, b) sexp_make_vector_op(ctx, NULL, 2, a, b)
-#define puchi_list_to_vector(ctx, x) sexp_list_to_vector_op(ctx, NULL, 1, x)
-#define puchi_string_to_symbol(ctx, s) sexp_string_to_symbol_op(ctx, NULL, 1, s)
-#define puchi_string_to_number(ctx, s, b) sexp_string_to_number_op(ctx, NULL, 2, s, b)
-#define puchi_symbol_to_string(ctx, s) sexp_symbol_to_string_op(ctx, NULL, 1, s)
-#define puchi_make_ephemeron(ctx, k, v) sexp_make_ephemeron_op(ctx, NULL, 2, k, v)
-#define puchi_make_bytes(ctx, l, i) sexp_make_bytes_op(ctx, NULL, 2, l, i)
-#define puchi_make_uvector(ctx, et, l) sexp_make_uvector_op(ctx, NULL, 2, et, l)
-#define puchi_make_string(ctx, l, c) sexp_make_string_op(ctx, NULL, 2, l, c)
-#define puchi_subbytes(ctx, a, b, c) sexp_subbytes_op(ctx, NULL, 3, a, b, c)
-#define puchi_string_concatenate(ctx, ls, s) sexp_string_concatenate_op(ctx, NULL, 2, ls, s)
-#define puchi_memq(ctx, a, b) sexp_memq_op(ctx, NULL, 2, a, b)
-#define puchi_assq(ctx, a, b) sexp_assq_op(ctx, NULL, 2, a, b)
-#define puchi_open_output_string(ctx) sexp_open_output_string_op(ctx, NULL, 0)
-#define puchi_open_input_string(ctx, s) sexp_open_input_string_op(ctx, NULL, 1, s)
-#define puchi_get_output_string(ctx, out) sexp_get_output_string_op(ctx, NULL, 1, out)
+#define puchi_read(ctx, in) puchi_read_op(ctx, NULL, 1, in)
+#define puchi_write(ctx, obj, out) puchi_write_op(ctx, NULL, 2, obj, out)
+#define puchi_print_exception(ctx, e, out) puchi_print_exception_op(ctx, NULL, 2, e, out)
+#define puchi_flush_output(ctx, out) puchi_flush_output_op(ctx, NULL, 1, out)
+#define puchi_equalp(ctx, a, b) puchi_equalp_op(ctx, NULL, 2, a, b)
+#define puchi_listp(ctx, x) puchi_listp_op(ctx, NULL, 1, x)
+#define puchi_length(ctx, x) puchi_length_op(ctx, NULL, 1, x)
+#define puchi_reverse(ctx, x) puchi_reverse_op(ctx, NULL, 1, x)
+#define puchi_nreverse(ctx, x) puchi_nreverse_op(ctx, NULL, 1, x)
+#define puchi_copy_list(ctx, x) puchi_copy_list_op(ctx, NULL, 1, x)
+#define puchi_cons(ctx, a, b) puchi_cons_op(ctx, NULL, 2, a, b)
+#define puchi_append2(ctx, a, b) puchi_append2_op(ctx, NULL, 2, a, b)
+#define puchi_make_vector(ctx, a, b) puchi_make_vector_op(ctx, NULL, 2, a, b)
+#define puchi_list_to_vector(ctx, x) puchi_list_to_vector_op(ctx, NULL, 1, x)
+#define puchi_string_to_symbol(ctx, s) puchi_string_to_symbol_op(ctx, NULL, 1, s)
+#define puchi_string_to_number(ctx, s, b) puchi_string_to_number_op(ctx, NULL, 2, s, b)
+#define puchi_symbol_to_string(ctx, s) puchi_symbol_to_string_op(ctx, NULL, 1, s)
+#define puchi_make_ephemeron(ctx, k, v) puchi_make_ephemeron_op(ctx, NULL, 2, k, v)
+#define puchi_make_bytes(ctx, l, i) puchi_make_bytes_op(ctx, NULL, 2, l, i)
+#define puchi_make_uvector(ctx, et, l) puchi_make_uvector_op(ctx, NULL, 2, et, l)
+#define puchi_make_string(ctx, l, c) puchi_make_string_op(ctx, NULL, 2, l, c)
+#define puchi_subbytes(ctx, a, b, c) puchi_subbytes_op(ctx, NULL, 3, a, b, c)
+#define puchi_string_concatenate(ctx, ls, s) puchi_string_concatenate_op(ctx, NULL, 2, ls, s)
+#define puchi_memq(ctx, a, b) puchi_memq_op(ctx, NULL, 2, a, b)
+#define puchi_assq(ctx, a, b) puchi_assq_op(ctx, NULL, 2, a, b)
+#define puchi_open_output_string(ctx) puchi_open_output_string_op(ctx, NULL, 0)
+#define puchi_open_input_string(ctx, s) puchi_open_input_string_op(ctx, NULL, 1, s)
+#define puchi_get_output_string(ctx, out) puchi_get_output_string_op(ctx, NULL, 1, out)
 #define puchi_expt(ctx, a, b) puchi_expt_op(ctx, NULL, 2, a, b)
 #define puchi_make_type_predicate(ctx, a, b) puchi_make_type_predicate_op(ctx, NULL, 2, a, b)
 #define puchi_make_constructor(ctx, a, b) puchi_make_constructor_op(ctx, NULL, 2, a, b)
 #define puchi_make_getter(ctx, a, b, c) puchi_make_getter_op(ctx, NULL, 3, a, b, c)
 #define puchi_make_setter(ctx, a, b, c) puchi_make_setter_op(ctx, NULL, 3, a, b, c)
 #if defined(PUCHI_TEST)
-#define puchi_make_fileno(ctx, fd, no_closep) sexp_make_fileno_op(ctx, NULL, 2, fd, no_closep)
+#define puchi_make_fileno(ctx, fd, no_closep) puchi_make_fileno_op(ctx, NULL, 2, fd, no_closep)
 #endif
-enum puchi_opcode_names {
-  /*  0 00 */ PUCHI_OP_NOOP,
-  /*  1 01 */ PUCHI_OP_RAISE,
-  /*  2 02 */ PUCHI_OP_RESUMECC,
-  /*  3 03 */ PUCHI_OP_CALLCC,
-  /*  4 04 */ PUCHI_OP_APPLY1,
-  /*  5 05 */ PUCHI_OP_TAIL_CALL,
-  /*  6 06 */ PUCHI_OP_CALL,
-  /*  7 07 */ PUCHI_OP_FCALL0,
-  /*  8 08 */ PUCHI_OP_FCALL1,
-  /*  9 09 */ PUCHI_OP_FCALL2,
-  /* 10 0A */ PUCHI_OP_FCALL3,
-  /* 11 0B */ PUCHI_OP_FCALL4,
-  /* 12 0C */ PUCHI_OP_FCALLN,
-  /* 13 0D */ PUCHI_OP_JUMP_UNLESS,
-  /* 14 0E */ PUCHI_OP_JUMP,
-  /* 15 0F */ PUCHI_OP_PUSH,
-  /* 16 10 */ PUCHI_OP_RESERVE,
-  /* 17 11 */ PUCHI_OP_DROP,
-  /* 18 12 */ PUCHI_OP_GLOBAL_REF,
-  /* 19 13 */ PUCHI_OP_GLOBAL_KNOWN_REF,
-  /* 20 14 */ PUCHI_OP_PARAMETER_REF,
-  /* 21 15 */ PUCHI_OP_STACK_REF,
-  /* 22 16 */ PUCHI_OP_LOCAL_REF,
-  /* 23 17 */ PUCHI_OP_LOCAL_SET,
-  /* 24 18 */ PUCHI_OP_CLOSURE_REF,
-  /* 25 19 */ PUCHI_OP_CLOSURE_VARS,
-  /* 26 1A */ PUCHI_OP_VECTOR_REF,
-  /* 27 1B */ PUCHI_OP_VECTOR_SET,
-  /* 28 1C */ PUCHI_OP_VECTOR_LENGTH,
-  /* 29 1D */ PUCHI_OP_BYTES_REF,
-  /* 30 1E */ PUCHI_OP_BYTES_SET,
-  /* 31 1F */ PUCHI_OP_BYTES_LENGTH,
-  /* 32 20 */ PUCHI_OP_STRING_REF,
-  /* 33 21 */ PUCHI_OP_STRING_SET,
-  /* 34 22 */ PUCHI_OP_STRING_LENGTH,
-  /* 35 23 */ PUCHI_OP_STRING_CURSOR_NEXT,
-  /* 36 24 */ PUCHI_OP_STRING_CURSOR_PREV,
-  /* 37 25 */ PUCHI_OP_STRING_CURSOR_END,
-  /* 38 26 */ PUCHI_OP_MAKE_PROCEDURE,
-  /* 39 27 */ PUCHI_OP_MAKE_VECTOR,
-  /* 40 28 */ PUCHI_OP_MAKE_EXCEPTION,
-  /* 41 29 */ PUCHI_OP_AND,
-  /* 42 2A */ PUCHI_OP_NULLP,
-  /* 43 2B */ PUCHI_OP_FIXNUMP,
-  /* 44 2C */ PUCHI_OP_SYMBOLP,
-  /* 45 2D */ PUCHI_OP_CHARP,
-  /* 46 2E */ PUCHI_OP_EOFP,
-  /* 47 2F */ PUCHI_OP_TYPEP,
-  /* 48 30 */ PUCHI_OP_MAKE,
-  /* 49 31 */ PUCHI_OP_SLOT_REF,
-  /* 50 32 */ PUCHI_OP_SLOT_SET,
-  /* 51 33 */ PUCHI_OP_ISA,
-  /* 52 34 */ PUCHI_OP_SLOTN_REF,
-  /* 53 35 */ PUCHI_OP_SLOTN_SET,
-  /* 54 36 */ PUCHI_OP_CAR,
-  /* 55 37 */ PUCHI_OP_CDR,
-  /* 56 38 */ PUCHI_OP_SET_CAR,
-  /* 57 39 */ PUCHI_OP_SET_CDR,
-  /* 58 3A */ PUCHI_OP_CONS,
-  /* 59 3B */ PUCHI_OP_ADD,
-  /* 60 3C */ PUCHI_OP_SUB,
-  /* 61 3D */ PUCHI_OP_MUL,
-  /* 62 3E */ PUCHI_OP_DIV,
-  /* 63 3F */ PUCHI_OP_QUOTIENT,
-  /* 64 40 */ PUCHI_OP_REMAINDER,
-  /* 65 41 */ PUCHI_OP_LT,
-  /* 66 42 */ PUCHI_OP_LE,
-  /* 67 43 */ PUCHI_OP_EQN,
-  /* 68 44 */ PUCHI_OP_EQ,
-  /* 69 45 */ PUCHI_OP_CHAR2INT,
-  /* 70 46 */ PUCHI_OP_INT2CHAR,
-  /* 71 47 */ PUCHI_OP_CHAR_UPCASE,
-  /* 72 48 */ PUCHI_OP_CHAR_DOWNCASE,
-  /* 73 49 */ PUCHI_OP_WRITE_CHAR,
-  /* 74 4A */ PUCHI_OP_WRITE_STRING,
-  /* 75 4B */ PUCHI_OP_READ_CHAR,
-  /* 76 4C */ PUCHI_OP_PEEK_CHAR,
-  /* 77 4D */ PUCHI_OP_YIELD,
-  /* 78 4E */ PUCHI_OP_FORCE,
-  /* 79 4F */ PUCHI_OP_RET,
-  /* 80 50 */ PUCHI_OP_DONE,
-  PUCHI_OP_SCP,
-  PUCHI_OP_SC_LT,
-  PUCHI_OP_SC_LE,
-  PUCHI_OP_NUM_OPCODES
-};
 
 /* ---- from eval.h ---- */
-enum puchi_core_form_names {
-  PUCHI_CORE_DEFINE = 1,
-  PUCHI_CORE_SET,
-  PUCHI_CORE_LAMBDA,
-  PUCHI_CORE_IF,
-  PUCHI_CORE_BEGIN,
-  PUCHI_CORE_QUOTE,
-  PUCHI_CORE_SYNTAX_QUOTE,
-  PUCHI_CORE_DEFINE_SYNTAX,
-  PUCHI_CORE_LET_SYNTAX,
-  PUCHI_CORE_LETREC_SYNTAX
-};
-enum puchi_opcode_classes {
-  PUCHI_OPC_GENERIC = 1,
-  PUCHI_OPC_TYPE_PREDICATE,
-  PUCHI_OPC_PREDICATE,
-  PUCHI_OPC_ARITHMETIC,
-  PUCHI_OPC_ARITHMETIC_CMP,
-  PUCHI_OPC_IO,
-  PUCHI_OPC_CONSTRUCTOR,
-  PUCHI_OPC_GETTER,
-  PUCHI_OPC_SETTER,
-  PUCHI_OPC_PARAMETER,
-  PUCHI_OPC_FOREIGN,
-  PUCHI_OPC_NUM_OP_CLASSES
-};
-#define puchi_define_foreign(c,e,s,n,f) sexp_define_foreign_aux(c,e,s,n,0,(const char*)#f,(puchi_proc1)f,NULL)
-#define puchi_define_foreign_param(c,e,s,n,f,p) sexp_define_foreign_param_aux(c,e,s,n,(const char*)#f,(puchi_proc1)f,p)
-#define puchi_define_foreign_opt(c,e,s,n,f,p) sexp_define_foreign_aux(c,e,s,n,1,(const char*)#f,(puchi_proc1)f,p)
-#define puchi_define_foreign_proc(c,e,s,n,f) sexp_define_foreign_proc_aux(c,e,s,n,PUCHI_PROC_NONE,(const char*)#f,(puchi_proc1)f,NULL)
-#define puchi_define_foreign_proc_rest(c,e,s,n,f) sexp_define_foreign_proc_aux(c,e,s,n,PUCHI_PROC_VARIADIC,(const char*)#f,(puchi_proc1)f,NULL)
-#define puchi_make_synclo(ctx, a, b, c) sexp_make_synclo_op(ctx, NULL, 3, a, b, c)
-#define puchi_make_procedure(ctx, f, n, b, v) sexp_make_procedure_op(ctx, NULL, 4, f, n, b, v)
-#define puchi_make_env(ctx) sexp_make_env_op(ctx, NULL, 0)
-#define puchi_make_null_env(ctx, v) sexp_make_null_env_op(ctx, NULL, 0, v)
-#define puchi_make_primitive_env(ctx, v) sexp_make_primitive_env_op(ctx, NULL, 1, v)
-#define puchi_make_standard_env(ctx, v) sexp_make_standard_env_op(ctx, NULL, 1, v)
-#define puchi_add_module_directory(ctx, d, a) sexp_add_module_directory_op(ctx, NULL, 1, d, a)
-#define puchi_eval(ctx, x, e) sexp_eval_op(ctx, NULL, 2, x, e)
-#define puchi_identifier_to_symbol(ctx, x) sexp_syntactic_closure_expr_op(ctx, NULL, 1, x)
-#define puchi_identifier_eq(ctx, a, b, c, d) sexp_identifier_eq_op(ctx, NULL, 4, a, b, c, d)
-#define puchi_close_port(ctx, x) sexp_close_port_op(ctx, NULL, 1, x)
-#define puchi_warn_undefs(ctx, from, to, res) sexp_warn_undefs_op(ctx, NULL, 3, from, to, res)
-#define puchi_string_cmp(ctx, a, b, c) sexp_string_cmp_op(ctx, NULL, 3, a, b, c)
+#define puchi_define_foreign(c,e,s,n,f) puchi_define_foreign_aux(c,e,s,n,0,(const char*)#f,(puchi_proc1)f,NULL)
+#define puchi_define_foreign_param(c,e,s,n,f,p) puchi_define_foreign_param_aux(c,e,s,n,(const char*)#f,(puchi_proc1)f,p)
+#define puchi_define_foreign_opt(c,e,s,n,f,p) puchi_define_foreign_aux(c,e,s,n,1,(const char*)#f,(puchi_proc1)f,p)
+#define puchi_define_foreign_proc(c,e,s,n,f) puchi_define_foreign_proc_aux(c,e,s,n,PUCHI_PROC_NONE,(const char*)#f,(puchi_proc1)f,NULL)
+#define puchi_define_foreign_proc_rest(c,e,s,n,f) puchi_define_foreign_proc_aux(c,e,s,n,PUCHI_PROC_VARIADIC,(const char*)#f,(puchi_proc1)f,NULL)
+#define puchi_make_synclo(ctx, a, b, c) puchi_make_synclo_op(ctx, NULL, 3, a, b, c)
+#define puchi_make_procedure(ctx, f, n, b, v) puchi_make_procedure_op(ctx, NULL, 4, f, n, b, v)
+#define puchi_make_env(ctx) puchi_make_env_op(ctx, NULL, 0)
+#define puchi_make_null_env(ctx, v) puchi_make_null_env_op(ctx, NULL, 0, v)
+#define puchi_make_primitive_env(ctx, v) puchi_make_primitive_env_op(ctx, NULL, 1, v)
+#define puchi_make_standard_env(ctx, v) puchi_make_standard_env_op(ctx, NULL, 1, v)
+#define puchi_add_module_directory(ctx, d, a) puchi_add_module_directory_op(ctx, NULL, 1, d, a)
+#define puchi_eval(ctx, x, e) puchi_eval_op(ctx, NULL, 2, x, e)
+#define puchi_identifier_to_symbol(ctx, x) puchi_syntactic_closure_expr_op(ctx, NULL, 1, x)
+#define puchi_identifier_eq(ctx, a, b, c, d) puchi_identifier_eq_op(ctx, NULL, 4, a, b, c, d)
+#define puchi_close_port(ctx, x) puchi_close_port_op(ctx, NULL, 1, x)
+#define puchi_warn_undefs(ctx, from, to, res) puchi_warn_undefs_op(ctx, NULL, 3, from, to, res)
+#define puchi_string_cmp(ctx, a, b, c) puchi_string_cmp_op(ctx, NULL, 3, a, b, c)
 
 /* ==== puchi host API decls ==== */
 /* ==== puchi host API function declarations (generated) ==== */
@@ -1196,6 +1095,8 @@ PUCHI_API puchi puchi_acos(puchi ctx, puchi self, puchi_sint_t n, puchi z);
 PUCHI_API puchi puchi_add(puchi ctx, puchi a, puchi b);
 #endif
 #endif
+PUCHI_API puchi puchi_add_module_directory_op(puchi ctx, puchi self, puchi_sint_t n, puchi dir, puchi appendp);
+PUCHI_API puchi puchi_alloc_tagged_aux(puchi ctx, size_t size, puchi_uint_t tag);
 PUCHI_API puchi puchi_append2_op(puchi ctx, puchi self, puchi_sint_t n, puchi a, puchi b);
 PUCHI_API puchi puchi_apply(puchi context, puchi proc, puchi args);
 PUCHI_API puchi puchi_apply1(puchi ctx, puchi f, puchi x);
@@ -1217,6 +1118,8 @@ PUCHI_API long long puchi_bignum_to_sint(puchi x);
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
 PUCHI_API unsigned long long puchi_bignum_to_uint(puchi x);
 #endif
+PUCHI_API int puchi_buffered_write_char(puchi ctx, int c, puchi p);
+PUCHI_API int puchi_buffered_write_string(puchi ctx, const char *str, puchi p);
 PUCHI_API puchi puchi_c_string(puchi ctx, const char *str, puchi_sint_t slen);
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
 PUCHI_API puchi puchi_ceiling(puchi ctx, puchi self, puchi_sint_t n, puchi x);
@@ -1275,6 +1178,7 @@ PUCHI_API puchi puchi_gc(puchi ctx, size_t *sum_freed);
 #endif
 PUCHI_API puchi puchi_get_output_string_op(puchi ctx, puchi self, puchi_sint_t n, puchi port);
 PUCHI_API puchi puchi_get_stack_trace(puchi ctx);
+PUCHI_API puchi puchi_identifier_eq_op(puchi ctx, puchi self, puchi_sint_t n, puchi a, puchi b, puchi c, puchi d);
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
 PUCHI_API puchi puchi_inexact_sqrt(puchi ctx, puchi self, puchi_sint_t n, puchi z);
 #endif
@@ -1300,27 +1204,36 @@ PUCHI_API puchi puchi_make_env_op(puchi context, puchi self, puchi_sint_t n);
 PUCHI_API puchi puchi_make_ephemeron_op(puchi ctx, puchi self, puchi_sint_t n, puchi key, puchi value);
 PUCHI_API puchi puchi_make_eval_context(puchi context, puchi stack, puchi env, puchi_uint_t size, puchi_uint_t max_size);
 PUCHI_API puchi puchi_make_exception(puchi ctx, puchi kind, puchi message, puchi irritants, puchi procedure, puchi source);
-#if !defined(PUCHI_INTEGER_ONLY)
+#if defined(PUCHI_TEST)
+PUCHI_API puchi puchi_make_fileno_op(puchi ctx, puchi self, puchi_sint_t n, puchi fd, puchi no_closep);
+#endif
+#if !defined(PUCHI_INTEGER_ONLY) || defined(PUCHI_TEST)
 #if !defined(puchi_make_flonum)
-PUCHI_API puchi puchi_make_flonum(puchi ctx, float f);
+PUCHI_API puchi puchi_make_flonum(puchi ctx, double f);
 #endif
 #endif
 PUCHI_API puchi puchi_make_foreign(puchi ctx, const char *name, int num_args, int flags, const char *fname, puchi_proc1 f, puchi data);
 PUCHI_API puchi puchi_make_getter_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi type, puchi index);
 PUCHI_API puchi puchi_make_immutable_op(puchi ctx, puchi self, puchi_sint_t n, puchi x);
 PUCHI_API puchi puchi_make_input_port(puchi ctx, const puchi_stream_ops *ops, void *udata, puchi name);
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
 #if !defined(puchi_make_integer)
 PUCHI_API puchi puchi_make_integer(puchi ctx, long long x);
+#endif
 #endif
 PUCHI_API puchi puchi_make_null_env_op(puchi context, puchi self, puchi_sint_t n, puchi version);
 PUCHI_API puchi puchi_make_output_port(puchi ctx, const puchi_stream_ops *ops, void *udata, puchi name);
 PUCHI_API puchi puchi_make_primitive_env_op(puchi context, puchi self, puchi_sint_t n, puchi version);
+PUCHI_API puchi puchi_make_procedure_op(puchi ctx, puchi self, puchi_sint_t n, puchi flags, puchi num_args, puchi bc, puchi vars);
 PUCHI_API puchi puchi_make_setter_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi type, puchi index);
 PUCHI_API puchi puchi_make_standard_env_op(puchi context, puchi self, puchi_sint_t n, puchi version);
 PUCHI_API puchi puchi_make_string_op(puchi ctx, puchi self, puchi_sint_t n, puchi len, puchi ch);
+PUCHI_API puchi puchi_make_synclo_op(puchi ctx, puchi self, puchi_sint_t n, puchi env, puchi fv, puchi expr);
 PUCHI_API puchi puchi_make_type_predicate_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi type);
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
 #if !defined(puchi_make_unsigned_integer)
 PUCHI_API puchi puchi_make_unsigned_integer(puchi ctx, unsigned long long x);
+#endif
 #endif
 PUCHI_API puchi puchi_make_uvector_op(puchi ctx, puchi self, puchi_sint_t n, puchi elt_type, puchi len);
 PUCHI_API puchi puchi_make_vector_op(puchi ctx, puchi self, puchi_sint_t n, puchi len, puchi dflt);
@@ -1389,6 +1302,7 @@ PUCHI_API puchi puchi_sub(puchi ctx, puchi a, puchi b);
 PUCHI_API puchi puchi_subbytes_op(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi start, puchi end);
 PUCHI_API puchi puchi_substring_op(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi start, puchi end);
 PUCHI_API puchi puchi_symbol_to_string_op(puchi ctx, puchi self, puchi_sint_t n, puchi sym);
+PUCHI_API puchi puchi_syntactic_closure_expr_op(puchi ctx, puchi self, puchi_sint_t n, puchi x);
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
 PUCHI_API puchi puchi_tan(puchi ctx, puchi self, puchi_sint_t n, puchi z);
 #endif
@@ -1406,6 +1320,7 @@ PUCHI_API int puchi_utf8_char_byte_count(int c);
 PUCHI_API void puchi_utf8_encode_char(unsigned char* p, int len, int c);
 PUCHI_API int puchi_utf8_initial_byte_count(int c);
 PUCHI_API puchi puchi_utf8_substring_op(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi start, puchi end);
+PUCHI_API puchi puchi_warn_undefs_op(puchi ctx, puchi self, puchi_sint_t n, puchi from, puchi to, puchi res);
 PUCHI_API puchi puchi_write_op(puchi ctx, puchi self, puchi_sint_t n, puchi obj, puchi out);
 PUCHI_API puchi puchi_write_to_string(puchi ctx, puchi obj);
 PUCHI_API puchi puchi_xtype_exception(puchi ctx, puchi self, const char *msg, puchi x);
@@ -1415,6 +1330,256 @@ PUCHI_API puchi puchi_load_default_libs(puchi ctx);
 PUCHI_API puchi puchi_enable_modules(puchi ctx, const puchi_module_ops *ops);
 PUCHI_API puchi puchi_make_eval_context_host(puchi ctx, puchi stack, puchi env, puchi_uint_t size, puchi_uint_t max_size, const puchi_host *host);
 
+
+/* ==== puchi host accessors (get/set) ==== */
+/* Host get/set accessors — always-visible decls; bodies under IMPL && !PUCHI_TEST_CLIB. */
+
+PUCHI_API puchi puchi_port_name(puchi p);
+PUCHI_API void puchi_port_set_name(puchi p, puchi name);
+PUCHI_API void puchi_port_set_sourcep(puchi p, int v);
+PUCHI_API void puchi_port_set_no_close(puchi p, int v);
+
+PUCHI_API puchi puchi_context_parent(puchi ctx);
+PUCHI_API void puchi_context_set_parent(puchi ctx, puchi parent);
+PUCHI_API void puchi_context_set_tailp(puchi ctx, int v);
+PUCHI_API void puchi_context_set_env(puchi ctx, puchi env);
+PUCHI_API void puchi_set_global(puchi ctx, int idx, puchi val);
+
+PUCHI_API puchi puchi_set_standard_ports(puchi ctx, puchi env, puchi in, puchi out, puchi err);
+PUCHI_API void puchi_stack_trace(puchi ctx, puchi out);
+
+#if !defined(puchi_opcodep)
+#define puchi_opcodep(x) (puchi_check_tag((x), PUCHI_OPCODE))
+#endif
+
+#if defined(PUCHI_TEST)
+/* ==== puchi_TEST_* function decls ==== */
+/* PUCHI_TEST function decls — include under #if PUCHI_TEST after host ABI. */
+PUCHI_API void puchi_TEST_add_static_libraries(puchi ctx, struct puchi_library_entry_t *libraries);
+PUCHI_API puchi puchi_TEST_load_op(puchi ctx, puchi self, puchi_sint_t n, puchi source, puchi env);
+PUCHI_API puchi puchi_TEST_current_module_path_op(puchi ctx, puchi self, puchi_sint_t n, puchi x);
+PUCHI_API puchi puchi_TEST_load_module_file_op(puchi ctx, puchi self, puchi_sint_t n, puchi file, puchi env);
+PUCHI_API puchi puchi_TEST_add_module_directory_op(puchi ctx, puchi self, puchi_sint_t n, puchi dir, puchi appendp);
+/* ==== auto puchi_TEST_* decls (non-HOST SEXP_API) ==== */
+/* ==== auto puchi_TEST_* decls for non-HOST SEXP_API (generated) ==== */
+
+PUCHI_API puchi puchi_TEST_analyze(puchi context, puchi x);
+PUCHI_API puchi puchi_TEST_apply_no_err_handler(puchi ctx, puchi proc, puchi args);
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_add(puchi ctx, puchi dst, puchi a, puchi b);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi_sint_t puchi_TEST_bignum_compare(puchi a, puchi b);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_expt(puchi ctx, puchi n, puchi e);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_fxadd(puchi ctx, puchi a, puchi_uint_t b);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi_uint_t puchi_TEST_bignum_fxdiv(puchi ctx, puchi a, puchi_uint_t b, int offset);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_fxmul(puchi ctx, puchi d, puchi a, puchi_uint_t b, int offset);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_fxsub(puchi ctx, puchi a, puchi_uint_t b);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi_uint_t puchi_TEST_bignum_hi(puchi a);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_mul(puchi ctx, puchi dst, puchi a, puchi b);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_normalize(puchi a);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_sqrt(puchi ctx, puchi a, puchi* rem);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_sub(puchi ctx, puchi dst, puchi a, puchi b);
+#endif
+PUCHI_API int puchi_TEST_buffered_flush(puchi ctx, puchi p, int forcep);
+PUCHI_API int puchi_TEST_buffered_read_char(puchi ctx, puchi p);
+PUCHI_API int puchi_TEST_buffered_write_string_n(puchi ctx, const char *str, puchi_uint_t len, puchi p);
+PUCHI_API puchi puchi_TEST_char_ready_p(puchi ctx, puchi self, puchi_sint_t n, puchi in);
+PUCHI_API puchi puchi_TEST_compile_error(puchi ctx, const char *message, puchi obj);
+PUCHI_API puchi puchi_TEST_compile_op(puchi context, puchi self, puchi_sint_t n, puchi obj, puchi env);
+PUCHI_API puchi puchi_TEST_complete_bytecode(puchi ctx);
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_acos(puchi ctx, puchi z);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_asin(puchi ctx, puchi z);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_atan(puchi ctx, puchi z);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_cos(puchi ctx, puchi z);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_exp(puchi ctx, puchi z);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_expt(puchi ctx, puchi a, puchi b);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_imag_op(puchi ctx, puchi self, puchi_sint_t n, puchi rat);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_log(puchi ctx, puchi z);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_normalize(puchi real);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_real_op(puchi ctx, puchi self, puchi_sint_t n, puchi rat);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_sin(puchi ctx, puchi z);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_sqrt(puchi ctx, puchi z);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_tan(puchi ctx, puchi z);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_copy_bignum(puchi ctx, puchi dst, puchi a, puchi_uint_t len);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_double_to_bignum(puchi ctx, double f);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_double_to_ratio(puchi ctx, double f);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_double_to_ratio_2(puchi ctx, double f);
+#endif
+PUCHI_API void puchi_TEST_emit(puchi ctx, unsigned char c);
+PUCHI_API void puchi_TEST_emit_return(puchi ctx);
+PUCHI_API puchi puchi_TEST_equalp_bound(puchi ctx, puchi self, puchi_sint_t n, puchi a, puchi b, puchi depth, puchi bound);
+PUCHI_API void puchi_TEST_expand_bcode(puchi ctx, puchi_sint_t size);
+PUCHI_API puchi puchi_TEST_finalize_c_type(puchi ctx, puchi self, puchi_sint_t n, puchi obj);
+PUCHI_API puchi puchi_TEST_finalize_port(puchi ctx, puchi self, puchi_sint_t n, puchi port);
+PUCHI_API puchi puchi_TEST_find_module_file(puchi ctx, const char *file);
+PUCHI_API puchi puchi_TEST_find_module_file_op(puchi ctx, puchi self, puchi_sint_t n, puchi file);
+PUCHI_API char* puchi_TEST_find_module_file_raw(puchi ctx, const char *file);
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_fixnum_to_bignum(puchi ctx, puchi a);
+#endif
+PUCHI_API puchi puchi_TEST_flonump_op(puchi ctx, puchi self, puchi_sint_t n, puchi x);
+PUCHI_API puchi puchi_TEST_free_vars(puchi context, puchi x, puchi fv);
+PUCHI_API void puchi_TEST_generate(puchi ctx, puchi name, puchi loc, puchi lam, puchi x);
+PUCHI_API puchi puchi_TEST_generate_op(puchi context, puchi self, puchi_sint_t n, puchi obj, puchi env);
+#if defined(PUCHI_TEST)
+PUCHI_API puchi puchi_TEST_get_port_fileno(puchi ctx, puchi self, puchi_sint_t n, puchi port);
+#endif
+PUCHI_API puchi puchi_TEST_get_port_fold_case(puchi ctx, puchi self, puchi_sint_t n, puchi in);
+PUCHI_API int puchi_TEST_grow_heap(puchi ctx, size_t size, size_t chunk_size);
+PUCHI_API puchi puchi_TEST_id_name(puchi x);
+PUCHI_API puchi puchi_TEST_identifierp_op(puchi ctx, puchi self, puchi_sint_t n, puchi x);
+PUCHI_API int puchi_TEST_idp(puchi x);
+PUCHI_API int puchi_TEST_is_separator(int c);
+PUCHI_API puchi puchi_TEST_load_module_file(puchi ctx, const char *file, puchi env);
+PUCHI_API puchi puchi_TEST_load_standard_env(puchi context, puchi env, puchi version);
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_make_bignum(puchi ctx, puchi_uint_t len);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_make_complex(puchi ctx, puchi real, puchi image);
+#endif
+PUCHI_API puchi_heap puchi_TEST_make_heap(const puchi_host *host, size_t size, size_t max_size, size_t chunk_size);
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_make_integer_from_lsint(puchi ctx, puchi_lsint_t x);
+#endif
+PUCHI_API puchi puchi_TEST_make_lambda(puchi ctx, puchi params);
+PUCHI_API puchi puchi_TEST_make_lit(puchi ctx, puchi value);
+PUCHI_API puchi puchi_TEST_make_non_null_input_port(puchi ctx, const puchi_stream_ops *ops, void *udata, puchi name);
+PUCHI_API puchi puchi_TEST_make_non_null_output_port(puchi ctx, const puchi_stream_ops *ops, void *udata, puchi name);
+PUCHI_API puchi puchi_TEST_make_opcode(puchi, puchi, puchi, puchi, puchi, puchi, puchi, puchi, puchi, puchi, puchi, puchi, puchi_proc1);
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_make_ratio(puchi ctx, puchi num, puchi den);
+#endif
+PUCHI_API puchi puchi_TEST_make_ref(puchi ctx, puchi name, puchi cell);
+PUCHI_API puchi puchi_TEST_make_trampoline(puchi ctx, puchi proc, puchi args);
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_make_unsigned_integer_from_luint(puchi ctx, puchi_luint_t x);
+#endif
+PUCHI_API void puchi_TEST_mark(puchi ctx, puchi x);
+#if defined(PUCHI_TEST)
+PUCHI_API puchi puchi_TEST_open_input_file_descriptor(puchi ctx, puchi self, puchi_sint_t n, puchi fileno, puchi socketp);
+#endif
+#if defined(PUCHI_TEST)
+PUCHI_API puchi puchi_TEST_open_output_file_descriptor(puchi ctx, puchi self, puchi_sint_t n, puchi fileno, puchi socketp);
+#endif
+PUCHI_API int puchi_TEST_param_index(puchi ctx, puchi lambda, puchi name);
+PUCHI_API puchi puchi_TEST_port_binaryp_op(puchi ctx, puchi self, puchi_sint_t n, puchi port);
+PUCHI_API puchi puchi_TEST_port_openp_op(puchi ctx, puchi self, puchi_sint_t n, puchi port);
+PUCHI_API puchi puchi_TEST_port_outputp_op(puchi ctx, puchi self, puchi_sint_t n, puchi port);
+PUCHI_API puchi puchi_TEST_push_op(puchi ctx, puchi* loc, puchi x);
+PUCHI_API void puchi_TEST_push_utf8_char(puchi ctx, int i, puchi port);
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_ceiling(puchi ctx, puchi a);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_compare(puchi ctx, puchi a, puchi b);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_denominator_op(puchi ctx, puchi self, puchi_sint_t n, puchi rat);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_floor(puchi ctx, puchi a);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_normalize(puchi ctx, puchi rat, puchi in);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_numerator_op(puchi ctx, puchi self, puchi_sint_t n, puchi rat);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_round(puchi ctx, puchi a);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_trunc(puchi ctx, puchi a);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_read_bignum(puchi ctx, puchi in, puchi_uint_t init, signed char sign, puchi_uint_t base);
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_read_complex_tail(puchi ctx, puchi in, puchi res);
+#endif
+PUCHI_API puchi puchi_TEST_read_float_tail(puchi ctx, puchi in, double whole, int negp);
+PUCHI_API puchi puchi_TEST_read_number(puchi ctx, puchi in, int base, int exactp);
+PUCHI_API puchi puchi_TEST_read_raw(puchi ctx, puchi in, puchi *shares);
+PUCHI_API puchi puchi_TEST_read_string(puchi ctx, puchi in, int sentinel);
+PUCHI_API puchi puchi_TEST_read_symbol(puchi ctx, puchi in, int init, int internp);
+PUCHI_API puchi puchi_TEST_read_utf8_char(puchi ctx, puchi port, int i);
+PUCHI_API puchi puchi_TEST_register_optimization(puchi ctx, puchi self, puchi_sint_t n, puchi f, puchi i);
+PUCHI_API puchi puchi_TEST_set_port_fold_case(puchi ctx, puchi self, puchi_sint_t n, puchi in, puchi x);
+PUCHI_API puchi puchi_TEST_set_port_line_op(puchi ctx, puchi self, puchi_sint_t n, puchi port, puchi line);
+PUCHI_API puchi puchi_TEST_set_standard_ports(puchi context, puchi env, puchi in, puchi out, puchi err);
+PUCHI_API void puchi_TEST_shrink_bcode(puchi ctx, puchi_uint_t i);
+PUCHI_API puchi puchi_TEST_simplify(puchi ctx, puchi self, puchi_sint_t n, puchi ast);
+PUCHI_API puchi puchi_TEST_square_brackets_sym(puchi ctx, puchi self, puchi_sint_t n);
+PUCHI_API void puchi_TEST_stack_trace(puchi ctx, puchi out);
+PUCHI_API puchi puchi_TEST_stack_trace_op(puchi ctx, puchi self, puchi_sint_t n, puchi out);
+PUCHI_API puchi puchi_TEST_stream_portp_op(puchi ctx, puchi self, puchi_sint_t n, puchi port);
+PUCHI_API puchi puchi_TEST_strip_synclos(puchi ctx, puchi self, puchi_sint_t n, puchi x);
+PUCHI_API puchi puchi_TEST_sweep(puchi ctx, size_t *sum_freed_ptr);
+PUCHI_API puchi puchi_TEST_thread_parameters(puchi ctx, puchi self, puchi_sint_t n);
+PUCHI_API puchi puchi_TEST_thread_parameters_set(puchi ctx, puchi self, puchi_sint_t n, puchi val);
+PUCHI_API void puchi_TEST_warn(puchi ctx, const char *msg, puchi x);
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_write_bignum(puchi ctx, puchi a, puchi out, puchi_uint_t base);
+#endif
+PUCHI_API puchi puchi_TEST_write_simple_object(puchi ctx, puchi self, puchi_sint_t n, puchi obj, puchi writer, puchi out);
+PUCHI_API int puchi_TEST_write_utf8_char(puchi ctx, int c, puchi out);
+
+#endif
 
 #if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)
 /* Silence /W4 and -Weverything noise from amalgamated upstream Chibi.
@@ -1501,8 +1666,27 @@ static inline int puchi_strncasecmp(const char *a, const char *b, size_t n) {
 #endif
 
 /* ========================================================================== */
-#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)
+#if defined(PUCHI_IMPLEMENTATION)
 /* ========================================================================== */
+
+/* ==== install identity sexp_* aliases ==== */
+/* install.h identity — sexp_* names for Chibi .c under PUCHI_IMPLEMENTATION. */
+#define sexp_default_module_path puchi_default_module_path
+#define sexp_platform puchi_platform
+#define sexp_architecture puchi_architecture
+#define sexp_version puchi_version
+#define sexp_release_name puchi_release_name
+
+#if defined(PUCHI_TEST)
+/* ==== puchi_TEST_* sexp_* aliases (clibs) ==== */
+/* sexp_* aliases for puchi_TEST_* — only when both IMPLEMENTATION and TEST
+ * (clibs stubs). Do not emit under IMPLEMENTATION alone. */
+#define sexp_so_extension puchi_TEST_so_extension
+typedef puchi_abi_identifier_t sexp_abi_identifier_t;
+#define SEXP_ABI_IDENTIFIER PUCHI_TEST_ABI_IDENTIFIER
+#define sexp_version_compatible puchi_TEST_version_compatible
+#define sexp_abi_compatible puchi_TEST_abi_compatible
+#endif
 
 /* ==== sexp_* / SEXP_* aliases -> puchi_* / PUCHI_* ==== */
 /* Compatibility aliases: Chibi sexp_* names -> puchi_* (IMPLEMENTATION) */
@@ -1512,11 +1696,6 @@ typedef puchi_uint_t sexp_uint_t;
 typedef puchi_sint_t sexp_sint_t;
 typedef puchi_proc1 sexp_proc1;
 typedef puchi_proc2 sexp_proc2;
-typedef puchi_proc3 sexp_proc3;
-typedef puchi_proc4 sexp_proc4;
-typedef puchi_proc5 sexp_proc5;
-typedef puchi_proc6 sexp_proc6;
-typedef puchi_proc7 sexp_proc7;
 #if defined(PUCHI_TEST)
 typedef puchi_init_proc sexp_init_proc;
 #endif
@@ -1545,49 +1724,46 @@ typedef puchi_lsint_t sexp_lsint_t;
 #define SEXP_CHAR_TAG PUCHI_CHAR_TAG
 #define SEXP_READER_LABEL_TAG PUCHI_READER_LABEL_TAG
 #define SEXP_EXTENDED_TAG PUCHI_EXTENDED_TAG
-#define SEXP_REF PUCHI_REF
-#define SEXP_SET_SYN PUCHI_SET_SYN
-#define SEXP_IPORT PUCHI_IPORT
-#define SEXP_LIT PUCHI_LIT
-#define SEXP_OPORT PUCHI_OPORT
-#define SEXP_MACRO PUCHI_MACRO
-#define SEXP_PROMISE PUCHI_PROMISE
-#define SEXP_BIGNUM PUCHI_BIGNUM
-#define SEXP_BYTECODE PUCHI_BYTECODE
-#define SEXP_SEQ PUCHI_SEQ
-#define SEXP_SYNCLO PUCHI_SYNCLO
-#define SEXP_STRING_CURSOR PUCHI_STRING_CURSOR
-#define SEXP_SYMBOL PUCHI_SYMBOL
-#define SEXP_LAMBDA PUCHI_LAMBDA
-#define SEXP_STRING PUCHI_STRING
-#define SEXP_CHAR PUCHI_CHAR
-#define SEXP_SET PUCHI_SET
-#define SEXP_OBJECT PUCHI_OBJECT
-#define SEXP_FLONUM PUCHI_FLONUM
-#define SEXP_ENV PUCHI_ENV
-#define SEXP_TEST PUCHI_TEST
-#define SEXP_DL PUCHI_DL
-#define SEXP_OPCODE PUCHI_OPCODE
-#define SEXP_EPHEMERON PUCHI_EPHEMERON
-#define SEXP_TYPE PUCHI_TYPE
-#define SEXP_FIXNUM PUCHI_FIXNUM
-#define SEXP_BYTES PUCHI_BYTES
-#define SEXP_STACK PUCHI_STACK
-#define SEXP_CORE PUCHI_CORE
-#define SEXP_PAIR PUCHI_PAIR
-#define SEXP_VECTOR PUCHI_VECTOR
-#define SEXP_FILENO PUCHI_FILENO
-#define SEXP_RATIO PUCHI_RATIO
-#define SEXP_CONTEXT PUCHI_CONTEXT
-#define SEXP_EXCEPTION PUCHI_EXCEPTION
-#define SEXP_COMPLEX PUCHI_COMPLEX
-#define SEXP_CND PUCHI_CND
-#define SEXP_CPOINTER PUCHI_CPOINTER
-#define SEXP_UNIFORM_VECTOR PUCHI_UNIFORM_VECTOR
-#define SEXP_NUM_CORE_TYPES PUCHI_NUM_CORE_TYPES
-#define SEXP_NUMBER PUCHI_NUMBER
 #define SEXP_PROCEDURE PUCHI_PROCEDURE
+#define SEXP_CORE PUCHI_CORE
+#define SEXP_RATIO PUCHI_RATIO
+#define SEXP_SYMBOL PUCHI_SYMBOL
+#define SEXP_BIGNUM PUCHI_BIGNUM
+#define SEXP_FIXNUM PUCHI_FIXNUM
+#define SEXP_STACK PUCHI_STACK
+#define SEXP_PAIR PUCHI_PAIR
+#define SEXP_STRING PUCHI_STRING
+#define SEXP_NUMBER PUCHI_NUMBER
+#define SEXP_COMPLEX PUCHI_COMPLEX
+#define SEXP_SYNCLO PUCHI_SYNCLO
+#define SEXP_MACRO PUCHI_MACRO
+#define SEXP_OBJECT PUCHI_OBJECT
 #define SEXP_BOOLEAN PUCHI_BOOLEAN
+#define SEXP_REF PUCHI_REF
+#define SEXP_EXCEPTION PUCHI_EXCEPTION
+#define SEXP_EPHEMERON PUCHI_EPHEMERON
+#define SEXP_CONTEXT PUCHI_CONTEXT
+#define SEXP_FILENO PUCHI_FILENO
+#define SEXP_SET PUCHI_SET
+#define SEXP_BYTES PUCHI_BYTES
+#define SEXP_TYPE PUCHI_TYPE
+#define SEXP_CHAR PUCHI_CHAR
+#define SEXP_LIT PUCHI_LIT
+#define SEXP_OPCODE PUCHI_OPCODE
+#define SEXP_SEQ PUCHI_SEQ
+#define SEXP_CPOINTER PUCHI_CPOINTER
+#define SEXP_OPORT PUCHI_OPORT
+#define SEXP_SET_SYN PUCHI_SET_SYN
+#define SEXP_ENV PUCHI_ENV
+#define SEXP_IPORT PUCHI_IPORT
+#define SEXP_LAMBDA PUCHI_LAMBDA
+#define SEXP_NUM_CORE_TYPES PUCHI_NUM_CORE_TYPES
+#define SEXP_VECTOR PUCHI_VECTOR
+#define SEXP_FLONUM PUCHI_FLONUM
+#define SEXP_UNIFORM_VECTOR PUCHI_UNIFORM_VECTOR
+#define SEXP_BYTECODE PUCHI_BYTECODE
+#define SEXP_STRING_CURSOR PUCHI_STRING_CURSOR
+#define SEXP_CND PUCHI_CND
 #define SEXP_PROC_NONE PUCHI_PROC_NONE
 #define SEXP_PROC_VARIADIC PUCHI_PROC_VARIADIC
 #define SEXP_PROC_UNUSED_REST PUCHI_PROC_UNUSED_REST
@@ -1606,9 +1782,23 @@ typedef puchi_lsint_t sexp_lsint_t;
 #define sexp_gc_var(x, y) puchi_gc_var(x, y)
 #define sexp_gc_preserve(ctx, x, y) puchi_gc_preserve(ctx, x, y)
 #define sexp_gc_release(ctx, x, y) puchi_gc_release(ctx, x, y)
+#if defined(puchi_alloc)
 #define sexp_alloc(ctx, size) puchi_alloc(ctx, size)
+#else
+#define puchi_alloc sexp_alloc
+#endif
+#if defined(puchi_alloc_atomic)
 #define sexp_alloc_atomic(ctx, size) puchi_alloc_atomic(ctx, size)
+#else
+#define puchi_alloc_atomic sexp_alloc_atomic
+#endif
 #define sexp_gc_preserve_name(ctx, x, y) puchi_gc_preserve_name(ctx, x, y)
+#if defined(puchi_alloc)
+#else
+#endif
+#if defined(puchi_alloc_atomic)
+#else
+#endif
 #define sexp_gc_var1(x) puchi_gc_var1(x)
 #define sexp_gc_var2(x, y) puchi_gc_var2(x, y)
 #define sexp_gc_var3(x, y, z) puchi_gc_var3(x, y, z)
@@ -1727,19 +1917,19 @@ typedef puchi_lsint_t sexp_lsint_t;
 #define sexp_bytes_length(x) puchi_bytes_length(x)
 #define sexp_bytes_data(x) puchi_bytes_data(x)
 #define sexp_bytes_maybe_null_data(x) puchi_bytes_maybe_null_data(x)
-#define SEXP_F64 PUCHI_F64
-#define SEXP_U1 PUCHI_U1
-#define SEXP_S64 PUCHI_S64
-#define SEXP_S16 PUCHI_S16
-#define SEXP_U32 PUCHI_U32
-#define SEXP_END_OF_UNIFORM_TYPES PUCHI_END_OF_UNIFORM_TYPES
 #define SEXP_C128 PUCHI_C128
-#define SEXP_S8 PUCHI_S8
-#define SEXP_NOT_A_UNIFORM_TYPE PUCHI_NOT_A_UNIFORM_TYPE
 #define SEXP_U16 PUCHI_U16
+#define SEXP_S16 PUCHI_S16
+#define SEXP_S8 PUCHI_S8
+#define SEXP_END_OF_UNIFORM_TYPES PUCHI_END_OF_UNIFORM_TYPES
 #define SEXP_S32 PUCHI_S32
 #define SEXP_C64 PUCHI_C64
 #define SEXP_U8 PUCHI_U8
+#define SEXP_U1 PUCHI_U1
+#define SEXP_U32 PUCHI_U32
+#define SEXP_S64 PUCHI_S64
+#define SEXP_NOT_A_UNIFORM_TYPE PUCHI_NOT_A_UNIFORM_TYPE
+#define SEXP_F64 PUCHI_F64
 #define SEXP_U64 PUCHI_U64
 #define SEXP_F32 PUCHI_F32
 #define sexp_uvector_freep(x) puchi_uvector_freep(x)
@@ -1801,56 +1991,41 @@ typedef puchi_lsint_t sexp_lsint_t;
 #if defined(puchi_div)
 #define sexp_div(ctx, a, b) puchi_div(ctx, a, b)
 #endif
-#define SEXP_G_WEAK_OBJECTS_PRESENT PUCHI_G_WEAK_OBJECTS_PRESENT
-#define SEXP_G_NUM_GLOBALS PUCHI_G_NUM_GLOBALS
-#define SEXP_G_NO_TAIL_CALLS_P PUCHI_G_NO_TAIL_CALLS_P
-#define SEXP_G_THREAD_TERMINATE_ERROR PUCHI_G_THREAD_TERMINATE_ERROR
-#define SEXP_G_THREADS_SCHEDULER PUCHI_G_THREADS_SCHEDULER
-#define SEXP_G_CUR_ERR_SYMBOL PUCHI_G_CUR_ERR_SYMBOL
-#define SEXP_G_IO_BLOCK_ONCE_ERROR PUCHI_G_IO_BLOCK_ONCE_ERROR
-#define SEXP_G_ENDIANNESS PUCHI_G_ENDIANNESS
-#define SEXP_G_FEATURES PUCHI_G_FEATURES
-#define SEXP_G_ATOMIC_P PUCHI_G_ATOMIC_P
-#define SEXP_G_THREADS_BLOCKER PUCHI_G_THREADS_BLOCKER
-#define SEXP_G_OPTIMIZATIONS PUCHI_G_OPTIMIZATIONS
-#define SEXP_G_MODULE_PATH PUCHI_G_MODULE_PATH
-#define SEXP_G_CONTINUABLE_SYMBOL PUCHI_G_CONTINUABLE_SYMBOL
-#define SEXP_G_CUR_IN_SYMBOL PUCHI_G_CUR_IN_SYMBOL
-#define SEXP_G_INTERACTION_ENV_SYMBOL PUCHI_G_INTERACTION_ENV_SYMBOL
-#define SEXP_G_THREADS_BACK PUCHI_G_THREADS_BACK
-#define SEXP_G_META_ENV PUCHI_G_META_ENV
-#define SEXP_G_SQUARE_BRACKETS_SYM PUCHI_G_SQUARE_BRACKETS_SYM
-#define SEXP_G_UNQUOTE_SPLICING_SYMBOL PUCHI_G_UNQUOTE_SPLICING_SYMBOL
-#define SEXP_G_CUR_OUT_SYMBOL PUCHI_G_CUR_OUT_SYMBOL
-#define SEXP_G_IO_BLOCK_ERROR PUCHI_G_IO_BLOCK_ERROR
-#define SEXP_G_ABI_ERROR PUCHI_G_ABI_ERROR
-#define SEXP_G_ERR_HANDLER PUCHI_G_ERR_HANDLER
-#define SEXP_G_QUASIQUOTE_SYMBOL PUCHI_G_QUASIQUOTE_SYMBOL
-#define SEXP_G_THREADS_MUTEX_ID PUCHI_G_THREADS_MUTEX_ID
-#define SEXP_G_SYMBOLS PUCHI_G_SYMBOLS
-#define SEXP_G_THREADS_PAUSED PUCHI_G_THREADS_PAUSED
-#define SEXP_G_QUASISYNTAX_SYMBOL PUCHI_G_QUASISYNTAX_SYMBOL
-#define SEXP_G_PRESERVATIVES PUCHI_G_PRESERVATIVES
-#define SEXP_G_OOM_ERROR PUCHI_G_OOM_ERROR
-#define SEXP_G_THREADS_SIGNALS PUCHI_G_THREADS_SIGNALS
-#define SEXP_G_THREADS_POLL_FDS PUCHI_G_THREADS_POLL_FDS
-#define SEXP_G_THREADS_POLLFDS_ID PUCHI_G_THREADS_POLLFDS_ID
-#define SEXP_G_NUM_TYPES PUCHI_G_NUM_TYPES
 #define SEXP_G_UNQUOTE_SYMBOL PUCHI_G_UNQUOTE_SYMBOL
-#define SEXP_G_THREADS_SIGNAL_RUNNER PUCHI_G_THREADS_SIGNAL_RUNNER
+#define SEXP_G_SQUARE_BRACKETS_SYM PUCHI_G_SQUARE_BRACKETS_SYM
+#define SEXP_G_META_ENV PUCHI_G_META_ENV
+#define SEXP_G_QUASIQUOTE_SYMBOL PUCHI_G_QUASIQUOTE_SYMBOL
+#define SEXP_G_ERR_HANDLER PUCHI_G_ERR_HANDLER
+#define SEXP_G_WEAK_OBJECTS_PRESENT PUCHI_G_WEAK_OBJECTS_PRESENT
 #define SEXP_G_OOS_ERROR PUCHI_G_OOS_ERROR
-#define SEXP_G_THREADS_FD_THREADS PUCHI_G_THREADS_FD_THREADS
-#define SEXP_G_SYNTAX_SYMBOL PUCHI_G_SYNTAX_SYMBOL
-#define SEXP_G_QUOTE_SYMBOL PUCHI_G_QUOTE_SYMBOL
-#define SEXP_G_UNSYNTAX_SYMBOL PUCHI_G_UNSYNTAX_SYMBOL
-#define SEXP_G_STRICT_P PUCHI_G_STRICT_P
-#define SEXP_G_FOLD_CASE_P PUCHI_G_FOLD_CASE_P
-#define SEXP_G_TYPES PUCHI_G_TYPES
-#define SEXP_G_RESUMECC_BYTECODE PUCHI_G_RESUMECC_BYTECODE
-#define SEXP_G_THREADS_FRONT PUCHI_G_THREADS_FRONT
-#define SEXP_G_FINAL_RESUMER PUCHI_G_FINAL_RESUMER
-#define SEXP_G_EMPTY_VECTOR PUCHI_G_EMPTY_VECTOR
 #define SEXP_G_UNSYNTAX_SPLICING_SYMBOL PUCHI_G_UNSYNTAX_SPLICING_SYMBOL
+#define SEXP_G_NUM_TYPES PUCHI_G_NUM_TYPES
+#define SEXP_G_CUR_ERR_SYMBOL PUCHI_G_CUR_ERR_SYMBOL
+#define SEXP_G_RESUMECC_BYTECODE PUCHI_G_RESUMECC_BYTECODE
+#define SEXP_G_TYPES PUCHI_G_TYPES
+#define SEXP_G_MODULE_PATH PUCHI_G_MODULE_PATH
+#define SEXP_G_SYMBOLS PUCHI_G_SYMBOLS
+#define SEXP_G_CUR_OUT_SYMBOL PUCHI_G_CUR_OUT_SYMBOL
+#define SEXP_G_NUM_GLOBALS PUCHI_G_NUM_GLOBALS
+#define SEXP_G_OPTIMIZATIONS PUCHI_G_OPTIMIZATIONS
+#define SEXP_G_FINAL_RESUMER PUCHI_G_FINAL_RESUMER
+#define SEXP_G_QUOTE_SYMBOL PUCHI_G_QUOTE_SYMBOL
+#define SEXP_G_PRESERVATIVES PUCHI_G_PRESERVATIVES
+#define SEXP_G_STRICT_P PUCHI_G_STRICT_P
+#define SEXP_G_SYNTAX_SYMBOL PUCHI_G_SYNTAX_SYMBOL
+#define SEXP_G_OOM_ERROR PUCHI_G_OOM_ERROR
+#define SEXP_G_INTERACTION_ENV_SYMBOL PUCHI_G_INTERACTION_ENV_SYMBOL
+#define SEXP_G_EMPTY_VECTOR PUCHI_G_EMPTY_VECTOR
+#define SEXP_G_NO_TAIL_CALLS_P PUCHI_G_NO_TAIL_CALLS_P
+#define SEXP_G_FOLD_CASE_P PUCHI_G_FOLD_CASE_P
+#define SEXP_G_ENDIANNESS PUCHI_G_ENDIANNESS
+#define SEXP_G_CUR_IN_SYMBOL PUCHI_G_CUR_IN_SYMBOL
+#define SEXP_G_FEATURES PUCHI_G_FEATURES
+#define SEXP_G_UNSYNTAX_SYMBOL PUCHI_G_UNSYNTAX_SYMBOL
+#define SEXP_G_QUASISYNTAX_SYMBOL PUCHI_G_QUASISYNTAX_SYMBOL
+#define SEXP_G_CONTINUABLE_SYMBOL PUCHI_G_CONTINUABLE_SYMBOL
+#define SEXP_G_ABI_ERROR PUCHI_G_ABI_ERROR
+#define SEXP_G_UNQUOTE_SPLICING_SYMBOL PUCHI_G_UNQUOTE_SPLICING_SYMBOL
 #define sexp_car(x) puchi_car(x)
 #define sexp_cdr(x) puchi_cdr(x)
 #define sexp_caar(x) puchi_caar(x)
@@ -1920,113 +2095,6 @@ typedef puchi_lsint_t sexp_lsint_t;
 #define sexp_make_getter(ctx, a, b, c) puchi_make_getter(ctx, a, b, c)
 #define sexp_make_setter(ctx, a, b, c) puchi_make_setter(ctx, a, b, c)
 #define sexp_make_fileno(ctx, fd, no_closep) puchi_make_fileno(ctx, fd, no_closep)
-#define SEXP_OP_STRING_REF PUCHI_OP_STRING_REF
-#define SEXP_OP_CALL PUCHI_OP_CALL
-#define SEXP_OP_JUMP PUCHI_OP_JUMP
-#define SEXP_OP_BYTES_SET PUCHI_OP_BYTES_SET
-#define SEXP_OP_SUB PUCHI_OP_SUB
-#define SEXP_OP_STRING_SET PUCHI_OP_STRING_SET
-#define SEXP_OP_SYMBOLP PUCHI_OP_SYMBOLP
-#define SEXP_OP_RAISE PUCHI_OP_RAISE
-#define SEXP_OP_RESERVE PUCHI_OP_RESERVE
-#define SEXP_OP_CDR PUCHI_OP_CDR
-#define SEXP_OP_VECTOR_SET PUCHI_OP_VECTOR_SET
-#define SEXP_OP_EQ PUCHI_OP_EQ
-#define SEXP_OP_SET_CAR PUCHI_OP_SET_CAR
-#define SEXP_OP_CHAR2INT PUCHI_OP_CHAR2INT
-#define SEXP_OP_JUMP_UNLESS PUCHI_OP_JUMP_UNLESS
-#define SEXP_OP_FCALL3 PUCHI_OP_FCALL3
-#define SEXP_OP_INT2CHAR PUCHI_OP_INT2CHAR
-#define SEXP_OP_MAKE_PROCEDURE PUCHI_OP_MAKE_PROCEDURE
-#define SEXP_OP_STRING_CURSOR_END PUCHI_OP_STRING_CURSOR_END
-#define SEXP_OP_WRITE_STRING PUCHI_OP_WRITE_STRING
-#define SEXP_OP_TAIL_CALL PUCHI_OP_TAIL_CALL
-#define SEXP_OP_FCALLN PUCHI_OP_FCALLN
-#define SEXP_OP_FIXNUMP PUCHI_OP_FIXNUMP
-#define SEXP_OP_RESUMECC PUCHI_OP_RESUMECC
-#define SEXP_OP_CLOSURE_VARS PUCHI_OP_CLOSURE_VARS
-#define SEXP_OP_SCP PUCHI_OP_SCP
-#define SEXP_OP_DROP PUCHI_OP_DROP
-#define SEXP_OP_QUOTIENT PUCHI_OP_QUOTIENT
-#define SEXP_OP_LE PUCHI_OP_LE
-#define SEXP_OP_SLOT_SET PUCHI_OP_SLOT_SET
-#define SEXP_OP_STRING_LENGTH PUCHI_OP_STRING_LENGTH
-#define SEXP_OP_SC_LE PUCHI_OP_SC_LE
-#define SEXP_OP_BYTES_REF PUCHI_OP_BYTES_REF
-#define SEXP_OP_NULLP PUCHI_OP_NULLP
-#define SEXP_OP_CHAR_DOWNCASE PUCHI_OP_CHAR_DOWNCASE
-#define SEXP_OP_MUL PUCHI_OP_MUL
-#define SEXP_OP_AND PUCHI_OP_AND
-#define SEXP_OP_GLOBAL_REF PUCHI_OP_GLOBAL_REF
-#define SEXP_OP_SC_LT PUCHI_OP_SC_LT
-#define SEXP_OP_CONS PUCHI_OP_CONS
-#define SEXP_OP_EOFP PUCHI_OP_EOFP
-#define SEXP_OP_FCALL0 PUCHI_OP_FCALL0
-#define SEXP_OP_VECTOR_REF PUCHI_OP_VECTOR_REF
-#define SEXP_OP_WRITE_CHAR PUCHI_OP_WRITE_CHAR
-#define SEXP_OP_CLOSURE_REF PUCHI_OP_CLOSURE_REF
-#define SEXP_OP_DIV PUCHI_OP_DIV
-#define SEXP_OP_SLOT_REF PUCHI_OP_SLOT_REF
-#define SEXP_OP_LOCAL_SET PUCHI_OP_LOCAL_SET
-#define SEXP_OP_STRING_CURSOR_PREV PUCHI_OP_STRING_CURSOR_PREV
-#define SEXP_OP_CALLCC PUCHI_OP_CALLCC
-#define SEXP_OP_CHAR_UPCASE PUCHI_OP_CHAR_UPCASE
-#define SEXP_OP_VECTOR_LENGTH PUCHI_OP_VECTOR_LENGTH
-#define SEXP_OP_FCALL1 PUCHI_OP_FCALL1
-#define SEXP_OP_RET PUCHI_OP_RET
-#define SEXP_OP_NUM_OPCODES PUCHI_OP_NUM_OPCODES
-#define SEXP_OP_GLOBAL_KNOWN_REF PUCHI_OP_GLOBAL_KNOWN_REF
-#define SEXP_OP_PUSH PUCHI_OP_PUSH
-#define SEXP_OP_BYTES_LENGTH PUCHI_OP_BYTES_LENGTH
-#define SEXP_OP_REMAINDER PUCHI_OP_REMAINDER
-#define SEXP_OP_YIELD PUCHI_OP_YIELD
-#define SEXP_OP_FORCE PUCHI_OP_FORCE
-#define SEXP_OP_CHARP PUCHI_OP_CHARP
-#define SEXP_OP_FCALL2 PUCHI_OP_FCALL2
-#define SEXP_OP_DONE PUCHI_OP_DONE
-#define SEXP_OP_APPLY1 PUCHI_OP_APPLY1
-#define SEXP_OP_EQN PUCHI_OP_EQN
-#define SEXP_OP_TYPEP PUCHI_OP_TYPEP
-#define SEXP_OP_FCALL4 PUCHI_OP_FCALL4
-#define SEXP_OP_LOCAL_REF PUCHI_OP_LOCAL_REF
-#define SEXP_OP_SLOTN_SET PUCHI_OP_SLOTN_SET
-#define SEXP_OP_STRING_CURSOR_NEXT PUCHI_OP_STRING_CURSOR_NEXT
-#define SEXP_OP_READ_CHAR PUCHI_OP_READ_CHAR
-#define SEXP_OP_PARAMETER_REF PUCHI_OP_PARAMETER_REF
-#define SEXP_OP_STACK_REF PUCHI_OP_STACK_REF
-#define SEXP_OP_ISA PUCHI_OP_ISA
-#define SEXP_OP_LT PUCHI_OP_LT
-#define SEXP_OP_CAR PUCHI_OP_CAR
-#define SEXP_OP_NOOP PUCHI_OP_NOOP
-#define SEXP_OP_PEEK_CHAR PUCHI_OP_PEEK_CHAR
-#define SEXP_OP_ADD PUCHI_OP_ADD
-#define SEXP_OP_SET_CDR PUCHI_OP_SET_CDR
-#define SEXP_OP_MAKE_EXCEPTION PUCHI_OP_MAKE_EXCEPTION
-#define SEXP_OP_SLOTN_REF PUCHI_OP_SLOTN_REF
-#define SEXP_OP_MAKE PUCHI_OP_MAKE
-#define SEXP_OP_MAKE_VECTOR PUCHI_OP_MAKE_VECTOR
-#define SEXP_CORE_SYNTAX_QUOTE PUCHI_CORE_SYNTAX_QUOTE
-#define SEXP_CORE_DEFINE_SYNTAX PUCHI_CORE_DEFINE_SYNTAX
-#define SEXP_CORE_DEFINE PUCHI_CORE_DEFINE
-#define SEXP_CORE_LET_SYNTAX PUCHI_CORE_LET_SYNTAX
-#define SEXP_CORE_LETREC_SYNTAX PUCHI_CORE_LETREC_SYNTAX
-#define SEXP_CORE_BEGIN PUCHI_CORE_BEGIN
-#define SEXP_CORE_QUOTE PUCHI_CORE_QUOTE
-#define SEXP_CORE_LAMBDA PUCHI_CORE_LAMBDA
-#define SEXP_CORE_SET PUCHI_CORE_SET
-#define SEXP_CORE_IF PUCHI_CORE_IF
-#define SEXP_OPC_PREDICATE PUCHI_OPC_PREDICATE
-#define SEXP_OPC_ARITHMETIC PUCHI_OPC_ARITHMETIC
-#define SEXP_OPC_IO PUCHI_OPC_IO
-#define SEXP_OPC_FOREIGN PUCHI_OPC_FOREIGN
-#define SEXP_OPC_PARAMETER PUCHI_OPC_PARAMETER
-#define SEXP_OPC_GENERIC PUCHI_OPC_GENERIC
-#define SEXP_OPC_TYPE_PREDICATE PUCHI_OPC_TYPE_PREDICATE
-#define SEXP_OPC_NUM_OP_CLASSES PUCHI_OPC_NUM_OP_CLASSES
-#define SEXP_OPC_CONSTRUCTOR PUCHI_OPC_CONSTRUCTOR
-#define SEXP_OPC_SETTER PUCHI_OPC_SETTER
-#define SEXP_OPC_GETTER PUCHI_OPC_GETTER
-#define SEXP_OPC_ARITHMETIC_CMP PUCHI_OPC_ARITHMETIC_CMP
 #define sexp_define_foreign(c,e,s,n,f) puchi_define_foreign(c,e,s,n,f)
 #define sexp_define_foreign_param(c,e,s,n,f,p) puchi_define_foreign_param(c,e,s,n,f,p)
 #define sexp_define_foreign_opt(c,e,s,n,f,p) puchi_define_foreign_opt(c,e,s,n,f,p)
@@ -2305,7 +2373,11 @@ typedef puchi_lsint_t sexp_lsint_t;
 #define sexp_nan          (puchi_f64_from_bits(0x7FF8000000000000ULL))
 #endif
 
+#if defined(PUCHI_TEST_CLIB)
 #define SEXP_API    extern
+#else
+#define SEXP_API    static
+#endif
 
 
 /* puchi: ABI fingerprint omitted; see puchi_test_api.inc under PUCHI_TEST */
@@ -2404,6 +2476,11 @@ typedef puchi_lsint_t sexp_lsint_t;
 
 
 /* procedure types */
+typedef sexp (*sexp_proc3) (sexp, sexp, sexp_sint_t, sexp, sexp);
+typedef sexp (*sexp_proc4) (sexp, sexp, sexp_sint_t, sexp, sexp, sexp);
+typedef sexp (*sexp_proc5) (sexp, sexp, sexp_sint_t, sexp, sexp, sexp, sexp);
+typedef sexp (*sexp_proc6) (sexp, sexp, sexp_sint_t, sexp, sexp, sexp, sexp, sexp);
+typedef sexp (*sexp_proc7) (sexp, sexp, sexp_sint_t, sexp, sexp, sexp, sexp, sexp, sexp);
 #if defined(PUCHI_TEST)
 SEXP_API sexp sexp_init_library(sexp, sexp, sexp_sint_t, sexp, const char*, const sexp_abi_identifier_t);
 #endif
@@ -2449,7 +2526,6 @@ SEXP_API sexp sexp_gc(sexp ctx, size_t *sum_freed);
 SEXP_API void sexp_preserve_object(sexp ctx, sexp x);
 SEXP_API void sexp_release_object(sexp ctx, sexp x);
 
-void* sexp_alloc(sexp ctx, size_t size);
 
 
 
@@ -3597,6 +3673,90 @@ SEXP_API sexp sexp_finalize_c_type (sexp ctx, sexp self, sexp_sint_t n, sexp obj
 #define sexp_register_type(ctx, a, b, c, d, e, f, g, h, i, j, k, l, m, o, p, q, r, sn, s) sexp_register_type_op(ctx, NULL, 18, a, b, c, d, e, f, g, h, i, j, k, l, m, o, p, q, r, sn, s)
 #define sexp_lookup_type(ctx, name, id) sexp_lookup_type_op(ctx, NULL, 2, name, id)
 
+enum sexp_opcode_names {
+  /*  0 00 */ SEXP_OP_NOOP,
+  /*  1 01 */ SEXP_OP_RAISE,
+  /*  2 02 */ SEXP_OP_RESUMECC,
+  /*  3 03 */ SEXP_OP_CALLCC,
+  /*  4 04 */ SEXP_OP_APPLY1,
+  /*  5 05 */ SEXP_OP_TAIL_CALL,
+  /*  6 06 */ SEXP_OP_CALL,
+  /*  7 07 */ SEXP_OP_FCALL0,
+  /*  8 08 */ SEXP_OP_FCALL1,
+  /*  9 09 */ SEXP_OP_FCALL2,
+  /* 10 0A */ SEXP_OP_FCALL3,
+  /* 11 0B */ SEXP_OP_FCALL4,
+  /* 12 0C */ SEXP_OP_FCALLN,
+  /* 13 0D */ SEXP_OP_JUMP_UNLESS,
+  /* 14 0E */ SEXP_OP_JUMP,
+  /* 15 0F */ SEXP_OP_PUSH,
+  /* 17 11 */ SEXP_OP_DROP,
+  /* 18 12 */ SEXP_OP_GLOBAL_REF,
+  /* 19 13 */ SEXP_OP_GLOBAL_KNOWN_REF,
+  /* 20 14 */ SEXP_OP_PARAMETER_REF,
+  /* 21 15 */ SEXP_OP_STACK_REF,
+  /* 22 16 */ SEXP_OP_LOCAL_REF,
+  /* 23 17 */ SEXP_OP_LOCAL_SET,
+  /* 24 18 */ SEXP_OP_CLOSURE_REF,
+  /* 25 19 */ SEXP_OP_CLOSURE_VARS,
+  /* 26 1A */ SEXP_OP_VECTOR_REF,
+  /* 27 1B */ SEXP_OP_VECTOR_SET,
+  /* 28 1C */ SEXP_OP_VECTOR_LENGTH,
+  /* 29 1D */ SEXP_OP_BYTES_REF,
+  /* 30 1E */ SEXP_OP_BYTES_SET,
+  /* 31 1F */ SEXP_OP_BYTES_LENGTH,
+  /* 32 20 */ SEXP_OP_STRING_REF,
+  /* 33 21 */ SEXP_OP_STRING_SET,
+  /* 34 22 */ SEXP_OP_STRING_LENGTH,
+  /* 35 23 */ SEXP_OP_STRING_CURSOR_NEXT,
+  /* 36 24 */ SEXP_OP_STRING_CURSOR_PREV,
+  /* 37 25 */ SEXP_OP_STRING_CURSOR_END,
+  /* 38 26 */ SEXP_OP_MAKE_PROCEDURE,
+  /* 39 27 */ SEXP_OP_MAKE_VECTOR,
+  /* 40 28 */ SEXP_OP_MAKE_EXCEPTION,
+  /* 41 29 */ SEXP_OP_AND,
+  /* 42 2A */ SEXP_OP_NULLP,
+  /* 43 2B */ SEXP_OP_FIXNUMP,
+  /* 44 2C */ SEXP_OP_SYMBOLP,
+  /* 45 2D */ SEXP_OP_CHARP,
+  /* 46 2E */ SEXP_OP_EOFP,
+  /* 47 2F */ SEXP_OP_TYPEP,
+  /* 48 30 */ SEXP_OP_MAKE,
+  /* 49 31 */ SEXP_OP_SLOT_REF,
+  /* 50 32 */ SEXP_OP_SLOT_SET,
+  /* 51 33 */ SEXP_OP_ISA,
+  /* 52 34 */ SEXP_OP_SLOTN_REF,
+  /* 53 35 */ SEXP_OP_SLOTN_SET,
+  /* 54 36 */ SEXP_OP_CAR,
+  /* 55 37 */ SEXP_OP_CDR,
+  /* 56 38 */ SEXP_OP_SET_CAR,
+  /* 57 39 */ SEXP_OP_SET_CDR,
+  /* 58 3A */ SEXP_OP_CONS,
+  /* 59 3B */ SEXP_OP_ADD,
+  /* 60 3C */ SEXP_OP_SUB,
+  /* 61 3D */ SEXP_OP_MUL,
+  /* 62 3E */ SEXP_OP_DIV,
+  /* 63 3F */ SEXP_OP_QUOTIENT,
+  /* 64 40 */ SEXP_OP_REMAINDER,
+  /* 65 41 */ SEXP_OP_LT,
+  /* 66 42 */ SEXP_OP_LE,
+  /* 67 43 */ SEXP_OP_EQN,
+  /* 68 44 */ SEXP_OP_EQ,
+  /* 69 45 */ SEXP_OP_CHAR2INT,
+  /* 70 46 */ SEXP_OP_INT2CHAR,
+  /* 71 47 */ SEXP_OP_CHAR_UPCASE,
+  /* 72 48 */ SEXP_OP_CHAR_DOWNCASE,
+  /* 73 49 */ SEXP_OP_WRITE_CHAR,
+  /* 74 4A */ SEXP_OP_WRITE_STRING,
+  /* 75 4B */ SEXP_OP_READ_CHAR,
+  /* 76 4C */ SEXP_OP_PEEK_CHAR,
+  /* 79 4F */ SEXP_OP_RET,
+  /* 80 50 */ SEXP_OP_DONE,
+  SEXP_OP_SCP,
+  SEXP_OP_SC_LT,
+  SEXP_OP_SC_LE,
+  SEXP_OP_NUM_OPCODES
+};
 
 /* ==== eval.h (stripped ABI; SEXP_API decls) ==== */
 /* stripped eval.h (SEXP_API + gating) */
@@ -3608,7 +3768,33 @@ SEXP_API sexp sexp_finalize_c_type (sexp ctx, sexp self, sexp_sint_t n, sexp obj
 
 /* puchi: no disk init/meta/leap file names in core */
 
+enum sexp_core_form_names {
+  SEXP_CORE_DEFINE = 1,
+  SEXP_CORE_SET,
+  SEXP_CORE_LAMBDA,
+  SEXP_CORE_IF,
+  SEXP_CORE_BEGIN,
+  SEXP_CORE_QUOTE,
+  SEXP_CORE_SYNTAX_QUOTE,
+  SEXP_CORE_DEFINE_SYNTAX,
+  SEXP_CORE_LET_SYNTAX,
+  SEXP_CORE_LETREC_SYNTAX
+};
 
+enum sexp_opcode_classes {
+  SEXP_OPC_GENERIC = 1,
+  SEXP_OPC_TYPE_PREDICATE,
+  SEXP_OPC_PREDICATE,
+  SEXP_OPC_ARITHMETIC,
+  SEXP_OPC_ARITHMETIC_CMP,
+  SEXP_OPC_IO,
+  SEXP_OPC_CONSTRUCTOR,
+  SEXP_OPC_GETTER,
+  SEXP_OPC_SETTER,
+  SEXP_OPC_PARAMETER,
+  SEXP_OPC_FOREIGN,
+  SEXP_OPC_NUM_OP_CLASSES
+};
 
 #if defined(PUCHI_TEST)
 SEXP_API const char** sexp_opcode_names;
@@ -3751,10 +3937,678 @@ SEXP_API int sexp_rest_unused_p (sexp lambda);
 #define sexp_env_import(ctx, a, b, c, d) sexp_env_import_op(ctx, NULL, 4, a, b, c, d)
 #define sexp_identifierp(ctx, x) sexp_identifierp_op(ctx, NULL, 1, x)
 
+/* ==== TEST_CLIB sexp_* -> puchi_* / puchi_TEST_* aliases ==== */
+/* ==== TEST_CLIB: sexp_* -> puchi_* / puchi_TEST_* (generated) ==== */
+#if defined(PUCHI_TEST_CLIB)
+
+#undef sexp_add_static_libraries
+#define sexp_add_static_libraries puchi_TEST_add_static_libraries
+#undef sexp_analyze
+#define sexp_analyze puchi_TEST_analyze
+#undef sexp_apply_no_err_handler
+#define sexp_apply_no_err_handler puchi_TEST_apply_no_err_handler
+#undef sexp_bignum_add
+#define sexp_bignum_add puchi_TEST_bignum_add
+#undef sexp_bignum_compare
+#define sexp_bignum_compare puchi_TEST_bignum_compare
+#undef sexp_bignum_expt
+#define sexp_bignum_expt puchi_TEST_bignum_expt
+#undef sexp_bignum_fxadd
+#define sexp_bignum_fxadd puchi_TEST_bignum_fxadd
+#undef sexp_bignum_fxdiv
+#define sexp_bignum_fxdiv puchi_TEST_bignum_fxdiv
+#undef sexp_bignum_fxmul
+#define sexp_bignum_fxmul puchi_TEST_bignum_fxmul
+#undef sexp_bignum_fxsub
+#define sexp_bignum_fxsub puchi_TEST_bignum_fxsub
+#undef sexp_bignum_hi
+#define sexp_bignum_hi puchi_TEST_bignum_hi
+#undef sexp_bignum_mul
+#define sexp_bignum_mul puchi_TEST_bignum_mul
+#undef sexp_bignum_normalize
+#define sexp_bignum_normalize puchi_TEST_bignum_normalize
+#undef sexp_bignum_sqrt
+#define sexp_bignum_sqrt puchi_TEST_bignum_sqrt
+#undef sexp_bignum_sub
+#define sexp_bignum_sub puchi_TEST_bignum_sub
+#undef sexp_buffered_flush
+#define sexp_buffered_flush puchi_TEST_buffered_flush
+#undef sexp_buffered_read_char
+#define sexp_buffered_read_char puchi_TEST_buffered_read_char
+#undef sexp_buffered_write_string_n
+#define sexp_buffered_write_string_n puchi_TEST_buffered_write_string_n
+#undef sexp_char_ready_p
+#define sexp_char_ready_p puchi_TEST_char_ready_p
+#undef sexp_compile_error
+#define sexp_compile_error puchi_TEST_compile_error
+#undef sexp_compile_op
+#define sexp_compile_op puchi_TEST_compile_op
+#undef sexp_complete_bytecode
+#define sexp_complete_bytecode puchi_TEST_complete_bytecode
+#undef sexp_complex_acos
+#define sexp_complex_acos puchi_TEST_complex_acos
+#undef sexp_complex_asin
+#define sexp_complex_asin puchi_TEST_complex_asin
+#undef sexp_complex_atan
+#define sexp_complex_atan puchi_TEST_complex_atan
+#undef sexp_complex_cos
+#define sexp_complex_cos puchi_TEST_complex_cos
+#undef sexp_complex_exp
+#define sexp_complex_exp puchi_TEST_complex_exp
+#undef sexp_complex_expt
+#define sexp_complex_expt puchi_TEST_complex_expt
+#undef sexp_complex_imag_op
+#define sexp_complex_imag_op puchi_TEST_complex_imag_op
+#undef sexp_complex_log
+#define sexp_complex_log puchi_TEST_complex_log
+#undef sexp_complex_normalize
+#define sexp_complex_normalize puchi_TEST_complex_normalize
+#undef sexp_complex_real_op
+#define sexp_complex_real_op puchi_TEST_complex_real_op
+#undef sexp_complex_sin
+#define sexp_complex_sin puchi_TEST_complex_sin
+#undef sexp_complex_sqrt
+#define sexp_complex_sqrt puchi_TEST_complex_sqrt
+#undef sexp_complex_tan
+#define sexp_complex_tan puchi_TEST_complex_tan
+#undef sexp_copy_bignum
+#define sexp_copy_bignum puchi_TEST_copy_bignum
+#undef sexp_current_module_path_op
+#define sexp_current_module_path_op puchi_TEST_current_module_path_op
+#undef sexp_debug_alloc_sizes
+#define sexp_debug_alloc_sizes puchi_TEST_debug_alloc_sizes
+#undef sexp_debug_alloc_times
+#define sexp_debug_alloc_times puchi_TEST_debug_alloc_times
+#undef sexp_dk
+#define sexp_dk puchi_TEST_dk
+#undef sexp_double_to_bignum
+#define sexp_double_to_bignum puchi_TEST_double_to_bignum
+#undef sexp_double_to_half
+#define sexp_double_to_half puchi_TEST_double_to_half
+#undef sexp_double_to_quarter
+#define sexp_double_to_quarter puchi_TEST_double_to_quarter
+#undef sexp_double_to_ratio
+#define sexp_double_to_ratio puchi_TEST_double_to_ratio
+#undef sexp_double_to_ratio_2
+#define sexp_double_to_ratio_2 puchi_TEST_double_to_ratio_2
+#undef sexp_emit
+#define sexp_emit puchi_TEST_emit
+#undef sexp_emit_return
+#define sexp_emit_return puchi_TEST_emit_return
+#undef sexp_equalp_bound
+#define sexp_equalp_bound puchi_TEST_equalp_bound
+#undef sexp_expand_bcode
+#define sexp_expand_bcode puchi_TEST_expand_bcode
+#undef sexp_finalize_c_type
+#define sexp_finalize_c_type puchi_TEST_finalize_c_type
+#undef sexp_finalize_port
+#define sexp_finalize_port puchi_TEST_finalize_port
+#undef sexp_find_module_file
+#define sexp_find_module_file puchi_TEST_find_module_file
+#undef sexp_find_module_file_op
+#define sexp_find_module_file_op puchi_TEST_find_module_file_op
+#undef sexp_find_module_file_raw
+#define sexp_find_module_file_raw puchi_TEST_find_module_file_raw
+#undef sexp_fixnum_to_bignum
+#define sexp_fixnum_to_bignum puchi_TEST_fixnum_to_bignum
+#undef sexp_flonump_op
+#define sexp_flonump_op puchi_TEST_flonump_op
+#undef sexp_free_vars
+#define sexp_free_vars puchi_TEST_free_vars
+#undef sexp_gc_init
+#define sexp_gc_init puchi_TEST_gc_init
+#undef sexp_generate
+#define sexp_generate puchi_TEST_generate
+#undef sexp_generate_op
+#define sexp_generate_op puchi_TEST_generate_op
+#undef sexp_get_port_fileno
+#define sexp_get_port_fileno puchi_TEST_get_port_fileno
+#undef sexp_get_port_fold_case
+#define sexp_get_port_fold_case puchi_TEST_get_port_fold_case
+#undef sexp_grow_heap
+#define sexp_grow_heap puchi_TEST_grow_heap
+#undef sexp_half_to_double
+#define sexp_half_to_double puchi_TEST_half_to_double
+#undef sexp_id_name
+#define sexp_id_name puchi_TEST_id_name
+#undef sexp_identifierp_op
+#define sexp_identifierp_op puchi_TEST_identifierp_op
+#undef sexp_idp
+#define sexp_idp puchi_TEST_idp
+#undef sexp_is_separator
+#define sexp_is_separator puchi_TEST_is_separator
+#undef sexp_load_module_file
+#define sexp_load_module_file puchi_TEST_load_module_file
+#undef sexp_load_module_file_op
+#define sexp_load_module_file_op puchi_TEST_load_module_file_op
+#undef sexp_load_op
+#define sexp_load_op puchi_TEST_load_op
+#undef sexp_load_standard_env
+#define sexp_load_standard_env puchi_TEST_load_standard_env
+#undef sexp_make_bignum
+#define sexp_make_bignum puchi_TEST_make_bignum
+#undef sexp_make_complex
+#define sexp_make_complex puchi_TEST_make_complex
+#undef sexp_make_heap
+#define sexp_make_heap puchi_TEST_make_heap
+#undef sexp_make_integer_from_lsint
+#define sexp_make_integer_from_lsint puchi_TEST_make_integer_from_lsint
+#undef sexp_make_lambda
+#define sexp_make_lambda puchi_TEST_make_lambda
+#undef sexp_make_lit
+#define sexp_make_lit puchi_TEST_make_lit
+#undef sexp_make_non_null_input_output_port
+#define sexp_make_non_null_input_output_port puchi_TEST_make_non_null_input_output_port
+#undef sexp_make_non_null_input_port
+#define sexp_make_non_null_input_port puchi_TEST_make_non_null_input_port
+#undef sexp_make_non_null_output_port
+#define sexp_make_non_null_output_port puchi_TEST_make_non_null_output_port
+#undef sexp_make_opcode
+#define sexp_make_opcode puchi_TEST_make_opcode
+#undef sexp_make_promise
+#define sexp_make_promise puchi_TEST_make_promise
+#undef sexp_make_ratio
+#define sexp_make_ratio puchi_TEST_make_ratio
+#undef sexp_make_ref
+#define sexp_make_ref puchi_TEST_make_ref
+#undef sexp_make_trampoline
+#define sexp_make_trampoline puchi_TEST_make_trampoline
+#undef sexp_make_unsigned_integer_from_luint
+#define sexp_make_unsigned_integer_from_luint puchi_TEST_make_unsigned_integer_from_luint
+#undef sexp_mark
+#define sexp_mark puchi_TEST_mark
+#undef sexp_open_input_file_descriptor
+#define sexp_open_input_file_descriptor puchi_TEST_open_input_file_descriptor
+#undef sexp_open_output_file_descriptor
+#define sexp_open_output_file_descriptor puchi_TEST_open_output_file_descriptor
+#undef sexp_param_index
+#define sexp_param_index puchi_TEST_param_index
+#undef sexp_poll_port
+#define sexp_poll_port puchi_TEST_poll_port
+#undef sexp_port_binaryp_op
+#define sexp_port_binaryp_op puchi_TEST_port_binaryp_op
+#undef sexp_port_openp_op
+#define sexp_port_openp_op puchi_TEST_port_openp_op
+#undef sexp_port_outputp_op
+#define sexp_port_outputp_op puchi_TEST_port_outputp_op
+#undef sexp_print_vm_profile
+#define sexp_print_vm_profile puchi_TEST_print_vm_profile
+#undef sexp_push_op
+#define sexp_push_op puchi_TEST_push_op
+#undef sexp_push_utf8_char
+#define sexp_push_utf8_char puchi_TEST_push_utf8_char
+#undef sexp_quarter_to_double
+#define sexp_quarter_to_double puchi_TEST_quarter_to_double
+#undef sexp_ratio_ceiling
+#define sexp_ratio_ceiling puchi_TEST_ratio_ceiling
+#undef sexp_ratio_compare
+#define sexp_ratio_compare puchi_TEST_ratio_compare
+#undef sexp_ratio_denominator_op
+#define sexp_ratio_denominator_op puchi_TEST_ratio_denominator_op
+#undef sexp_ratio_floor
+#define sexp_ratio_floor puchi_TEST_ratio_floor
+#undef sexp_ratio_normalize
+#define sexp_ratio_normalize puchi_TEST_ratio_normalize
+#undef sexp_ratio_numerator_op
+#define sexp_ratio_numerator_op puchi_TEST_ratio_numerator_op
+#undef sexp_ratio_round
+#define sexp_ratio_round puchi_TEST_ratio_round
+#undef sexp_ratio_trunc
+#define sexp_ratio_trunc puchi_TEST_ratio_trunc
+#undef sexp_read_bignum
+#define sexp_read_bignum puchi_TEST_read_bignum
+#undef sexp_read_complex_tail
+#define sexp_read_complex_tail puchi_TEST_read_complex_tail
+#undef sexp_read_float_tail
+#define sexp_read_float_tail puchi_TEST_read_float_tail
+#undef sexp_read_number
+#define sexp_read_number puchi_TEST_read_number
+#undef sexp_read_raw
+#define sexp_read_raw puchi_TEST_read_raw
+#undef sexp_read_string
+#define sexp_read_string puchi_TEST_read_string
+#undef sexp_read_symbol
+#define sexp_read_symbol puchi_TEST_read_symbol
+#undef sexp_read_utf8_char
+#define sexp_read_utf8_char puchi_TEST_read_utf8_char
+#undef sexp_register_optimization
+#define sexp_register_optimization puchi_TEST_register_optimization
+#undef sexp_reset_vm_profile
+#define sexp_reset_vm_profile puchi_TEST_reset_vm_profile
+#undef sexp_set_port_fold_case
+#define sexp_set_port_fold_case puchi_TEST_set_port_fold_case
+#undef sexp_set_port_line_op
+#define sexp_set_port_line_op puchi_TEST_set_port_line_op
+#undef sexp_set_standard_ports
+#define sexp_set_standard_ports puchi_TEST_set_standard_ports
+#undef sexp_shrink_bcode
+#define sexp_shrink_bcode puchi_TEST_shrink_bcode
+#undef sexp_simplify
+#define sexp_simplify puchi_TEST_simplify
+#undef sexp_square_brackets_sym
+#define sexp_square_brackets_sym puchi_TEST_square_brackets_sym
+#undef sexp_stack_trace
+#define sexp_stack_trace puchi_TEST_stack_trace
+#undef sexp_stack_trace_op
+#define sexp_stack_trace_op puchi_TEST_stack_trace_op
+#undef sexp_stream_portp_op
+#define sexp_stream_portp_op puchi_TEST_stream_portp_op
+#undef sexp_strip_synclos
+#define sexp_strip_synclos puchi_TEST_strip_synclos
+#undef sexp_sweep
+#define sexp_sweep puchi_TEST_sweep
+#undef sexp_thread_parameters
+#define sexp_thread_parameters puchi_TEST_thread_parameters
+#undef sexp_thread_parameters_set
+#define sexp_thread_parameters_set puchi_TEST_thread_parameters_set
+#undef sexp_warn
+#define sexp_warn puchi_TEST_warn
+#undef sexp_write_bignum
+#define sexp_write_bignum puchi_TEST_write_bignum
+#undef sexp_write_simple_object
+#define sexp_write_simple_object puchi_TEST_write_simple_object
+#undef sexp_write_utf8_char
+#define sexp_write_utf8_char puchi_TEST_write_utf8_char
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_acos
+#define sexp_acos puchi_acos
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#if !defined(puchi_add)
+#undef sexp_add
+#define sexp_add puchi_add
+#endif
+#endif
+#undef sexp_add_module_directory_op
+#define sexp_add_module_directory_op puchi_add_module_directory_op
+#undef sexp_alloc_tagged_aux
+#define sexp_alloc_tagged_aux puchi_alloc_tagged_aux
+#undef sexp_append2_op
+#define sexp_append2_op puchi_append2_op
+#undef sexp_apply
+#define sexp_apply puchi_apply
+#undef sexp_apply1
+#define sexp_apply1 puchi_apply1
+#undef sexp_apply2
+#define sexp_apply2 puchi_apply2
+#undef sexp_apply3
+#define sexp_apply3 puchi_apply3
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_asin
+#define sexp_asin puchi_asin
+#endif
+#undef sexp_assq_op
+#define sexp_assq_op puchi_assq_op
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_atan
+#define sexp_atan puchi_atan
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_bignum_to_double
+#define sexp_bignum_to_double puchi_bignum_to_double
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_bignum_to_sint
+#define sexp_bignum_to_sint puchi_bignum_to_sint
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_bignum_to_uint
+#define sexp_bignum_to_uint puchi_bignum_to_uint
+#endif
+#undef sexp_buffered_write_char
+#define sexp_buffered_write_char puchi_buffered_write_char
+#undef sexp_buffered_write_string
+#define sexp_buffered_write_string puchi_buffered_write_string
+#undef sexp_c_string
+#define sexp_c_string puchi_c_string
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_ceiling
+#define sexp_ceiling puchi_ceiling
+#endif
+#undef sexp_close_port_op
+#define sexp_close_port_op puchi_close_port_op
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_compare
+#define sexp_compare puchi_compare
+#endif
+#undef sexp_cons_op
+#define sexp_cons_op puchi_cons_op
+#undef sexp_copy_list_op
+#define sexp_copy_list_op puchi_copy_list_op
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_cos
+#define sexp_cos puchi_cos
+#endif
+#undef sexp_current_environment
+#define sexp_current_environment puchi_current_environment
+#undef sexp_define_foreign_aux
+#define sexp_define_foreign_aux puchi_define_foreign_aux
+#undef sexp_define_foreign_param_aux
+#define sexp_define_foreign_param_aux puchi_define_foreign_param_aux
+#undef sexp_define_foreign_proc_aux
+#define sexp_define_foreign_proc_aux puchi_define_foreign_proc_aux
+#if !defined(puchi_destroy_context)
+#undef sexp_destroy_context
+#define sexp_destroy_context puchi_destroy_context
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#if !defined(puchi_div)
+#undef sexp_div
+#define sexp_div puchi_div
+#endif
+#endif
+#undef sexp_env_cell
+#define sexp_env_cell puchi_env_cell
+#undef sexp_env_cell_define
+#define sexp_env_cell_define puchi_env_cell_define
+#undef sexp_env_define
+#define sexp_env_define puchi_env_define
+#undef sexp_env_exports_op
+#define sexp_env_exports_op puchi_env_exports_op
+#undef sexp_env_import_op
+#define sexp_env_import_op puchi_env_import_op
+#undef sexp_env_parent_op
+#define sexp_env_parent_op puchi_env_parent_op
+#undef sexp_env_ref
+#define sexp_env_ref puchi_env_ref
+#undef sexp_env_rename
+#define sexp_env_rename puchi_env_rename
+#undef sexp_equalp_op
+#define sexp_equalp_op puchi_equalp_op
+#undef sexp_eval_op
+#define sexp_eval_op puchi_eval_op
+#undef sexp_eval_string
+#define sexp_eval_string puchi_eval_string
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_exact_sqrt
+#define sexp_exact_sqrt puchi_exact_sqrt
+#endif
+#undef sexp_exact_to_inexact
+#define sexp_exact_to_inexact puchi_exact_to_inexact
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_exp
+#define sexp_exp puchi_exp
+#endif
+#undef sexp_expt_op
+#define sexp_expt_op puchi_expt_op
+#undef sexp_extend_env
+#define sexp_extend_env puchi_extend_env
+#undef sexp_file_exception
+#define sexp_file_exception puchi_file_exception
+#if !defined(puchi_flonum_value)
+#undef sexp_flonum_value
+#define sexp_flonum_value puchi_flonum_value
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_floor
+#define sexp_floor puchi_floor
+#endif
+#undef sexp_flush_output_op
+#define sexp_flush_output_op puchi_flush_output_op
+#if !defined(puchi_gc)
+#undef sexp_gc
+#define sexp_gc puchi_gc
+#endif
+#undef sexp_get_output_string_op
+#define sexp_get_output_string_op puchi_get_output_string_op
+#undef sexp_get_stack_trace
+#define sexp_get_stack_trace puchi_get_stack_trace
+#undef sexp_identifier_eq_op
+#define sexp_identifier_eq_op puchi_identifier_eq_op
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_inexact_sqrt
+#define sexp_inexact_sqrt puchi_inexact_sqrt
+#endif
+#undef sexp_inexact_to_exact
+#define sexp_inexact_to_exact puchi_inexact_to_exact
+#undef sexp_init
+#define sexp_init puchi_init
+#undef sexp_intern
+#define sexp_intern puchi_intern
+#undef sexp_length_op
+#define sexp_length_op puchi_length_op
+#undef sexp_list2
+#define sexp_list2 puchi_list2
+#undef sexp_list3
+#define sexp_list3 puchi_list3
+#undef sexp_list_to_uvector_op
+#define sexp_list_to_uvector_op puchi_list_to_uvector_op
+#undef sexp_list_to_vector_op
+#define sexp_list_to_vector_op puchi_list_to_vector_op
+#undef sexp_listp_op
+#define sexp_listp_op puchi_listp_op
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_log
+#define sexp_log puchi_log
+#endif
+#undef sexp_lookup_type_op
+#define sexp_lookup_type_op puchi_lookup_type_op
+#undef sexp_make_bytes_op
+#define sexp_make_bytes_op puchi_make_bytes_op
+#undef sexp_make_child_context
+#define sexp_make_child_context puchi_make_child_context
+#undef sexp_make_constructor_op
+#define sexp_make_constructor_op puchi_make_constructor_op
+#undef sexp_make_context
+#define sexp_make_context puchi_make_context
+#undef sexp_make_cpointer
+#define sexp_make_cpointer puchi_make_cpointer
+#undef sexp_make_env_op
+#define sexp_make_env_op puchi_make_env_op
+#undef sexp_make_ephemeron_op
+#define sexp_make_ephemeron_op puchi_make_ephemeron_op
+#undef sexp_make_eval_context
+#define sexp_make_eval_context puchi_make_eval_context
+#undef sexp_make_exception
+#define sexp_make_exception puchi_make_exception
+#if defined(PUCHI_TEST)
+#undef sexp_make_fileno_op
+#define sexp_make_fileno_op puchi_make_fileno_op
+#endif
+#if !defined(PUCHI_INTEGER_ONLY) || defined(PUCHI_TEST)
+#if !defined(puchi_make_flonum)
+#undef sexp_make_flonum
+#define sexp_make_flonum puchi_make_flonum
+#endif
+#endif
+#undef sexp_make_foreign
+#define sexp_make_foreign puchi_make_foreign
+#undef sexp_make_getter_op
+#define sexp_make_getter_op puchi_make_getter_op
+#undef sexp_make_immutable_op
+#define sexp_make_immutable_op puchi_make_immutable_op
+#undef sexp_make_input_port
+#define sexp_make_input_port puchi_make_input_port
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#if !defined(puchi_make_integer)
+#undef sexp_make_integer
+#define sexp_make_integer puchi_make_integer
+#endif
+#endif
+#undef sexp_make_null_env_op
+#define sexp_make_null_env_op puchi_make_null_env_op
+#undef sexp_make_output_port
+#define sexp_make_output_port puchi_make_output_port
+#undef sexp_make_primitive_env_op
+#define sexp_make_primitive_env_op puchi_make_primitive_env_op
+#undef sexp_make_procedure_op
+#define sexp_make_procedure_op puchi_make_procedure_op
+#undef sexp_make_setter_op
+#define sexp_make_setter_op puchi_make_setter_op
+#undef sexp_make_standard_env_op
+#define sexp_make_standard_env_op puchi_make_standard_env_op
+#undef sexp_make_string_op
+#define sexp_make_string_op puchi_make_string_op
+#undef sexp_make_synclo_op
+#define sexp_make_synclo_op puchi_make_synclo_op
+#undef sexp_make_type_predicate_op
+#define sexp_make_type_predicate_op puchi_make_type_predicate_op
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#if !defined(puchi_make_unsigned_integer)
+#undef sexp_make_unsigned_integer
+#define sexp_make_unsigned_integer puchi_make_unsigned_integer
+#endif
+#endif
+#undef sexp_make_uvector_op
+#define sexp_make_uvector_op puchi_make_uvector_op
+#undef sexp_make_vector_op
+#define sexp_make_vector_op puchi_make_vector_op
+#undef sexp_maybe_wrap_error
+#define sexp_maybe_wrap_error puchi_maybe_wrap_error
+#undef sexp_memq_op
+#define sexp_memq_op puchi_memq_op
+#undef sexp_meta_environment
+#define sexp_meta_environment puchi_meta_environment
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#if !defined(puchi_mul)
+#undef sexp_mul
+#define sexp_mul puchi_mul
+#endif
+#endif
+#undef sexp_nreverse_op
+#define sexp_nreverse_op puchi_nreverse_op
+#undef sexp_open_input_string_op
+#define sexp_open_input_string_op puchi_open_input_string_op
+#undef sexp_open_output_string_op
+#define sexp_open_output_string_op puchi_open_output_string_op
+#undef sexp_parameter_ref
+#define sexp_parameter_ref puchi_parameter_ref
+#undef sexp_preserve_object
+#define sexp_preserve_object puchi_preserve_object
+#undef sexp_print_exception_op
+#define sexp_print_exception_op puchi_print_exception_op
+#undef sexp_print_exception_stack_trace_op
+#define sexp_print_exception_stack_trace_op puchi_print_exception_stack_trace_op
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_quotient
+#define sexp_quotient puchi_quotient
+#endif
+#undef sexp_range_exception
+#define sexp_range_exception puchi_range_exception
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_ratio_to_double
+#define sexp_ratio_to_double puchi_ratio_to_double
+#endif
+#undef sexp_read_error
+#define sexp_read_error puchi_read_error
+#undef sexp_read_from_string
+#define sexp_read_from_string puchi_read_from_string
+#undef sexp_read_op
+#define sexp_read_op puchi_read_op
+#undef sexp_register_simple_type_op
+#define sexp_register_simple_type_op puchi_register_simple_type_op
+#undef sexp_register_type_op
+#define sexp_register_type_op puchi_register_type_op
+#undef sexp_release_object
+#define sexp_release_object puchi_release_object
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_remainder
+#define sexp_remainder puchi_remainder
+#endif
+#undef sexp_reverse_op
+#define sexp_reverse_op puchi_reverse_op
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_round
+#define sexp_round puchi_round
+#endif
+#undef sexp_scheme_init
+#define sexp_scheme_init puchi_scheme_init
+#undef sexp_set_current_environment
+#define sexp_set_current_environment puchi_set_current_environment
+#undef sexp_set_parameter
+#define sexp_set_parameter puchi_set_parameter
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_sin
+#define sexp_sin puchi_sin
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_sqrt
+#define sexp_sqrt puchi_sqrt
+#endif
+#undef sexp_string_cmp_op
+#define sexp_string_cmp_op puchi_string_cmp_op
+#undef sexp_string_concatenate_op
+#define sexp_string_concatenate_op puchi_string_concatenate_op
+#undef sexp_string_cursor_offset
+#define sexp_string_cursor_offset puchi_string_cursor_offset
+#undef sexp_string_cursor_to_index
+#define sexp_string_cursor_to_index puchi_string_cursor_to_index
+#undef sexp_string_index_to_cursor
+#define sexp_string_index_to_cursor puchi_string_index_to_cursor
+#undef sexp_string_to_number_op
+#define sexp_string_to_number_op puchi_string_to_number_op
+#undef sexp_string_to_symbol_op
+#define sexp_string_to_symbol_op puchi_string_to_symbol_op
+#undef sexp_string_utf8_index_ref
+#define sexp_string_utf8_index_ref puchi_string_utf8_index_ref
+#undef sexp_string_utf8_index_set
+#define sexp_string_utf8_index_set puchi_string_utf8_index_set
+#undef sexp_string_utf8_length
+#define sexp_string_utf8_length puchi_string_utf8_length
+#undef sexp_string_utf8_prev
+#define sexp_string_utf8_prev puchi_string_utf8_prev
+#undef sexp_string_utf8_ref
+#define sexp_string_utf8_ref puchi_string_utf8_ref
+#undef sexp_string_utf8_set
+#define sexp_string_utf8_set puchi_string_utf8_set
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#if !defined(puchi_sub)
+#undef sexp_sub
+#define sexp_sub puchi_sub
+#endif
+#endif
+#undef sexp_subbytes_op
+#define sexp_subbytes_op puchi_subbytes_op
+#undef sexp_substring_op
+#define sexp_substring_op puchi_substring_op
+#undef sexp_symbol_to_string_op
+#define sexp_symbol_to_string_op puchi_symbol_to_string_op
+#undef sexp_syntactic_closure_expr_op
+#define sexp_syntactic_closure_expr_op puchi_syntactic_closure_expr_op
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_tan
+#define sexp_tan puchi_tan
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_to_double
+#define sexp_to_double puchi_to_double
+#endif
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+#undef sexp_trunc
+#define sexp_trunc puchi_trunc
+#endif
+#undef sexp_type_exception
+#define sexp_type_exception puchi_type_exception
+#undef sexp_type_slot_offset_op
+#define sexp_type_slot_offset_op puchi_type_slot_offset_op
+#undef sexp_user_exception
+#define sexp_user_exception puchi_user_exception
+#undef sexp_user_exception_ls
+#define sexp_user_exception_ls puchi_user_exception_ls
+#undef sexp_utf8_char_byte_count
+#define sexp_utf8_char_byte_count puchi_utf8_char_byte_count
+#undef sexp_utf8_encode_char
+#define sexp_utf8_encode_char puchi_utf8_encode_char
+#undef sexp_utf8_initial_byte_count
+#define sexp_utf8_initial_byte_count puchi_utf8_initial_byte_count
+#undef sexp_utf8_substring_op
+#define sexp_utf8_substring_op puchi_utf8_substring_op
+#undef sexp_warn_undefs_op
+#define sexp_warn_undefs_op puchi_warn_undefs_op
+#undef sexp_write_op
+#define sexp_write_op puchi_write_op
+#undef sexp_write_to_string
+#define sexp_write_to_string puchi_write_to_string
+#undef sexp_xtype_exception
+#define sexp_xtype_exception puchi_xtype_exception
+
+#endif
+
+
 #endif
 
 /* ========================================================================== */
-#if defined(PUCHI_IMPLEMENTATION)
+#if defined(PUCHI_IMPLEMENTATION) && !defined(PUCHI_TEST_CLIB)
 /* ========================================================================== */
 
 /* ==== puchi impl helpers ==== */
@@ -3879,7 +4733,7 @@ static size_t sexp_heap_total_size (sexp_heap h) {
 
 
 
-void sexp_free_heap (sexp_heap heap) {
+static void sexp_free_heap (sexp_heap heap) {
   /* host copy lives on the heap header; free via that callback */
   {
     struct sexp_static_library_list_t *link, *next;
@@ -3892,11 +4746,11 @@ void sexp_free_heap (sexp_heap heap) {
 }
 
 
-void sexp_preserve_object(sexp ctx, sexp x) {
+static void sexp_preserve_object(sexp ctx, sexp x) {
   sexp_global(ctx, SEXP_G_PRESERVATIVES) = sexp_cons(ctx, x, sexp_global(ctx, SEXP_G_PRESERVATIVES));
 }
 
-void sexp_release_object(sexp ctx, sexp x) {
+static void sexp_release_object(sexp ctx, sexp x) {
   sexp ls1, ls2;
   for (ls1=NULL, ls2=sexp_global(ctx, SEXP_G_PRESERVATIVES); sexp_pairp(ls2);
        ls1=ls2, ls2=sexp_cdr(ls2))
@@ -3998,12 +4852,12 @@ static void sexp_mark_one_start (sexp ctx, sexp* types, sexp x) {
   }
 }
 
-void sexp_mark (sexp ctx, sexp x) {
+static void sexp_mark (sexp ctx, sexp x) {
   sexp_mark_one_start(ctx, sexp_vector_data(sexp_global(ctx, SEXP_G_TYPES)), x);
 }
 
 
-int sexp_reset_weak_references(sexp ctx) {
+static int sexp_reset_weak_references(sexp ctx) {
   int i, len, broke, all_reset_p;
   sexp_heap h;
   sexp p, t, end, *v;
@@ -4051,7 +4905,7 @@ int sexp_reset_weak_references(sexp ctx) {
   return broke;
 }
 
-sexp sexp_finalize (sexp ctx) {
+static sexp sexp_finalize (sexp ctx) {
   size_t size;
   sexp p, t, end;
   sexp_free_list q, r;
@@ -4089,7 +4943,7 @@ sexp sexp_finalize (sexp ctx) {
   return sexp_make_fixnum(finalize_count);
 }
 
-sexp sexp_sweep (sexp ctx, size_t *sum_freed_ptr) {
+static sexp sexp_sweep (sexp ctx, size_t *sum_freed_ptr) {
   size_t freed, max_freed=0, sum_freed=0, size;
   sexp_heap h = sexp_context_heap(ctx);
   sexp p, end;
@@ -4153,7 +5007,7 @@ sexp sexp_sweep (sexp ctx, size_t *sum_freed_ptr) {
 
 #define sexp_mark_global_symbols(ctx)
 
-sexp sexp_gc (sexp ctx, size_t *sum_freed) {
+static sexp sexp_gc (sexp ctx, size_t *sum_freed) {
   sexp res, finalized SEXP_NO_WARN_UNUSED;
   sexp_mark_global_symbols(ctx);
   sexp_mark(ctx, ctx);
@@ -4164,7 +5018,7 @@ sexp sexp_gc (sexp ctx, size_t *sum_freed) {
   return res;
 }
 
-sexp_heap sexp_make_heap (const puchi_host *host, size_t size, size_t max_size, size_t chunk_size) {
+static sexp_heap sexp_make_heap (const puchi_host *host, size_t size, size_t max_size, size_t chunk_size) {
   sexp_free_list free, next;
   sexp_heap h;
   if (!host || !host->alloc || !host->free) return NULL;
@@ -4189,7 +5043,7 @@ sexp_heap sexp_make_heap (const puchi_host *host, size_t size, size_t max_size, 
   return h;
 }
 
-int sexp_grow_heap (sexp ctx, size_t size, size_t chunk_size) {
+static int sexp_grow_heap (sexp ctx, size_t size, size_t chunk_size) {
   size_t cur_size, new_size;
   sexp_heap tmp, h = sexp_heap_last(sexp_context_heap(ctx));
   cur_size = h->size;
@@ -4202,7 +5056,7 @@ int sexp_grow_heap (sexp ctx, size_t size, size_t chunk_size) {
   return (h->next != NULL);
 }
 
-void* sexp_try_alloc (sexp ctx, size_t size) {
+static void* sexp_try_alloc (sexp ctx, size_t size) {
   sexp_free_list ls1, ls2, ls3;
   sexp_heap h;
   for (h=sexp_context_heap(ctx); h; h=h->next) {
@@ -4225,7 +5079,7 @@ void* sexp_try_alloc (sexp ctx, size_t size) {
 }
 
 
-void* sexp_alloc (sexp ctx, size_t size) {
+static void* sexp_alloc (sexp ctx, size_t size) {
   void *res;
   size_t max_freed, sum_freed, total_size=0;
   sexp_heap h = sexp_context_heap(ctx);
@@ -4318,19 +5172,19 @@ static int is_precision_indicator(int c) {
     || c=='l' || c=='L' || c=='s' || c=='S';
 }
 
-int sexp_is_separator(int c) {
+static int sexp_is_separator(int c) {
   return 0<c && c<0x80 && sexp_separators[c];
 }
 
 
-sexp sexp_push_op(sexp ctx, sexp* loc, sexp x) {
+static sexp sexp_push_op(sexp ctx, sexp* loc, sexp x) {
   sexp tmp = sexp_cons(ctx, x, *loc);
   if (sexp_exceptionp(tmp)) return *loc;
   *loc = tmp;
   return tmp;
 }
 
-sexp sexp_alloc_tagged_aux(sexp ctx, size_t size, sexp_uint_t tag sexp_current_source_param) {
+static sexp sexp_alloc_tagged_aux(sexp ctx, size_t size, sexp_uint_t tag sexp_current_source_param) {
   sexp res = (sexp) sexp_alloc(ctx, size);
   if (res && ! sexp_exceptionp(res)) {
     sexp_pointer_tag(res) = tag;
@@ -4338,7 +5192,7 @@ sexp sexp_alloc_tagged_aux(sexp ctx, size_t size, sexp_uint_t tag sexp_current_s
   return res;
 }
 
-sexp sexp_write_simple_object (sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp writer, sexp out) {
+static sexp sexp_write_simple_object (sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp writer, sexp out) {
   sexp t, x;
   sexp_gc_var1(args);
   sexp_sint_t i, len, nulls=0;
@@ -4382,7 +5236,7 @@ sexp sexp_write_simple_object (sexp ctx, sexp self, sexp_sint_t n, sexp obj, sex
   return SEXP_VOID;
 }
 
-sexp sexp_write_uvector(sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp writer, sexp out) {
+static sexp sexp_write_uvector(sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp writer, sexp out) {
   sexp_uint_t i, len;
   char* str;
   sexp_gc_var2(f, tmp);
@@ -4437,7 +5291,7 @@ sexp sexp_write_uvector(sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp write
 }
 
 #if defined(PUCHI_TEST)
-sexp sexp_finalize_fileno (sexp ctx, sexp self, sexp_sint_t n, sexp fileno) {
+static sexp sexp_finalize_fileno (sexp ctx, sexp self, sexp_sint_t n, sexp fileno) {
   if (sexp_fileno_openp(fileno) && !sexp_fileno_no_closep(fileno)) {
     sexp_fileno_openp(fileno) = 0;
     /* puchi: no close(2); harness FILE* ports close via stream_ops */
@@ -4447,7 +5301,7 @@ sexp sexp_finalize_fileno (sexp ctx, sexp self, sexp_sint_t n, sexp fileno) {
 }
 
 #endif
-sexp sexp_finalize_port (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
+static sexp sexp_finalize_port (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
   sexp res = SEXP_VOID;
   if (sexp_port_openp(port)) {
     sexp_port_openp(port) = 0;
@@ -4474,7 +5328,7 @@ sexp sexp_finalize_port (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
 }
 
 
-sexp sexp_finalize_uvector (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
+static sexp sexp_finalize_uvector (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
   /* if (sexp_uvector_freep(obj)) */
   /*   SEXP_FREE(ctx, sexp_uvector_data(obj)); */
   return SEXP_VOID;
@@ -4532,7 +5386,7 @@ static struct sexp_type_struct puchi_type_specs[] = {
 #define SEXP_INIT_NUM_TYPES (SEXP_NUM_CORE_TYPES*2)
 
 
-sexp sexp_register_type_op (sexp ctx, sexp self, sexp_sint_t n, sexp name,
+static sexp sexp_register_type_op (sexp ctx, sexp self, sexp_sint_t n, sexp name,
                             sexp parent, sexp slots,
                             sexp fb, sexp felb, sexp flb, sexp flo, sexp fls,
                             sexp sb, sexp so, sexp sc, sexp w, sexp wb, sexp wo,
@@ -4610,7 +5464,7 @@ sexp sexp_register_type_op (sexp ctx, sexp self, sexp_sint_t n, sexp name,
   return res;
 }
 
-sexp sexp_register_simple_type_op (sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp parent, sexp slots) {
+static sexp sexp_register_simple_type_op (sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp parent, sexp slots) {
   short i, num_slots = (short)sexp_unbox_fixnum(sexp_length(ctx, slots));
   sexp type_size, num_slots_obj, cpl, tmp;
   if (parent && sexp_typep(parent)) {
@@ -4633,7 +5487,7 @@ sexp sexp_register_simple_type_op (sexp ctx, sexp self, sexp_sint_t n, sexp name
                        NULL, NULL);
 }
 
-sexp sexp_lookup_type_op(sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp id) {
+static sexp sexp_lookup_type_op(sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp id) {
   int i;
   sexp res;
   const char* str;
@@ -4659,7 +5513,7 @@ sexp sexp_lookup_type_op(sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp id)
   return SEXP_FALSE;
 }
 
-sexp sexp_finalize_c_type (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
+static sexp sexp_finalize_c_type (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
   if (sexp_cpointer_freep(obj))
     SEXP_FREE(ctx, sexp_cpointer_value(obj));
   return SEXP_VOID;
@@ -4691,7 +5545,7 @@ static const char* sexp_initial_features[] = {
   NULL,
 };
 
-void sexp_init_context_globals (sexp ctx) {
+static void sexp_init_context_globals (sexp ctx) {
   const char** features;
   int i, endianess_check = 1;
   sexp type, *vec, print=NULL;
@@ -4761,7 +5615,7 @@ void sexp_init_context_globals (sexp ctx) {
   }
 }
 
-sexp sexp_bootstrap_context (const puchi_host *host, sexp_uint_t size, sexp_uint_t max_size) {
+static sexp sexp_bootstrap_context (const puchi_host *host, sexp_uint_t size, sexp_uint_t max_size) {
   sexp ctx;
   sexp_heap heap;
   struct sexp_struct dummy_ctx;
@@ -4783,7 +5637,7 @@ sexp sexp_bootstrap_context (const puchi_host *host, sexp_uint_t size, sexp_uint
   return ctx;
 }
 
-sexp sexp_make_context (sexp ctx, size_t size, size_t max_size, const puchi_host *host) {
+static sexp sexp_make_context (sexp ctx, size_t size, size_t max_size, const puchi_host *host) {
   sexp_gc_var1(res);
   if (ctx) sexp_gc_preserve1(ctx, res);
   if (! ctx) {
@@ -4813,7 +5667,7 @@ sexp sexp_make_context (sexp ctx, size_t size, size_t max_size, const puchi_host
   return res;
 }
 
-sexp sexp_destroy_context (sexp ctx) {
+static sexp sexp_destroy_context (sexp ctx) {
   sexp_heap heap, tmp;
   size_t sum_freed;
   if (sexp_context_heap(ctx)) {
@@ -4835,7 +5689,7 @@ sexp sexp_destroy_context (sexp ctx) {
 
 /***************************** exceptions *****************************/
 
-sexp sexp_make_exception (sexp ctx, sexp kind, sexp message, sexp irritants,
+static sexp sexp_make_exception (sexp ctx, sexp kind, sexp message, sexp irritants,
                           sexp procedure, sexp source) {
   sexp exn = sexp_alloc_type(ctx, exception, SEXP_EXCEPTION);
   if (exn == sexp_global(ctx, SEXP_G_OOM_ERROR))
@@ -4849,7 +5703,7 @@ sexp sexp_make_exception (sexp ctx, sexp kind, sexp message, sexp irritants,
   return exn;
 }
 
-sexp sexp_string_cat3 (sexp ctx, const char *pre, const char *mid, const char* suf) {
+static sexp sexp_string_cat3 (sexp ctx, const char *pre, const char *mid, const char* suf) {
   int plen=PUCHI_STRLEN(pre), mlen=PUCHI_STRLEN(mid), slen=PUCHI_STRLEN(suf);
   char *s;
   sexp str;
@@ -4860,7 +5714,7 @@ sexp sexp_string_cat3 (sexp ctx, const char *pre, const char *mid, const char* s
   return str;
 }
 
-sexp sexp_user_exception (sexp ctx, sexp self, const char *ms, sexp ir) {
+static sexp sexp_user_exception (sexp ctx, sexp self, const char *ms, sexp ir) {
   sexp res;
   sexp_gc_var3(sym, str, irr);
   sexp_gc_preserve3(ctx, sym, str, irr);
@@ -4873,7 +5727,7 @@ sexp sexp_user_exception (sexp ctx, sexp self, const char *ms, sexp ir) {
   return res;
 }
 
-sexp sexp_user_exception_ls (sexp ctx, sexp self, const char *msg, int n, ...) {
+static sexp sexp_user_exception_ls (sexp ctx, sexp self, const char *msg, int n, ...) {
   int i;
   va_list ap;
   sexp_gc_var2(res, ir);
@@ -4889,7 +5743,7 @@ sexp sexp_user_exception_ls (sexp ctx, sexp self, const char *msg, int n, ...) {
   return res;
 }
 
-sexp sexp_file_exception (sexp ctx, sexp self, const char *ms, sexp ir) {
+static sexp sexp_file_exception (sexp ctx, sexp self, const char *ms, sexp ir) {
   sexp_gc_var1(res);
   sexp_gc_preserve1(ctx, res);
   res = sexp_user_exception(ctx, self, ms, ir);
@@ -4908,7 +5762,7 @@ static sexp type_exception (sexp ctx, sexp self, sexp str, sexp obj, sexp src) {
   return res;
 }
 
-sexp sexp_xtype_exception (sexp ctx, sexp self, const char *msg, sexp obj) {
+static sexp sexp_xtype_exception (sexp ctx, sexp self, const char *msg, sexp obj) {
   sexp_gc_var1(res);
   sexp_gc_preserve1(ctx, res);
   res = sexp_c_string(ctx, msg, -1);
@@ -4917,7 +5771,7 @@ sexp sexp_xtype_exception (sexp ctx, sexp self, const char *msg, sexp obj) {
   return res;
 }
 
-sexp sexp_type_exception (sexp ctx, sexp self, sexp_uint_t type_id, sexp obj) {
+static sexp sexp_type_exception (sexp ctx, sexp self, sexp_uint_t type_id, sexp obj) {
   sexp_gc_var1(res);
   sexp_gc_preserve1(ctx, res);
   res = sexp_string_cat3(ctx, "invalid type, expected ",
@@ -4927,7 +5781,7 @@ sexp sexp_type_exception (sexp ctx, sexp self, sexp_uint_t type_id, sexp obj) {
   return res;
 }
 
-sexp sexp_range_exception (sexp ctx, sexp obj, sexp start, sexp end) {
+static sexp sexp_range_exception (sexp ctx, sexp obj, sexp start, sexp end) {
   sexp_gc_var2(res, msg);
   sexp_gc_preserve2(ctx, res, msg);
   msg = sexp_c_string(ctx, "bad index range", -1);
@@ -4939,7 +5793,7 @@ sexp sexp_range_exception (sexp ctx, sexp obj, sexp start, sexp end) {
   return res;
 }
 
-sexp sexp_print_exception_op (sexp ctx, sexp self, sexp_sint_t n, sexp exn, sexp out) {
+static sexp sexp_print_exception_op (sexp ctx, sexp self, sexp_sint_t n, sexp exn, sexp out) {
   sexp_gc_var2(ls, tmp);
   /* unwrap continuable exceptions */
   if (sexp_exceptionp(exn)
@@ -5017,7 +5871,7 @@ sexp sexp_print_exception_op (sexp ctx, sexp self, sexp_sint_t n, sexp exn, sexp
   return SEXP_VOID;
 }
 
-sexp sexp_read_error (sexp ctx, const char *msg, sexp ir, sexp port) {
+static sexp sexp_read_error (sexp ctx, const char *msg, sexp ir, sexp port) {
   sexp res;
   sexp_gc_var4(sym, name, str, irr);
   sexp_gc_preserve4(ctx, sym, name, str, irr);
@@ -5031,7 +5885,7 @@ sexp sexp_read_error (sexp ctx, const char *msg, sexp ir, sexp port) {
   return res;
 }
 
-sexp sexp_read_incomplete_error (sexp ctx, const char *msg, sexp ir, sexp port) {
+static sexp sexp_read_incomplete_error (sexp ctx, const char *msg, sexp ir, sexp port) {
   sexp_gc_var1(res);
   sexp_gc_preserve1(ctx, res);
   res = sexp_read_error(ctx, msg, ir, port);
@@ -5043,7 +5897,7 @@ sexp sexp_read_incomplete_error (sexp ctx, const char *msg, sexp ir, sexp port) 
 
 /*************************** list utilities ***************************/
 
-sexp sexp_cons_op (sexp ctx, sexp self, sexp_sint_t n, sexp head, sexp tail) {
+static sexp sexp_cons_op (sexp ctx, sexp self, sexp_sint_t n, sexp head, sexp tail) {
   sexp pair = sexp_alloc_type(ctx, pair, SEXP_PAIR);
   if (sexp_exceptionp(pair)) return pair;
   sexp_car(pair) = head;
@@ -5052,7 +5906,7 @@ sexp sexp_cons_op (sexp ctx, sexp self, sexp_sint_t n, sexp head, sexp tail) {
   return pair;
 }
 
-sexp sexp_list2 (sexp ctx, sexp a, sexp b) {
+static sexp sexp_list2 (sexp ctx, sexp a, sexp b) {
   sexp_gc_var1(res);
   sexp_gc_preserve1(ctx, res);
   res = sexp_cons(ctx, b, SEXP_NULL);
@@ -5061,7 +5915,7 @@ sexp sexp_list2 (sexp ctx, sexp a, sexp b) {
   return res;
 }
 
-sexp sexp_list3 (sexp ctx, sexp a, sexp b, sexp c) {
+static sexp sexp_list3 (sexp ctx, sexp a, sexp b, sexp c) {
   sexp_gc_var1(res);
   sexp_gc_preserve1(ctx, res);
   res = sexp_list2(ctx, b, c);
@@ -5070,7 +5924,7 @@ sexp sexp_list3 (sexp ctx, sexp a, sexp b, sexp c) {
   return res;
 }
 
-sexp sexp_listp_op (sexp ctx, sexp self, sexp_sint_t n, sexp hare) {
+static sexp sexp_listp_op (sexp ctx, sexp self, sexp_sint_t n, sexp hare) {
   sexp turtle;
   if (! sexp_pairp(hare))
     return sexp_make_boolean(sexp_nullp(hare));
@@ -5084,7 +5938,7 @@ sexp sexp_listp_op (sexp ctx, sexp self, sexp_sint_t n, sexp hare) {
   return sexp_make_boolean(sexp_nullp(hare));
 }
 
-sexp sexp_memq_op (sexp ctx, sexp self, sexp_sint_t n, sexp x, sexp ls) {
+static sexp sexp_memq_op (sexp ctx, sexp self, sexp_sint_t n, sexp x, sexp ls) {
   while (sexp_pairp(ls))
     if (x == sexp_car(ls))
       return ls;
@@ -5093,7 +5947,7 @@ sexp sexp_memq_op (sexp ctx, sexp self, sexp_sint_t n, sexp x, sexp ls) {
   return SEXP_FALSE;
 }
 
-sexp sexp_assq_op (sexp ctx, sexp self, sexp_sint_t n, sexp x, sexp ls) {
+static sexp sexp_assq_op (sexp ctx, sexp self, sexp_sint_t n, sexp x, sexp ls) {
   while (sexp_pairp(ls))
     if (sexp_pairp(sexp_car(ls)) && (x == sexp_caar(ls)))
       return sexp_car(ls);
@@ -5102,7 +5956,7 @@ sexp sexp_assq_op (sexp ctx, sexp self, sexp_sint_t n, sexp x, sexp ls) {
   return SEXP_FALSE;
 }
 
-sexp sexp_reverse_op (sexp ctx, sexp self, sexp_sint_t n, sexp ls) {
+static sexp sexp_reverse_op (sexp ctx, sexp self, sexp_sint_t n, sexp ls) {
   sexp_gc_var1(res);
   sexp_gc_preserve1(ctx, res);
   for (res=SEXP_NULL; sexp_pairp(ls); ls=sexp_cdr(ls))
@@ -5111,7 +5965,7 @@ sexp sexp_reverse_op (sexp ctx, sexp self, sexp_sint_t n, sexp ls) {
   return res;
 }
 
-sexp sexp_nreverse_op (sexp ctx, sexp self, sexp_sint_t n, sexp ls) {
+static sexp sexp_nreverse_op (sexp ctx, sexp self, sexp_sint_t n, sexp ls) {
   sexp a, b, tmp;
   if (ls == SEXP_NULL) return ls;
   sexp_assert_type(ctx, sexp_pairp, SEXP_PAIR, ls);
@@ -5125,7 +5979,7 @@ sexp sexp_nreverse_op (sexp ctx, sexp self, sexp_sint_t n, sexp ls) {
   return b;
 }
 
-sexp sexp_copy_list_op (sexp ctx, sexp self, sexp_sint_t n, sexp ls) {
+static sexp sexp_copy_list_op (sexp ctx, sexp self, sexp_sint_t n, sexp ls) {
   sexp tmp;
   sexp_gc_var1(res);
   if (! sexp_pairp(ls)) return ls;
@@ -5137,7 +5991,7 @@ sexp sexp_copy_list_op (sexp ctx, sexp self, sexp_sint_t n, sexp ls) {
   return res;
 }
 
-sexp sexp_append2_op (sexp ctx, sexp self, sexp_sint_t n, sexp a, sexp b) {
+static sexp sexp_append2_op (sexp ctx, sexp self, sexp_sint_t n, sexp a, sexp b) {
   sexp_gc_var2(a1, b1);
   sexp_gc_preserve2(ctx, a1, b1);
   b1 = b;
@@ -5147,7 +6001,7 @@ sexp sexp_append2_op (sexp ctx, sexp self, sexp_sint_t n, sexp a, sexp b) {
   return b1;
 }
 
-sexp sexp_length_op (sexp ctx, sexp self, sexp_sint_t n, sexp ls1) {
+static sexp sexp_length_op (sexp ctx, sexp self, sexp_sint_t n, sexp ls1) {
   sexp ls2;
   sexp_uint_t res = 1;
   if (!sexp_pairp(ls1))
@@ -5159,7 +6013,7 @@ sexp sexp_length_op (sexp ctx, sexp self, sexp_sint_t n, sexp ls1) {
   return sexp_make_fixnum(res + (sexp_pairp(ls2) ? 1 : 0));
 }
 
-sexp sexp_equalp_bound (sexp ctx, sexp self, sexp_sint_t n, sexp a, sexp b, sexp depth, sexp bound) {
+static sexp sexp_equalp_bound (sexp ctx, sexp self, sexp_sint_t n, sexp a, sexp b, sexp depth, sexp bound) {
   sexp_uint_t left_size, right_size;
   sexp_sint_t i, len;
   sexp t, *p, *q, depth2;
@@ -5229,7 +6083,7 @@ sexp sexp_equalp_bound (sexp ctx, sexp self, sexp_sint_t n, sexp a, sexp b, sexp
   return bound;
 }
 
-sexp sexp_equalp_op (sexp ctx, sexp self, sexp_sint_t n, sexp a, sexp b) {
+static sexp sexp_equalp_op (sexp ctx, sexp self, sexp_sint_t n, sexp a, sexp b) {
   return sexp_make_boolean(
     sexp_truep(sexp_equalp_bound(ctx, self, n, a, b,
                                  sexp_make_fixnum(SEXP_DEFAULT_EQUAL_DEPTH),
@@ -5238,18 +6092,18 @@ sexp sexp_equalp_op (sexp ctx, sexp self, sexp_sint_t n, sexp a, sexp b) {
 
 /********************* strings, symbols, vectors **********************/
 
-sexp sexp_flonump_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
+static sexp sexp_flonump_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
   return sexp_make_boolean(sexp_flonump(x));
 }
 
-sexp sexp_make_flonum (sexp ctx, double f) {
+static sexp sexp_make_flonum (sexp ctx, double f) {
   sexp x = sexp_alloc_type(ctx, flonum, SEXP_FLONUM);
   if (sexp_exceptionp(x)) return x;
   sexp_flonum_value(x) = f;
   return x;
 }
 
-sexp sexp_make_bytes_op (sexp ctx, sexp self, sexp_sint_t n, sexp len, sexp i) {
+static sexp sexp_make_bytes_op (sexp ctx, sexp self, sexp_sint_t n, sexp len, sexp i) {
   sexp_sint_t clen = sexp_unbox_fixnum(len);
   sexp s;
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, len);
@@ -5264,7 +6118,7 @@ sexp sexp_make_bytes_op (sexp ctx, sexp self, sexp_sint_t n, sexp len, sexp i) {
   return s;
 }
 
-sexp sexp_make_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp elt_type, sexp len) {
+static sexp sexp_make_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp elt_type, sexp len) {
   sexp_sint_t etype = sexp_unbox_fixnum(elt_type), elen = sexp_unbox_fixnum(len), clen;
   sexp_gc_var1(res);
   if (etype == SEXP_U8)
@@ -5290,20 +6144,20 @@ sexp sexp_make_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp elt_type, sex
 }
 
 
-int sexp_utf8_initial_byte_count (int c) {
+static int sexp_utf8_initial_byte_count (int c) {
   if (c < 0xC0) return 1;
   if (c < 0xE0) return 2;
   return ((c>>4)&1)+3;
 }
 
-int sexp_utf8_char_byte_count (int c) {
+static int sexp_utf8_char_byte_count (int c) {
   if (c < 0x80) return 1;
   if (c < 0x800) return 2;
   if (c < 0x10000) return 3;
   return 4;
 }
 
-sexp_uint_t sexp_string_utf8_length (unsigned char *p, long len) {
+static sexp_uint_t sexp_string_utf8_length (unsigned char *p, long len) {
   unsigned char *q = p+len;
   sexp_uint_t i;
   for (i=0; p<q; i++)
@@ -5311,13 +6165,13 @@ sexp_uint_t sexp_string_utf8_length (unsigned char *p, long len) {
   return i;
 }
 
-char* sexp_string_utf8_prev (unsigned char *p) {
+static char* sexp_string_utf8_prev (unsigned char *p) {
   while ((*--p)>>6 == 2)
     ;
   return (char*)p;
 }
 
-sexp sexp_string_utf8_ref (sexp ctx, sexp str, sexp i) {
+static sexp sexp_string_utf8_ref (sexp ctx, sexp str, sexp i) {
   unsigned char *p=(unsigned char*)sexp_string_data(str) + sexp_unbox_string_cursor(i);
   if (*p < 0x80)
     return sexp_make_character(*p);
@@ -5331,7 +6185,7 @@ sexp sexp_string_utf8_ref (sexp ctx, sexp str, sexp i) {
     return sexp_make_character(((p[0]&0x0F)<<18) + ((p[1]&0x3F)<<12) + ((p[2]&0x3F)<<6) + (p[3]&0x3F));
 }
 
-void sexp_utf8_encode_char (unsigned char* p, int len, int c) {
+static void sexp_utf8_encode_char (unsigned char* p, int len, int c) {
   switch (len) {
   case 4:  *p++ = (0xF0 + ((c)>>18)); *p++ = (0x80 + ((c>>12)&0x3F));
     *p++ = (0x80 + ((c>>6)&0x3F));    *p = (0x80 + (c&0x3F)); break;
@@ -5342,7 +6196,7 @@ void sexp_utf8_encode_char (unsigned char* p, int len, int c) {
   }
 }
 
-sexp sexp_string_index_to_cursor (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp index) {
+static sexp sexp_string_index_to_cursor (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp index) {
   sexp cursor;
   sexp_sint_t i, j, limit;
   unsigned char *p;
@@ -5362,7 +6216,7 @@ sexp sexp_string_index_to_cursor (sexp ctx, sexp self, sexp_sint_t n, sexp str, 
   return cursor;
 }
 
-sexp sexp_string_cursor_to_index (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp offset) {
+static sexp sexp_string_cursor_to_index (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp offset) {
   sexp_sint_t off = sexp_unbox_string_cursor(offset);
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, str);
   sexp_assert_type(ctx, sexp_string_cursorp, SEXP_STRING_CURSOR, offset);
@@ -5371,14 +6225,14 @@ sexp sexp_string_cursor_to_index (sexp ctx, sexp self, sexp_sint_t n, sexp str, 
   return sexp_make_fixnum(sexp_string_utf8_length((unsigned char*)sexp_string_data(str), off));
 }
 
-sexp sexp_string_cursor_offset (sexp ctx, sexp self, sexp_sint_t n, sexp cur) {
+static sexp sexp_string_cursor_offset (sexp ctx, sexp self, sexp_sint_t n, sexp cur) {
   sexp_assert_type(ctx, sexp_string_cursorp, SEXP_STRING_CURSOR, cur);
   return sexp_make_fixnum(sexp_unbox_string_cursor(cur));
 }
 
 
 
-sexp sexp_make_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp len, sexp ch)
+static sexp sexp_make_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp len, sexp ch)
 {
   sexp i = (sexp_charp(ch) ? sexp_make_fixnum(sexp_unbox_character(ch)) : ch);
   sexp_gc_var2(b, s);
@@ -5406,7 +6260,7 @@ sexp sexp_make_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp len, sexp ch)
   return s;
 }
 
-sexp sexp_c_string (sexp ctx, const char *str, sexp_sint_t slen) {
+static sexp sexp_c_string (sexp ctx, const char *str, sexp_sint_t slen) {
   sexp_sint_t len;
   sexp s;
   if (str == NULL) return SEXP_FALSE;
@@ -5418,7 +6272,7 @@ sexp sexp_c_string (sexp ctx, const char *str, sexp_sint_t slen) {
   return s;
 }
 
-sexp sexp_substring_op (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp start, sexp end) {
+static sexp sexp_substring_op (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp start, sexp end) {
   sexp res;
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, str);
   sexp_assert_type(ctx, sexp_string_cursorp, SEXP_STRING_CURSOR, start);
@@ -5439,7 +6293,7 @@ sexp sexp_substring_op (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp start
   return res;
 }
 
-sexp sexp_subbytes_op (sexp ctx, sexp self, sexp_sint_t n, sexp vec, sexp start, sexp end) {
+static sexp sexp_subbytes_op (sexp ctx, sexp self, sexp_sint_t n, sexp vec, sexp start, sexp end) {
   sexp res;
   sexp_gc_var1(str);
   sexp_assert_type(ctx, sexp_bytesp, SEXP_BYTES, vec);
@@ -5461,7 +6315,7 @@ sexp sexp_subbytes_op (sexp ctx, sexp self, sexp_sint_t n, sexp vec, sexp start,
   return res;
 }
 
-sexp sexp_utf8_substring_op (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp start, sexp end) {
+static sexp sexp_utf8_substring_op (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp start, sexp end) {
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, str);
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, start);
   start = sexp_string_index_to_cursor(ctx, self, n, str, start);
@@ -5473,7 +6327,7 @@ sexp sexp_utf8_substring_op (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp 
   return sexp_substring_op(ctx, self, n, str, start, end);
 }
 
-sexp sexp_string_concatenate_op (sexp ctx, sexp self, sexp_sint_t n, sexp str_ls, sexp sep) {
+static sexp sexp_string_concatenate_op (sexp ctx, sexp self, sexp_sint_t n, sexp str_ls, sexp sep) {
   sexp res, ls;
   sexp_uint_t len=0, i=0, sep_len=0;
   char *p, *csep=NULL;
@@ -5512,7 +6366,7 @@ static sexp_uint_t sexp_string_hash(const char *str, sexp_sint_t len,
 }
 
 
-sexp sexp_intern(sexp ctx, const char *str, sexp_sint_t len) {
+static sexp sexp_intern(sexp ctx, const char *str, sexp_sint_t len) {
   sexp ls, tmp;
   sexp_gc_var1(sym);
   sexp_sint_t bucket=0;
@@ -5538,12 +6392,12 @@ sexp sexp_intern(sexp ctx, const char *str, sexp_sint_t len) {
   return sym;
 }
 
-sexp sexp_string_to_symbol_op (sexp ctx, sexp self, sexp_sint_t n, sexp str) {
+static sexp sexp_string_to_symbol_op (sexp ctx, sexp self, sexp_sint_t n, sexp str) {
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, str);
   return sexp_intern(ctx, sexp_string_data(str), sexp_string_size(str));
 }
 
-sexp sexp_make_vector_op (sexp ctx, sexp self, sexp_sint_t n, sexp len, sexp dflt) {
+static sexp sexp_make_vector_op (sexp ctx, sexp self, sexp_sint_t n, sexp len, sexp dflt) {
   sexp vec, *x;
   sexp_sint_t i, clen = sexp_unbox_fixnum(len);
   if (! clen) return sexp_global(ctx, SEXP_G_EMPTY_VECTOR);
@@ -5559,7 +6413,7 @@ sexp sexp_make_vector_op (sexp ctx, sexp self, sexp_sint_t n, sexp len, sexp dfl
   return vec;
 }
 
-sexp sexp_list_to_vector_op (sexp ctx, sexp self, sexp_sint_t n, sexp ls) {
+static sexp sexp_list_to_vector_op (sexp ctx, sexp self, sexp_sint_t n, sexp ls) {
   int i;
   sexp x, *elts, vec = sexp_make_vector(ctx, sexp_length(ctx, ls), SEXP_VOID);
   if (sexp_exceptionp(vec)) return vec;
@@ -5569,7 +6423,7 @@ sexp sexp_list_to_vector_op (sexp ctx, sexp self, sexp_sint_t n, sexp ls) {
   return vec;
 }
 
-sexp sexp_make_cpointer (sexp ctx, sexp_uint_t type_id, void *value,
+static sexp sexp_make_cpointer (sexp ctx, sexp_uint_t type_id, void *value,
                          sexp parent, int freep) {
   sexp ptr;
   if (! value) return SEXP_FALSE;
@@ -5587,7 +6441,7 @@ sexp sexp_make_cpointer (sexp ctx, sexp_uint_t type_id, void *value,
 /* start 4 bytes in so we can always unread a utf8 char in peek-char */
 #define BUF_START 4
 
-int sexp_buffered_read_char (sexp ctx, sexp p) {
+static int sexp_buffered_read_char (sexp ctx, sexp p) {
   sexp_gc_var2(tmp, origbytes);
   int res = 0;
   if (sexp_port_offset(p) < sexp_port_size(p)) {
@@ -5631,7 +6485,7 @@ int sexp_buffered_read_char (sexp ctx, sexp p) {
   return res;
 }
 
-int sexp_buffered_write_char (sexp ctx, int c, sexp p) {
+static int sexp_buffered_write_char (sexp ctx, int c, sexp p) {
   int res;
   if (sexp_port_offset(p)+1 >= sexp_port_size(p))
     if ((res = sexp_buffered_flush(ctx, p, 0)))
@@ -5640,7 +6494,7 @@ int sexp_buffered_write_char (sexp ctx, int c, sexp p) {
   return 0;
 }
 
-int sexp_buffered_write_string_n (sexp ctx, const char *str,
+static int sexp_buffered_write_string_n (sexp ctx, const char *str,
                                   sexp_uint_t len, sexp p) {
   int diff, res, written=0;
   while (sexp_port_offset(p)+len >= sexp_port_size(p)) {
@@ -5658,11 +6512,11 @@ int sexp_buffered_write_string_n (sexp ctx, const char *str,
   return written + len;
 }
 
-int sexp_buffered_write_string (sexp ctx, const char *str, sexp p) {
+static int sexp_buffered_write_string (sexp ctx, const char *str, sexp p) {
   return sexp_buffered_write_string_n(ctx, str, PUCHI_STRLEN(str), p);
 }
 
-int sexp_buffered_flush (sexp ctx, sexp p, int forcep) {
+static int sexp_buffered_flush (sexp ctx, sexp p, int forcep) {
   sexp_sint_t res = 0, off;
   sexp_gc_var1(tmp);
   if (!sexp_oportp(p) || (!forcep && !sexp_port_openp(p)))
@@ -5698,7 +6552,7 @@ int sexp_buffered_flush (sexp ctx, sexp p, int forcep) {
   return res;
 }
 
-sexp sexp_open_input_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp str) {
+static sexp sexp_open_input_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp str) {
   sexp res;
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, str);
   res = sexp_make_input_port(ctx, NULL, NULL, SEXP_FALSE);
@@ -5711,7 +6565,7 @@ sexp sexp_open_input_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp str) {
   return res;
 }
 
-sexp sexp_open_output_string_op (sexp ctx, sexp self, sexp_sint_t n) {
+static sexp sexp_open_output_string_op (sexp ctx, sexp self, sexp_sint_t n) {
   sexp_gc_var1(res);
   sexp_gc_preserve1(ctx, res);
   res = sexp_make_output_port(ctx, NULL, NULL, SEXP_FALSE);
@@ -5732,7 +6586,7 @@ sexp sexp_open_output_string_op (sexp ctx, sexp self, sexp_sint_t n) {
   return res;
 }
 
-sexp sexp_get_output_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp out) {
+static sexp sexp_get_output_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp out) {
   sexp res;
   sexp_gc_var3(ls, rev, tmp);
   sexp_assert_type(ctx, sexp_oportp, SEXP_OPORT, out);
@@ -5761,7 +6615,7 @@ sexp sexp_get_output_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp out) {
 }
 
 #if defined(PUCHI_TEST)
-sexp sexp_open_input_file_descriptor (sexp ctx, sexp self, sexp_sint_t n, sexp fileno, sexp shutdownp) {
+static sexp sexp_open_input_file_descriptor (sexp ctx, sexp self, sexp_sint_t n, sexp fileno, sexp shutdownp) {
   sexp_gc_var2(res, str);
   sexp_assert_type(ctx, sexp_filenop, SEXP_FILENO, fileno);
   if (sexp_fileno_fd(fileno) < 0)
@@ -5782,7 +6636,7 @@ sexp sexp_open_input_file_descriptor (sexp ctx, sexp self, sexp_sint_t n, sexp f
 
 #endif
 #if defined(PUCHI_TEST)
-sexp sexp_open_output_file_descriptor (sexp ctx, sexp self, sexp_sint_t n, sexp fileno, sexp shutdownp) {
+static sexp sexp_open_output_file_descriptor (sexp ctx, sexp self, sexp_sint_t n, sexp fileno, sexp shutdownp) {
   sexp res = sexp_open_input_file_descriptor(ctx, self, n, fileno, shutdownp);
   if (!sexp_exceptionp(res)) {
     sexp_pointer_tag(res) = SEXP_OPORT;
@@ -5792,7 +6646,7 @@ sexp sexp_open_output_file_descriptor (sexp ctx, sexp self, sexp_sint_t n, sexp 
 }
 
 #endif
-sexp sexp_make_ephemeron_op(sexp ctx, sexp self, sexp_sint_t n, sexp key, sexp value) {
+static sexp sexp_make_ephemeron_op(sexp ctx, sexp self, sexp_sint_t n, sexp key, sexp value) {
   sexp res = sexp_alloc_type(ctx, pair, SEXP_EPHEMERON);
   if (!sexp_exceptionp(res)) {
     sexp_global(ctx, SEXP_G_WEAK_OBJECTS_PRESENT) = SEXP_TRUE;
@@ -5804,7 +6658,7 @@ sexp sexp_make_ephemeron_op(sexp ctx, sexp self, sexp_sint_t n, sexp key, sexp v
 
 
 #if defined(PUCHI_TEST)
-sexp sexp_make_fileno_op (sexp ctx, sexp self, sexp_sint_t n, sexp fd, sexp no_closep) {
+static sexp sexp_make_fileno_op (sexp ctx, sexp self, sexp_sint_t n, sexp fd, sexp no_closep) {
   sexp_gc_var1(res);
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, fd);
   if (sexp_unbox_fixnum(fd) < 0) return SEXP_FALSE;
@@ -5820,7 +6674,7 @@ sexp sexp_make_fileno_op (sexp ctx, sexp self, sexp_sint_t n, sexp fd, sexp no_c
 }
 
 #endif
-sexp sexp_make_input_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name) {
+static sexp sexp_make_input_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name) {
   sexp p = sexp_alloc_type(ctx, port, SEXP_IPORT);
   if (sexp_exceptionp(p)) return p;
   sexp_port_stream_ops(p) = ops;
@@ -5850,42 +6704,42 @@ sexp sexp_make_input_port (sexp ctx, const puchi_stream_ops *ops, void *udata, s
   return p;
 }
 
-sexp sexp_make_output_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name) {
+static sexp sexp_make_output_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name) {
   sexp p = sexp_make_input_port(ctx, ops, udata, name);
   if (sexp_exceptionp(p)) return p;
   sexp_pointer_tag(p) = SEXP_OPORT;
   return p;
 }
 
-sexp sexp_make_non_null_input_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name) {
+static sexp sexp_make_non_null_input_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name) {
   if (!ops) return sexp_user_exception(ctx, SEXP_FALSE, "null input-port", name);
   return sexp_make_input_port(ctx, ops, udata, name);
 }
 
-sexp sexp_make_non_null_output_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name) {
+static sexp sexp_make_non_null_output_port (sexp ctx, const puchi_stream_ops *ops, void *udata, sexp name) {
   if (!ops) return sexp_user_exception(ctx, SEXP_FALSE, "null output-port", name);
   return sexp_make_output_port(ctx, ops, udata, name);
 }
 
 #define sexp_make_non_null_input_output_port sexp_make_non_null_input_port
 
-sexp sexp_port_outputp_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
+static sexp sexp_port_outputp_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
   return sexp_make_boolean(sexp_oportp(obj));
 }
 
-sexp sexp_port_binaryp_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
+static sexp sexp_port_binaryp_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
   return sexp_make_boolean(sexp_portp(obj) && sexp_port_binaryp(obj));
 }
 
-sexp sexp_port_openp_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
+static sexp sexp_port_openp_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
   return sexp_make_boolean(sexp_portp(obj) && sexp_port_openp(obj));
 }
 
-sexp sexp_get_port_fold_case (sexp ctx, sexp self, sexp_sint_t n, sexp in) {
+static sexp sexp_get_port_fold_case (sexp ctx, sexp self, sexp_sint_t n, sexp in) {
   sexp_assert_type(ctx, sexp_iportp, SEXP_IPORT, in);
   return sexp_make_boolean(sexp_port_fold_casep(in));
 }
-sexp sexp_set_port_fold_case (sexp ctx, sexp self, sexp_sint_t n, sexp in, sexp x) {
+static sexp sexp_set_port_fold_case (sexp ctx, sexp self, sexp_sint_t n, sexp in, sexp x) {
   sexp_assert_type(ctx, sexp_iportp, SEXP_IPORT, in);
   sexp_assert_type(ctx, sexp_booleanp, SEXP_BOOLEAN, x);
   sexp_port_fold_casep(in) = sexp_truep(x);
@@ -5894,7 +6748,7 @@ sexp sexp_set_port_fold_case (sexp ctx, sexp self, sexp_sint_t n, sexp in, sexp 
 
 
 
-sexp sexp_char_ready_p (sexp ctx, sexp self, sexp_sint_t n, sexp in) {
+static sexp sexp_char_ready_p (sexp ctx, sexp self, sexp_sint_t n, sexp in) {
   sexp_assert_type(ctx, sexp_iportp, SEXP_IPORT, in);
   if (!sexp_port_openp(in))
     return SEXP_FALSE;
@@ -5926,7 +6780,7 @@ static struct {const char* name; char ch;} sexp_char_names[] = {
 
 #define sexp_num_char_names (sizeof(sexp_char_names)/sizeof(sexp_char_names[0]))
 
-sexp sexp_write_one (sexp ctx, sexp obj, sexp out, sexp_sint_t bound) {
+static sexp sexp_write_one (sexp ctx, sexp obj, sexp out, sexp_sint_t bound) {
   sexp_uint_t len, c;
   sexp_sint_t i=0, j, k;
 #if !defined(PUCHI_INTEGER_ONLY)
@@ -6255,14 +7109,14 @@ sexp sexp_write_one (sexp ctx, sexp obj, sexp out, sexp_sint_t bound) {
   return SEXP_VOID;
 }
 
-sexp sexp_write_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp out) {
+static sexp sexp_write_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp out) {
   sexp res;
   sexp_assert_type(ctx, sexp_oportp, SEXP_OPORT, out);
   res = sexp_write_one(ctx, obj, out, 0);
   return res;
 }
 
-int sexp_write_utf8_char (sexp ctx, int c, sexp out) {
+static int sexp_write_utf8_char (sexp ctx, int c, sexp out) {
   unsigned char buf[8];
   int len = sexp_utf8_char_byte_count(c), i;
   sexp_utf8_encode_char(buf, len, c);
@@ -6273,7 +7127,7 @@ int sexp_write_utf8_char (sexp ctx, int c, sexp out) {
   return len;
 }
 
-sexp sexp_flush_output_op (sexp ctx, sexp self, sexp_sint_t n, sexp out) {
+static sexp sexp_flush_output_op (sexp ctx, sexp self, sexp_sint_t n, sexp out) {
   int res;
   sexp_assert_type(ctx, sexp_oportp, SEXP_OPORT, out);
   res = sexp_flush_forced(ctx, out);
@@ -6285,7 +7139,7 @@ sexp sexp_flush_output_op (sexp ctx, sexp self, sexp_sint_t n, sexp out) {
 
 #define INIT_STRING_BUFFER_SIZE 128
 
-sexp sexp_read_string (sexp ctx, sexp in, int sentinel) {
+static sexp sexp_read_string (sexp ctx, sexp in, int sentinel) {
   int len;
   int c, i=0;
   sexp_sint_t size=INIT_STRING_BUFFER_SIZE;
@@ -6357,7 +7211,7 @@ sexp sexp_read_string (sexp ctx, sexp in, int sentinel) {
   return res;
 }
 
-sexp sexp_read_symbol (sexp ctx, sexp in, int init, int internp) {
+static sexp sexp_read_symbol (sexp ctx, sexp in, int init, int internp) {
   int c, i=0, size=INIT_STRING_BUFFER_SIZE;
   char initbuf[INIT_STRING_BUFFER_SIZE];
   char *buf=initbuf, *tmp;
@@ -6395,7 +7249,7 @@ sexp sexp_read_symbol (sexp ctx, sexp in, int init, int internp) {
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-sexp sexp_make_complex (sexp ctx, sexp real, sexp image) {
+static sexp sexp_make_complex (sexp ctx, sexp real, sexp image) {
   sexp res = sexp_alloc_type(ctx, complex, SEXP_COMPLEX);
   if (!sexp_exceptionp(res)) {
     sexp_complex_real(res) = real;
@@ -6404,7 +7258,7 @@ sexp sexp_make_complex (sexp ctx, sexp real, sexp image) {
   return res;
 }
 
-sexp sexp_complex_normalize (sexp cpx) {
+static sexp sexp_complex_normalize (sexp cpx) {
   return sexp_complexp(cpx)
     && (sexp_complex_imag(cpx) == SEXP_ZERO
         /* Only normalize for an exact zero imaginary part.  */
@@ -6414,7 +7268,7 @@ sexp sexp_complex_normalize (sexp cpx) {
     ? sexp_complex_real(cpx) : cpx;
 }
 
-sexp sexp_read_complex_tail (sexp ctx, sexp in, sexp real) {
+static sexp sexp_read_complex_tail (sexp ctx, sexp in, sexp real) {
   int c = sexp_read_char(ctx, in), c2;
   sexp default_real = SEXP_ZERO;
   sexp_gc_var1(res);
@@ -6478,7 +7332,7 @@ sexp sexp_read_complex_tail (sexp ctx, sexp in, sexp real) {
 }
 
 #if !defined(PUCHI_INTEGER_ONLY)
-sexp sexp_read_polar_tail (sexp ctx, sexp in, sexp magnitude) {
+static sexp sexp_read_polar_tail (sexp ctx, sexp in, sexp magnitude) {
   sexp_gc_var2(res, theta);
   sexp_gc_preserve2(ctx, res, theta);
   theta = sexp_read_number(ctx, in, 10, 0);
@@ -6503,7 +7357,7 @@ sexp sexp_read_polar_tail (sexp ctx, sexp in, sexp magnitude) {
 #endif
 #endif
 
-sexp sexp_read_float_tail (sexp ctx, sexp in, double whole, int negp) {
+static sexp sexp_read_float_tail (sexp ctx, sexp in, double whole, int negp) {
   int c, c2;
   sexp exponent=SEXP_VOID;
   long double val=0.0, scale=10, e=0.0;
@@ -6572,7 +7426,7 @@ sexp sexp_read_float_tail (sexp ctx, sexp in, double whole, int negp) {
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-sexp sexp_make_ratio (sexp ctx, sexp num, sexp den) {
+static sexp sexp_make_ratio (sexp ctx, sexp num, sexp den) {
   sexp res = sexp_alloc_type(ctx, ratio, SEXP_RATIO);
   if (!sexp_exceptionp(res)) {
     sexp_ratio_numerator(res) = num;
@@ -6581,7 +7435,7 @@ sexp sexp_make_ratio (sexp ctx, sexp num, sexp den) {
   return res;
 }
 
-sexp sexp_ratio_normalize (sexp ctx, sexp rat, sexp in) {
+static sexp sexp_ratio_normalize (sexp ctx, sexp rat, sexp in) {
   sexp tmp;
   sexp_gc_var2(num, den);
   num = sexp_ratio_numerator(rat), den = sexp_ratio_denominator(rat);
@@ -6632,7 +7486,7 @@ sexp sexp_ratio_normalize (sexp ctx, sexp rat, sexp in) {
 }
 #endif
 
-sexp sexp_read_number (sexp ctx, sexp in, int base, int exactp) {
+static sexp sexp_read_number (sexp ctx, sexp in, int base, int exactp) {
   sexp_sint_t val = 0, tmp = -1;
   int c, digit, negativep = 0, inexactp = 0;
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER) && !defined(PUCHI_INTEGER_ONLY)
@@ -6847,7 +7701,7 @@ static int sexp_resolve_uniform_type(int c, sexp len) {
   return SEXP_NOT_A_UNIFORM_TYPE;
 }
 
-sexp sexp_list_to_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp etype, sexp ls) {
+static sexp sexp_list_to_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp etype, sexp ls) {
   long et, i;
   long long min;
   unsigned long long max;
@@ -6936,7 +7790,7 @@ sexp sexp_list_to_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp etype, sex
   return res;
 }
 
-sexp sexp_read_one (sexp ctx, sexp in, sexp *shares);
+static sexp sexp_read_one (sexp ctx, sexp in, sexp *shares);
 
 static char classify_infnan(char *str) {
   if (PUCHI_STRNCASECMP(str+1, "inf.0", 5) == 0)
@@ -6947,7 +7801,7 @@ static char classify_infnan(char *str) {
     return '0';
 }
 
-sexp sexp_read_raw (sexp ctx, sexp in, sexp *shares) {
+static sexp sexp_read_raw (sexp ctx, sexp in, sexp *shares) {
   char *str;
   int c1, c2, line;
   char infnan_kind;
@@ -7519,7 +8373,7 @@ sexp sexp_read_raw (sexp ctx, sexp in, sexp *shares) {
   return res;
 }
 
-sexp sexp_read_one (sexp ctx, sexp in, sexp *shares) {
+static sexp sexp_read_one (sexp ctx, sexp in, sexp *shares) {
   sexp res = sexp_read_raw(ctx, in, shares);
   if (res == SEXP_CLOSE)
     res = sexp_read_error(ctx, "too many ')'s", SEXP_NULL, in);
@@ -7530,7 +8384,7 @@ sexp sexp_read_one (sexp ctx, sexp in, sexp *shares) {
   return res;
 }
 
-sexp sexp_read_op (sexp ctx, sexp self, sexp_sint_t n, sexp in) {
+static sexp sexp_read_op (sexp ctx, sexp self, sexp_sint_t n, sexp in) {
   sexp res;
   sexp_gc_var1(shares);
   sexp_assert_type(ctx, sexp_iportp, SEXP_IPORT, in);
@@ -7544,7 +8398,7 @@ sexp sexp_read_op (sexp ctx, sexp self, sexp_sint_t n, sexp in) {
   return res;
 }
 
-sexp sexp_read_from_string (sexp ctx, const char *str, sexp_sint_t len) {
+static sexp sexp_read_from_string (sexp ctx, const char *str, sexp_sint_t len) {
   sexp res;
   sexp_gc_var2(s, in);
   sexp_gc_preserve2(ctx, s, in);
@@ -7555,7 +8409,7 @@ sexp sexp_read_from_string (sexp ctx, const char *str, sexp_sint_t len) {
   return res;
 }
 
-sexp sexp_string_to_number_op (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp b) {
+static sexp sexp_string_to_number_op (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp b) {
   int base;
   sexp_gc_var2(in, res);
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, str);
@@ -7583,7 +8437,7 @@ sexp sexp_string_to_number_op (sexp ctx, sexp self, sexp_sint_t n, sexp str, sex
   return res;
 }
 
-sexp sexp_write_to_string (sexp ctx, sexp obj) {
+static sexp sexp_write_to_string (sexp ctx, sexp obj) {
   sexp str;
   sexp_gc_var1(out);
   sexp_gc_preserve1(ctx, out);
@@ -7595,16 +8449,16 @@ sexp sexp_write_to_string (sexp ctx, sexp obj) {
   return str;
 }
 
-sexp sexp_symbol_to_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp sym) {
+static sexp sexp_symbol_to_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp sym) {
   sexp_assert_type(ctx, sexp_lsymbolp, SEXP_SYMBOL, sym);
   return sexp_c_string(ctx, sexp_lsymbol_data(sym), sexp_lsymbol_length(sym));
 }
 
-sexp sexp_square_brackets_sym (sexp ctx, sexp self, sexp_sint_t n) {
+static sexp sexp_square_brackets_sym (sexp ctx, sexp self, sexp_sint_t n) {
   return sexp_global(ctx, SEXP_G_SQUARE_BRACKETS_SYM);
 }
 
-void sexp_init (void) {
+static void sexp_init (void) {
   /* puchi: no process-global GC/symbol init */
 }
 /* ==== opcodes.c ==== */
@@ -7824,7 +8678,7 @@ PUCHI_FN0(PUCHI_I(SEXP_OBJECT), "square-brackets-symbol", 0, sexp_square_bracket
 PUCHI_OP(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
 };
 
-struct sexp_opcode_struct* sexp_primitive_opcodes = opcodes;
+static struct sexp_opcode_struct* sexp_primitive_opcodes = opcodes;
 /* ==== vm.c ==== */
 
 /* ... the rest of this file ... */
@@ -7846,7 +8700,7 @@ static sexp sexp_lookup_source_info (sexp src, int ip) {
   return SEXP_FALSE;
 }
 
-sexp sexp_get_stack_trace (sexp ctx) {
+static sexp sexp_get_stack_trace (sexp ctx) {
   sexp_sint_t i, fp=sexp_context_last_fp(ctx);
   sexp self, bc, src, *stack = sexp_stack_data(sexp_context_stack(ctx));
   sexp_gc_var2(res, cell);
@@ -7876,7 +8730,7 @@ sexp sexp_get_stack_trace (sexp ctx) {
   return res;
 }
 
-void sexp_print_extracted_stack_trace (sexp ctx, sexp trace, sexp out) {
+static void sexp_print_extracted_stack_trace (sexp ctx, sexp trace, sexp out) {
   sexp self, bc, src, ls;
   if (! sexp_oportp(out))
     out = sexp_current_error_port(ctx);
@@ -7909,7 +8763,7 @@ void sexp_print_extracted_stack_trace (sexp ctx, sexp trace, sexp out) {
   }
 }
 
-sexp sexp_print_exception_stack_trace_op (sexp ctx, sexp self, sexp_sint_t n, sexp exn, sexp out) {
+static sexp sexp_print_exception_stack_trace_op (sexp ctx, sexp self, sexp_sint_t n, sexp exn, sexp out) {
   sexp_assert_type(ctx, sexp_exceptionp, SEXP_EXCEPTION, exn);
   sexp_assert_type(ctx, sexp_oportp, SEXP_OPORT, out);
   if (sexp_pairp(sexp_exception_stack_trace(exn))) {
@@ -7918,7 +8772,7 @@ sexp sexp_print_exception_stack_trace_op (sexp ctx, sexp self, sexp_sint_t n, se
   return SEXP_VOID;
 }
 
-void sexp_stack_trace (sexp ctx, sexp out) {
+static void sexp_stack_trace (sexp ctx, sexp out) {
   sexp_gc_var1(trace);
   sexp_gc_preserve1(ctx, trace);
   trace = sexp_get_stack_trace(ctx);
@@ -7926,14 +8780,14 @@ void sexp_stack_trace (sexp ctx, sexp out) {
   sexp_gc_release1(ctx);
 }
 
-sexp sexp_stack_trace_op (sexp ctx, sexp self, sexp_sint_t n, sexp out) {
+static sexp sexp_stack_trace_op (sexp ctx, sexp self, sexp_sint_t n, sexp out) {
   sexp_stack_trace(ctx, out);
   return SEXP_VOID;
 }
 
 /************************* code generation ****************************/
 
-void sexp_context_align_pos(sexp ctx) {
+static void sexp_context_align_pos(sexp ctx) {
   sexp_uint_t i, pos = sexp_unbox_fixnum(sexp_context_pos(ctx));
   sexp_uint_t new_pos = sexp_word_align(pos);
   if (new_pos > pos) {
@@ -7983,7 +8837,7 @@ static void sexp_emit_push (sexp ctx, sexp obj) {
   bytecode_preserve(ctx, obj);
 }
 
-void sexp_emit_return (sexp ctx) {
+static void sexp_emit_return (sexp ctx) {
   sexp_emit(ctx, SEXP_OP_RET);
 }
 
@@ -8387,7 +9241,7 @@ static void generate_lambda (sexp ctx, sexp name, sexp loc, sexp lam, sexp lambd
   sexp_gc_release2(ctx);
 }
 
-void sexp_generate (sexp ctx, sexp name, sexp loc, sexp lam, sexp x) {
+static void sexp_generate (sexp ctx, sexp name, sexp loc, sexp lam, sexp x) {
   if (sexp_exceptionp(sexp_context_exception(ctx)))
     return;
   if (sexp_pointerp(x)) {
@@ -8458,7 +9312,7 @@ static sexp make_opcode_procedure (sexp ctx, sexp op, sexp_uint_t i, sexp_sint_t
   return res;
 }
 
-sexp sexp_make_foreign_proc(sexp ctx, const char *name, int num_args, int flags,
+static sexp sexp_make_foreign_proc(sexp ctx, const char *name, int num_args, int flags,
                             const char *fname, sexp_proc1 f) {
   sexp_gc_var1(res);
   sexp_gc_preserve1(ctx, res);
@@ -8469,7 +9323,7 @@ sexp sexp_make_foreign_proc(sexp ctx, const char *name, int num_args, int flags,
   return res;
 }
 
-sexp sexp_define_foreign_proc_aux (sexp ctx, sexp env, const char *name,int num_args,
+static sexp sexp_define_foreign_proc_aux (sexp ctx, sexp env, const char *name,int num_args,
                                    int flags, const char *fname, sexp_proc1 f, sexp data) {
   sexp_gc_var2(sym, res);
   sexp_gc_preserve2(ctx, sym, res);
@@ -8482,7 +9336,7 @@ sexp sexp_define_foreign_proc_aux (sexp ctx, sexp env, const char *name,int num_
 
 /*********************** the virtual machine **************************/
 
-sexp sexp_make_trampoline (sexp ctx, sexp proc, sexp args) {
+static sexp sexp_make_trampoline (sexp ctx, sexp proc, sexp args) {
   return sexp_make_exception(ctx, SEXP_TRAMPOLINE, SEXP_FALSE, args, proc, SEXP_FALSE);
 }
 
@@ -8605,7 +9459,7 @@ typedef sexp (*sexp_proc19) (sexp, sexp, sexp_sint_t, sexp, sexp, sexp, sexp, se
 
 #define PUCHI_A(i) stack[top-i]
 
-sexp sexp_fcall (sexp ctx, sexp self, sexp_sint_t n, sexp f) {
+static sexp sexp_fcall (sexp ctx, sexp self, sexp_sint_t n, sexp f) {
   sexp *stack = sexp_stack_data(sexp_context_stack(ctx));
   sexp_sint_t top = sexp_context_top(ctx);
   switch (n) {
@@ -8644,7 +9498,7 @@ sexp sexp_fcall (sexp ctx, sexp self, sexp_sint_t n, sexp f) {
 
 /* used only when no thread scheduler has been loaded */
 
-sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
+static sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
   unsigned char *ip;
   sexp bc, cp, *stack = sexp_stack_data(sexp_context_stack(ctx)), tmp;
   sexp_sint_t i, j, k, fp, top = sexp_stack_top(sexp_context_stack(ctx));
@@ -9677,7 +10531,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
   return tmp1;
 }
 
-sexp sexp_apply1 (sexp ctx, sexp f, sexp x) {
+static sexp sexp_apply1 (sexp ctx, sexp f, sexp x) {
   sexp res;
   sexp_gc_var1(args);
   if (sexp_opcodep(f) && sexp_opcode_func(f)) {
@@ -9690,7 +10544,7 @@ sexp sexp_apply1 (sexp ctx, sexp f, sexp x) {
   return res;
 }
 
-sexp sexp_apply2 (sexp ctx, sexp f, sexp x, sexp y) {
+static sexp sexp_apply2 (sexp ctx, sexp f, sexp x, sexp y) {
   sexp res;
   sexp_gc_var1(args);
   if (sexp_opcodep(f) && sexp_opcode_func(f)) {
@@ -9703,7 +10557,7 @@ sexp sexp_apply2 (sexp ctx, sexp f, sexp x, sexp y) {
   return res;
 }
 
-sexp sexp_apply3 (sexp ctx, sexp f, sexp x, sexp y, sexp z) {
+static sexp sexp_apply3 (sexp ctx, sexp f, sexp x, sexp y, sexp z) {
   sexp res;
   sexp_gc_var1(args);
   if (sexp_opcodep(f) && sexp_opcode_func(f)) {
@@ -9716,7 +10570,7 @@ sexp sexp_apply3 (sexp ctx, sexp f, sexp x, sexp y, sexp z) {
   return res;
 }
 
-sexp sexp_apply_no_err_handler (sexp ctx, sexp proc, sexp args) {
+static sexp sexp_apply_no_err_handler (sexp ctx, sexp proc, sexp args) {
   sexp res, err_cell;
   sexp_gc_var2(handler, params);
   sexp_gc_preserve2(ctx, handler, params);
@@ -9759,18 +10613,18 @@ static const char* sexp_opcode_names_[] =
    "RET", "DONE", "SC?", "SC<", "SC<="
   };
 
-const char** sexp_opcode_names = sexp_opcode_names_;
+static const char** sexp_opcode_names = sexp_opcode_names_;
 #endif
 
 /************************************************************************/
 
 static sexp analyze (sexp ctx, sexp x, int depth, int defok);
 
-sexp sexp_load_module_file_op (sexp ctx, sexp self, sexp_sint_t n, sexp file, sexp env);
-sexp sexp_find_module_file_op (sexp ctx, sexp self, sexp_sint_t n, sexp file);
-sexp sexp_current_environment (sexp ctx, sexp self, sexp_sint_t n);
+static sexp sexp_load_module_file_op (sexp ctx, sexp self, sexp_sint_t n, sexp file, sexp env);
+static sexp sexp_find_module_file_op (sexp ctx, sexp self, sexp_sint_t n, sexp file);
+static sexp sexp_current_environment (sexp ctx, sexp self, sexp_sint_t n);
 
-sexp sexp_compile_error (sexp ctx, const char *message, sexp o) {
+static sexp sexp_compile_error (sexp ctx, const char *message, sexp o) {
   sexp exn;
   sexp_gc_var3(sym, irritants, msg);
   sexp_gc_preserve3(ctx, sym, irritants, msg);
@@ -9783,7 +10637,7 @@ sexp sexp_compile_error (sexp ctx, const char *message, sexp o) {
   return exn;
 }
 
-void sexp_warn (sexp ctx, const char *msg, sexp x) {
+static void sexp_warn (sexp ctx, const char *msg, sexp x) {
   sexp_gc_var1(out);
   int strictp = sexp_truep(sexp_global(ctx, SEXP_G_STRICT_P));
   sexp_gc_preserve1(ctx, out);
@@ -9810,7 +10664,7 @@ void sexp_warn (sexp ctx, const char *msg, sexp x) {
   if (strictp) puchi_fatal(ctx, PUCHI_FATAL_STRICT, msg);
 }
 
-sexp sexp_warn_undefs_op (sexp ctx, sexp self, sexp_sint_t n, sexp from, sexp to, sexp res) {
+static sexp sexp_warn_undefs_op (sexp ctx, sexp self, sexp_sint_t n, sexp from, sexp to, sexp res) {
   sexp x, ignore = (res && sexp_exceptionp(res)) ? sexp_exception_irritants(res) : SEXP_NULL;
   if (sexp_envp(from)) from = sexp_env_bindings(from);
   for (x=from; sexp_pairp(x) && x!=to; x=sexp_env_next_cell(x))
@@ -9821,7 +10675,7 @@ sexp sexp_warn_undefs_op (sexp ctx, sexp self, sexp_sint_t n, sexp from, sexp to
   return SEXP_VOID;
 }
 
-sexp sexp_maybe_wrap_error (sexp ctx, sexp obj) {
+static sexp sexp_maybe_wrap_error (sexp ctx, sexp obj) {
   sexp_gc_var2(tmp, res);
   if (sexp_exceptionp(obj)) {
     sexp_gc_preserve2(ctx, tmp, res);
@@ -9872,7 +10726,7 @@ static sexp sexp_env_cell_loc (sexp ctx, sexp env, sexp key, int localp, sexp *v
   return cell;
 }
 
-sexp sexp_env_cell (sexp ctx, sexp env, sexp key, int localp) {
+static sexp sexp_env_cell (sexp ctx, sexp env, sexp key, int localp) {
   return sexp_env_cell_loc(ctx, env, key, localp, NULL);
 }
 
@@ -9888,7 +10742,7 @@ static sexp sexp_env_undefine (sexp ctx, sexp env, sexp key) {
   return SEXP_FALSE;
 }
 
-sexp sexp_env_cell_define (sexp ctx, sexp env, sexp key,
+static sexp sexp_env_cell_define (sexp ctx, sexp env, sexp key,
                            sexp value, sexp *varenv) {
   sexp_gc_var2(cell, ls);
   while (sexp_env_lambda(env) || sexp_env_syntactic_p(env))
@@ -9918,12 +10772,12 @@ static sexp sexp_env_cell_create (sexp ctx, sexp env, sexp key,
   return cell;
 }
 
-sexp sexp_env_ref (sexp ctx, sexp env, sexp key, sexp dflt) {
+static sexp sexp_env_ref (sexp ctx, sexp env, sexp key, sexp dflt) {
   sexp cell = sexp_env_cell(ctx, env, key, 0);
   return (cell ? sexp_cdr(cell) : dflt);
 }
 
-sexp sexp_env_define (sexp ctx, sexp env, sexp key, sexp value) {
+static sexp sexp_env_define (sexp ctx, sexp env, sexp key, sexp value) {
   sexp cell, tmp, res = SEXP_VOID;
   if (sexp_immutablep(env))
     return sexp_user_exception(ctx, NULL, "immutable binding", key);
@@ -9943,13 +10797,13 @@ sexp sexp_env_define (sexp ctx, sexp env, sexp key, sexp value) {
   return res;
 }
 
-sexp sexp_env_rename (sexp ctx, sexp env, sexp key, sexp value) {
+static sexp sexp_env_rename (sexp ctx, sexp env, sexp key, sexp value) {
   sexp tmp;
   sexp_env_push_rename(ctx, env, tmp, key, value);
   return SEXP_VOID;
 }
 
-sexp sexp_env_exports_op (sexp ctx, sexp self, sexp_sint_t n, sexp env) {
+static sexp sexp_env_exports_op (sexp ctx, sexp self, sexp_sint_t n, sexp env) {
   sexp ls;
   sexp_gc_var1(res);
   sexp_assert_type(ctx, sexp_envp, SEXP_ENV, env);
@@ -9964,7 +10818,7 @@ sexp sexp_env_exports_op (sexp ctx, sexp self, sexp_sint_t n, sexp env) {
   return res;
 }
 
-sexp sexp_extend_env (sexp ctx, sexp env, sexp vars, sexp value) {
+static sexp sexp_extend_env (sexp ctx, sexp env, sexp vars, sexp value) {
   sexp_gc_var2(e, tmp);
   sexp_gc_preserve2(ctx, e, tmp);
   e = sexp_alloc_type(ctx, env, SEXP_ENV);
@@ -9977,7 +10831,7 @@ sexp sexp_extend_env (sexp ctx, sexp env, sexp vars, sexp value) {
   return e;
 }
 
-sexp sexp_extend_synclo_env (sexp ctx, sexp env) {
+static sexp sexp_extend_synclo_env (sexp ctx, sexp env) {
   sexp e1, e2;
   sexp_gc_var1(e);
   sexp_gc_preserve1(ctx, e);
@@ -10012,7 +10866,7 @@ static sexp sexp_flatten_dot (sexp ctx, sexp ls) {
   return sexp_nreverse(ctx, sexp_reverse_flatten_dot(ctx, ls));
 }
 
-int sexp_param_index (sexp ctx, sexp lambda, sexp name) {
+static int sexp_param_index (sexp ctx, sexp lambda, sexp name) {
   sexp ls;
   int i;
   while (1) {
@@ -10037,7 +10891,7 @@ int sexp_param_index (sexp ctx, sexp lambda, sexp name) {
 
 /************************* bytecode utilities ***************************/
 
-void sexp_shrink_bcode (sexp ctx, sexp_uint_t i) {
+static void sexp_shrink_bcode (sexp ctx, sexp_uint_t i) {
   sexp tmp;
   if (sexp_bytecode_length(sexp_context_bc(ctx)) != i) {
     tmp = sexp_alloc_bytecode(ctx, i);
@@ -10056,7 +10910,7 @@ void sexp_shrink_bcode (sexp ctx, sexp_uint_t i) {
   }
 }
 
-void sexp_expand_bcode (sexp ctx, sexp_sint_t size) {
+static void sexp_expand_bcode (sexp ctx, sexp_sint_t size) {
   sexp tmp;
   if ((sexp_sint_t)sexp_bytecode_length(sexp_context_bc(ctx))
       < (sexp_unbox_fixnum(sexp_context_pos(ctx)))+size) {
@@ -10079,7 +10933,7 @@ void sexp_expand_bcode (sexp ctx, sexp_sint_t size) {
   }
 }
 
-void sexp_emit (sexp ctx, unsigned char c)  {
+static void sexp_emit (sexp ctx, unsigned char c)  {
   sexp_expand_bcode(ctx, 1);
   if (sexp_exceptionp(sexp_context_exception(ctx)))
     return;
@@ -10087,7 +10941,7 @@ void sexp_emit (sexp ctx, unsigned char c)  {
   sexp_context_pos(ctx) = sexp_fx_add(sexp_context_pos(ctx), SEXP_ONE);
 }
 
-sexp sexp_complete_bytecode (sexp ctx) {
+static sexp sexp_complete_bytecode (sexp ctx) {
   sexp bc;
   sexp_emit_return(ctx);
   sexp_shrink_bcode(ctx, sexp_unbox_fixnum(sexp_context_pos(ctx)));
@@ -10123,7 +10977,7 @@ sexp sexp_complete_bytecode (sexp ctx) {
   return bc;
 }
 
-sexp sexp_make_procedure_op (sexp ctx, sexp self, sexp_sint_t n, sexp flags,
+static sexp sexp_make_procedure_op (sexp ctx, sexp self, sexp_sint_t n, sexp flags,
                              sexp num_args, sexp bc, sexp vars) {
   sexp proc = sexp_alloc_type(ctx, procedure, SEXP_PROCEDURE);
   sexp_procedure_flags(proc) = (char) (sexp_uint_t) flags;
@@ -10141,7 +10995,7 @@ static sexp sexp_make_macro (sexp ctx, sexp p, sexp e) {
   return mac;
 }
 
-sexp sexp_make_synclo_op (sexp ctx, sexp self, sexp_sint_t n, sexp env, sexp fv, sexp expr) {
+static sexp sexp_make_synclo_op (sexp ctx, sexp self, sexp_sint_t n, sexp env, sexp fv, sexp expr) {
   sexp res;
   sexp_assert_type(ctx, sexp_envp, SEXP_ENV, env);
   if (! (sexp_symbolp(expr) || sexp_pairp(expr) || sexp_synclop(expr)))
@@ -10156,7 +11010,7 @@ sexp sexp_make_synclo_op (sexp ctx, sexp self, sexp_sint_t n, sexp env, sexp fv,
 
 /* internal AST */
 
-sexp sexp_make_lambda (sexp ctx, sexp params) {
+static sexp sexp_make_lambda (sexp ctx, sexp params) {
   sexp res = sexp_alloc_type(ctx, lambda, SEXP_LAMBDA);
   sexp_lambda_name(res) = SEXP_FALSE;
   sexp_lambda_params(res) = params;
@@ -10169,7 +11023,7 @@ sexp sexp_make_lambda (sexp ctx, sexp params) {
   return res;
 }
 
-sexp sexp_make_ref (sexp ctx, sexp name, sexp cell) {
+static sexp sexp_make_ref (sexp ctx, sexp name, sexp cell) {
   sexp res = sexp_alloc_type(ctx, ref, SEXP_REF);
   sexp_ref_name(res) = name;
   sexp_ref_cell(res) = cell;
@@ -10191,7 +11045,7 @@ static sexp sexp_make_cnd (sexp ctx, sexp test, sexp pass, sexp fail) {
   return res;
 }
 
-sexp sexp_make_lit (sexp ctx, sexp value) {
+static sexp sexp_make_lit (sexp ctx, sexp value) {
   sexp res = sexp_alloc_type(ctx, lit, SEXP_LIT);
   sexp_lit_value(res) = value;
   return res;
@@ -10232,14 +11086,14 @@ static void sexp_init_eval_context_bytecodes (sexp ctx) {
   sexp_gc_release3(ctx);
 }
 
-void sexp_init_eval_context_globals (sexp ctx) {
+static void sexp_init_eval_context_globals (sexp ctx) {
   ctx = sexp_make_child_context(ctx, NULL);
   sexp_init_eval_context_bytecodes(ctx);
   /* Host/harness fills module path via add-module-directory foreigns. */
   sexp_global(ctx, SEXP_G_MODULE_PATH) = SEXP_NULL;
 }
 
-sexp sexp_make_eval_context_host (sexp ctx, sexp stack, sexp env, sexp_uint_t size, sexp_uint_t max_size, const puchi_host *host) {
+static sexp sexp_make_eval_context_host (sexp ctx, sexp stack, sexp env, sexp_uint_t size, sexp_uint_t max_size, const puchi_host *host) {
   sexp_gc_var1(res);
   res = sexp_make_context(ctx, size, max_size, host);
   if (!res || sexp_exceptionp(res))
@@ -10287,7 +11141,7 @@ sexp sexp_make_eval_context_host (sexp ctx, sexp stack, sexp env, sexp_uint_t si
   return res;
 }
 
-sexp sexp_make_child_context (sexp ctx, sexp lambda) {
+static sexp sexp_make_child_context (sexp ctx, sexp lambda) {
   sexp res = sexp_make_eval_context(ctx,
                                     sexp_context_stack(ctx),
                                     sexp_context_env(ctx),
@@ -10304,20 +11158,20 @@ sexp sexp_make_child_context (sexp ctx, sexp lambda) {
 
 /**************************** identifiers *****************************/
 
-sexp sexp_id_name (sexp x) {
+static sexp sexp_id_name (sexp x) {
   while (sexp_synclop(x)) x = sexp_synclo_expr(x);
   return x;
 }
 
-int sexp_idp (sexp x) {
+static int sexp_idp (sexp x) {
   return sexp_symbolp(sexp_id_name(x));
 }
 
-sexp sexp_identifierp_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
+static sexp sexp_identifierp_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
   return sexp_make_boolean(sexp_idp(x));
 }
 
-sexp sexp_syntactic_closure_expr_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
+static sexp sexp_syntactic_closure_expr_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
   return (sexp_synclop(x) ? sexp_synclo_expr(x) : x);
 }
 
@@ -10344,7 +11198,7 @@ static int sexp_contains_syntax_p_bound(sexp x, int depth) {
   return 0;
 }
 
-sexp sexp_strip_synclos_bound (sexp ctx, sexp x, int depth) {
+static sexp sexp_strip_synclos_bound (sexp ctx, sexp x, int depth) {
   int i;
   sexp_gc_var3(res, kar, kdr);
   if (depth <= 0) return x;
@@ -10366,13 +11220,13 @@ sexp sexp_strip_synclos_bound (sexp ctx, sexp x, int depth) {
   return res;
 }
 
-sexp sexp_strip_synclos (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
+static sexp sexp_strip_synclos (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
   if (!sexp_contains_syntax_p_bound(x, SEXP_STRIP_SYNCLOS_BOUND))
     return x;
   return sexp_strip_synclos_bound(ctx, x, SEXP_STRIP_SYNCLOS_BOUND);
 }
 
-sexp sexp_identifier_eq_op (sexp ctx, sexp self, sexp_sint_t n, sexp e1, sexp id1, sexp e2, sexp id2) {
+static sexp sexp_identifier_eq_op (sexp ctx, sexp self, sexp_sint_t n, sexp e1, sexp id1, sexp e2, sexp id2) {
   sexp cell1, cell2;
   sexp_assert_type(ctx, sexp_envp, SEXP_ENV, e1);
   sexp_assert_type(ctx, sexp_envp, SEXP_ENV, e2);
@@ -10918,7 +11772,7 @@ error:
   return res;
 }
 
-sexp sexp_analyze (sexp ctx, sexp x) {return analyze(ctx, x, 0, 1);}
+static sexp sexp_analyze (sexp ctx, sexp x) {return analyze(ctx, x, 0, 1);}
 
 /********************** free varable analysis *************************/
 
@@ -10955,7 +11809,7 @@ static sexp diff_free_vars (sexp ctx, sexp lambda, sexp fv, sexp params) {
   return res;
 }
 
-sexp sexp_free_vars (sexp ctx, sexp x, sexp fv) {
+static sexp sexp_free_vars (sexp ctx, sexp x, sexp fv) {
   sexp_gc_var2(fv1, fv2);
   sexp_gc_preserve2(ctx, fv1, fv2);
   fv1 = fv;
@@ -10990,7 +11844,7 @@ sexp sexp_free_vars (sexp ctx, sexp x, sexp fv) {
 
 /************************ library procedures **************************/
 
-sexp sexp_close_port_op (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
+static sexp sexp_close_port_op (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
   sexp res = SEXP_VOID;
   sexp_assert_type(ctx, sexp_portp, SEXP_OPORT, port);
   /* we can't run arbitrary scheme code in the finalizer, so we need */
@@ -11005,7 +11859,7 @@ sexp sexp_close_port_op (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
   return sexp_finalize_port(ctx, self, n, port);
 }
 
-sexp sexp_set_port_line_op (sexp ctx, sexp self, sexp_sint_t n, sexp port, sexp line) {
+static sexp sexp_set_port_line_op (sexp ctx, sexp self, sexp_sint_t n, sexp port, sexp line) {
   sexp_assert_type(ctx, sexp_iportp, SEXP_IPORT, port);
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, line);
   sexp_port_sourcep(port) = 1;
@@ -11014,7 +11868,7 @@ sexp sexp_set_port_line_op (sexp ctx, sexp self, sexp_sint_t n, sexp port, sexp 
 }
 
 #if defined(PUCHI_TEST)
-sexp sexp_get_port_fileno (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
+static sexp sexp_get_port_fileno (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
   int fd;
   sexp_assert_type(ctx, sexp_portp, SEXP_IPORT, port);
   fd = sexp_port_fileno(port);
@@ -11023,13 +11877,13 @@ sexp sexp_get_port_fileno (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
   return SEXP_FALSE;
 }
 #endif
-sexp sexp_stream_portp_op (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
+static sexp sexp_stream_portp_op (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
   sexp_assert_type(ctx, sexp_portp, SEXP_IPORT, port);
   return sexp_make_boolean(sexp_stream_portp(port));
 }
 
 #if defined(PUCHI_TEST)
-void sexp_add_static_libraries(sexp ctx, struct sexp_library_entry_t* libraries)
+static void sexp_add_static_libraries(sexp ctx, struct sexp_library_entry_t* libraries)
 {
   sexp_heap h;
   struct sexp_static_library_list_t *node, **tail;
@@ -11097,7 +11951,7 @@ static sexp sexp_load_binary(sexp ctx, sexp file, sexp env) {
 }
 #endif
 
-sexp sexp_load_op (sexp ctx, sexp self, sexp_sint_t n, sexp source, sexp env) {
+static sexp sexp_load_op (sexp ctx, sexp self, sexp_sint_t n, sexp source, sexp env) {
 #if defined(PUCHI_TEST)
   const char *suffix;
 #endif
@@ -11148,7 +12002,7 @@ sexp sexp_load_op (sexp ctx, sexp self, sexp_sint_t n, sexp source, sexp env) {
   return res;
 }
 
-sexp sexp_register_optimization (sexp ctx, sexp self, sexp_sint_t n, sexp f, sexp priority) {
+static sexp sexp_register_optimization (sexp ctx, sexp self, sexp_sint_t n, sexp f, sexp priority) {
   sexp_assert_type(ctx, sexp_applicablep, SEXP_PROCEDURE, f);
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, priority);
   sexp_push(ctx, sexp_global(ctx, SEXP_G_OPTIMIZATIONS), SEXP_VOID);
@@ -11255,7 +12109,7 @@ define_math_rounder(sexp_trunc, trunc, sexp_ratio_trunc)
 define_math_rounder(sexp_floor, floor, sexp_ratio_floor)
 define_math_rounder(sexp_ceiling, ceil, sexp_ratio_ceiling)
 
-sexp sexp_log (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
+static sexp sexp_log (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
   double d;
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
   sexp_gc_var1(tmp);
@@ -11283,7 +12137,7 @@ sexp sexp_log (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
   return sexp_make_flonum(ctx, PUCHI_LOG(d));
 }
 
-sexp sexp_inexact_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
+static sexp sexp_inexact_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
   int negativep = 0;
 #endif
@@ -11319,7 +12173,7 @@ sexp sexp_inexact_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-sexp sexp_exact_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
+static sexp sexp_exact_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
   sexp_gc_var2(res, rem);
   sexp_gc_preserve2(ctx, res, rem);
   if (sexp_bignump(z)) {
@@ -11347,7 +12201,7 @@ sexp sexp_exact_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
 #endif
 
 #if !defined(PUCHI_INTEGER_ONLY) && !defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-sexp sexp_exact_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
+static sexp sexp_exact_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
   sexp_gc_var2(res, rem);
   sexp_gc_preserve2(ctx, res, rem);
 #if !defined(PUCHI_INTEGER_ONLY)
@@ -11383,7 +12237,7 @@ sexp sexp_exact_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
 }
 #endif
 
-sexp sexp_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
+static sexp sexp_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
   sexp_gc_var2(res, rem);
 #endif
@@ -11418,7 +12272,7 @@ sexp sexp_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
 #endif
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER) || defined(PUCHI_INTEGER_ONLY)
-sexp sexp_generic_expt (sexp ctx, sexp x, sexp_sint_t e) {
+static sexp sexp_generic_expt (sexp ctx, sexp x, sexp_sint_t e) {
   sexp_gc_var2(res, tmp);
   sexp_gc_preserve2(ctx, res, tmp);
   for (res = SEXP_ONE, tmp = x; e > 0; e >>= 1) {
@@ -11430,7 +12284,7 @@ sexp sexp_generic_expt (sexp ctx, sexp x, sexp_sint_t e) {
 }
 #endif
 
-sexp sexp_expt_op (sexp ctx, sexp self, sexp_sint_t n, sexp x, sexp e) {
+static sexp sexp_expt_op (sexp ctx, sexp self, sexp_sint_t n, sexp x, sexp e) {
 #if defined(PUCHI_INTEGER_ONLY)
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, x);
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, e);
@@ -11506,28 +12360,28 @@ sexp sexp_expt_op (sexp ctx, sexp self, sexp_sint_t n, sexp x, sexp e) {
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-sexp sexp_ratio_numerator_op (sexp ctx, sexp self, sexp_sint_t n, sexp rat) {
+static sexp sexp_ratio_numerator_op (sexp ctx, sexp self, sexp_sint_t n, sexp rat) {
   sexp_assert_type(ctx, sexp_ratiop, SEXP_RATIO, rat);
   return sexp_ratio_numerator(rat);
 }
-sexp sexp_ratio_denominator_op (sexp ctx, sexp self, sexp_sint_t n, sexp rat) {
+static sexp sexp_ratio_denominator_op (sexp ctx, sexp self, sexp_sint_t n, sexp rat) {
   sexp_assert_type(ctx, sexp_ratiop, SEXP_RATIO, rat);
   return sexp_ratio_denominator(rat);
 }
 #endif
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-sexp sexp_complex_real_op (sexp ctx, sexp self, sexp_sint_t n, sexp cpx) {
+static sexp sexp_complex_real_op (sexp ctx, sexp self, sexp_sint_t n, sexp cpx) {
   sexp_assert_type(ctx, sexp_complexp, SEXP_COMPLEX, cpx);
   return sexp_complex_real(cpx);
 }
-sexp sexp_complex_imag_op (sexp ctx, sexp self, sexp_sint_t n, sexp cpx) {
+static sexp sexp_complex_imag_op (sexp ctx, sexp self, sexp_sint_t n, sexp cpx) {
   sexp_assert_type(ctx, sexp_complexp, SEXP_COMPLEX, cpx);
   return sexp_complex_imag(cpx);
 }
 #endif
 
-sexp sexp_exact_to_inexact (sexp ctx, sexp self, sexp_sint_t n, sexp i) {
+static sexp sexp_exact_to_inexact (sexp ctx, sexp self, sexp_sint_t n, sexp i) {
   sexp_gc_var1(res);
   res = i;
   if (sexp_fixnump(i))
@@ -11558,7 +12412,7 @@ sexp sexp_exact_to_inexact (sexp ctx, sexp self, sexp_sint_t n, sexp i) {
   return res;
 }
 
-sexp sexp_inexact_to_exact (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
+static sexp sexp_inexact_to_exact (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
   sexp_gc_var1(res);
   if (sexp_exactp(z)) {
     res = z;
@@ -11604,7 +12458,7 @@ sexp sexp_inexact_to_exact (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
   return res;
 }
 
-sexp sexp_string_cmp_op (sexp ctx, sexp self, sexp_sint_t n, sexp str1, sexp str2, sexp ci) {
+static sexp sexp_string_cmp_op (sexp ctx, sexp self, sexp_sint_t n, sexp str1, sexp str2, sexp ci) {
   sexp_sint_t len1, len2, len, diff;
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, str1);
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, str2);
@@ -11621,7 +12475,7 @@ sexp sexp_string_cmp_op (sexp ctx, sexp self, sexp_sint_t n, sexp str1, sexp str
 }
 
 
-sexp sexp_string_utf8_index_ref (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp i) {
+static sexp sexp_string_utf8_index_ref (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp i) {
   sexp off;
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, str);
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, i);
@@ -11632,7 +12486,7 @@ sexp sexp_string_utf8_index_ref (sexp ctx, sexp self, sexp_sint_t n, sexp str, s
   return sexp_string_utf8_ref(ctx, str, off);
 }
 
-sexp sexp_read_utf8_char (sexp ctx, sexp port, int i) {
+static sexp sexp_read_utf8_char (sexp ctx, sexp port, int i) {
   if (i >= 0x80) {
     if ((i < 0xC0) || (i > 0xF7)) {
       return sexp_user_exception(ctx, NULL, "read-char: invalid utf8 byte", sexp_make_fixnum(i));
@@ -11650,7 +12504,7 @@ sexp sexp_read_utf8_char (sexp ctx, sexp port, int i) {
   return sexp_make_character(i);
 }
 
-void sexp_push_utf8_char (sexp ctx, int i, sexp port) {
+static void sexp_push_utf8_char (sexp ctx, int i, sexp port) {
   unsigned char ch[6];
   int len = sexp_utf8_char_byte_count(i);
   sexp_utf8_encode_char(ch, len, i);
@@ -11664,7 +12518,7 @@ void sexp_push_utf8_char (sexp ctx, int i, sexp port) {
 }
 
 
-void sexp_string_utf8_set (sexp ctx, sexp str, sexp index, sexp ch) {
+static void sexp_string_utf8_set (sexp ctx, sexp str, sexp index, sexp ch) {
   sexp b;
   unsigned char *p, *q;
   int i = sexp_unbox_string_cursor(index), c = sexp_unbox_character(ch),
@@ -11690,7 +12544,7 @@ void sexp_string_utf8_set (sexp ctx, sexp str, sexp index, sexp ch) {
   }
 }
 
-sexp sexp_string_utf8_index_set (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp i, sexp ch) {
+static sexp sexp_string_utf8_index_set (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp i, sexp ch) {
   sexp off;
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, str);
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, i);
@@ -11710,7 +12564,7 @@ sexp sexp_string_utf8_index_set (sexp ctx, sexp self, sexp_sint_t n, sexp str, s
 /***************************** opcodes ********************************/
 
 
-sexp sexp_type_slot_offset_op (sexp ctx , sexp self, sexp_sint_t n, sexp type, sexp slot) {
+static sexp sexp_type_slot_offset_op (sexp ctx , sexp self, sexp_sint_t n, sexp type, sexp slot) {
   sexp cpl, slots, *v;
   int i, offset, len;
   sexp_assert_type(ctx, sexp_typep, SEXP_TYPE, type);
@@ -11733,7 +12587,7 @@ sexp sexp_type_slot_offset_op (sexp ctx , sexp self, sexp_sint_t n, sexp type, s
   return SEXP_FALSE;
 }
 
-sexp sexp_make_type_predicate_op (sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp type) {
+static sexp sexp_make_type_predicate_op (sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp type) {
   if (sexp_typep(type)) type = sexp_make_fixnum(sexp_type_tag(type));
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, type);
   return sexp_make_opcode(ctx, self, name, sexp_make_fixnum(SEXP_OPC_TYPE_PREDICATE),
@@ -11741,7 +12595,7 @@ sexp sexp_make_type_predicate_op (sexp ctx, sexp self, sexp_sint_t n, sexp name,
                           SEXP_ZERO, SEXP_ZERO, SEXP_ZERO, type, NULL, NULL);
 }
 
-sexp sexp_make_constructor_op (sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp type) {
+static sexp sexp_make_constructor_op (sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp type) {
   sexp_uint_t type_size;
   if (sexp_typep(type)) type = sexp_make_fixnum(sexp_type_tag(type));
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, type);
@@ -11752,7 +12606,7 @@ sexp sexp_make_constructor_op (sexp ctx, sexp self, sexp_sint_t n, sexp name, se
                           sexp_make_fixnum(type_size), NULL);
 }
 
-sexp sexp_make_getter_op (sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp type, sexp index) {
+static sexp sexp_make_getter_op (sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp type, sexp index) {
   if (sexp_typep(type)) type = sexp_make_fixnum(sexp_type_tag(type));
   if ((! sexp_fixnump(type))  || (sexp_unbox_fixnum(type) < 0))
     return sexp_type_exception(ctx, self, SEXP_FIXNUM, type);
@@ -11764,7 +12618,7 @@ sexp sexp_make_getter_op (sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp ty
                      type, SEXP_ZERO, SEXP_ZERO, type, index, NULL);
 }
 
-sexp sexp_make_setter_op (sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp type, sexp index) {
+static sexp sexp_make_setter_op (sexp ctx, sexp self, sexp_sint_t n, sexp name, sexp type, sexp index) {
   sexp res;
   if (sexp_typep(type)) type = sexp_make_fixnum(sexp_type_tag(type));
   if ((! sexp_fixnump(type))  || (sexp_unbox_fixnum(type) < 0))
@@ -11792,7 +12646,7 @@ static sexp sexp_copy_opcode (sexp ctx, struct sexp_opcode_struct *op) {
   return res;
 }
 
-sexp sexp_make_opcode (sexp ctx, sexp self, sexp name, sexp op_class, sexp code,
+static sexp sexp_make_opcode (sexp ctx, sexp self, sexp name, sexp op_class, sexp code,
                        sexp num_args, sexp flags, sexp arg1t, sexp arg2t,
                        sexp invp, sexp data, sexp data2, sexp_proc1 func) {
   sexp res;
@@ -11821,7 +12675,7 @@ sexp sexp_make_opcode (sexp ctx, sexp self, sexp name, sexp op_class, sexp code,
   return res;
 }
 
-sexp sexp_make_foreign (sexp ctx, const char *name, int num_args,
+static sexp sexp_make_foreign (sexp ctx, const char *name, int num_args,
                         int flags, const char *fname, sexp_proc1 f, sexp data) {
   sexp_gc_var1(res);
   sexp_gc_preserve1(ctx, res);
@@ -11844,7 +12698,7 @@ sexp sexp_make_foreign (sexp ctx, const char *name, int num_args,
   return res;
 }
 
-sexp sexp_define_foreign_aux (sexp ctx, sexp env, const char *name, int num_args,
+static sexp sexp_define_foreign_aux (sexp ctx, sexp env, const char *name, int num_args,
                               int flags, const char *fname, sexp_proc1 f, sexp data) {
   sexp_gc_var2(sym, res);
   sexp_gc_preserve2(ctx, sym, res);
@@ -11855,7 +12709,7 @@ sexp sexp_define_foreign_aux (sexp ctx, sexp env, const char *name, int num_args
   return res;
 }
 
-sexp sexp_define_foreign_param_aux (sexp ctx, sexp env, const char *name,
+static sexp sexp_define_foreign_param_aux (sexp ctx, sexp env, const char *name,
                                     int num_args, const char *fname, sexp_proc1 f, const char *param) {
   sexp res = SEXP_FALSE;
   sexp_gc_var1(tmp);
@@ -11891,7 +12745,7 @@ static struct sexp_core_form_struct core_forms[] = {
   {SEXP_CORE_LETREC_SYNTAX, (sexp)"letrec-syntax"},
 };
 
-sexp sexp_make_env_op (sexp ctx, sexp self, sexp_sint_t n) {
+static sexp sexp_make_env_op (sexp ctx, sexp self, sexp_sint_t n) {
   sexp e = sexp_alloc_type(ctx, env, SEXP_ENV);
   sexp_env_lambda(e) = NULL;
   sexp_env_parent(e) = NULL;
@@ -11900,7 +12754,7 @@ sexp sexp_make_env_op (sexp ctx, sexp self, sexp_sint_t n) {
   return e;
 }
 
-sexp sexp_make_null_env_op (sexp ctx, sexp self, sexp_sint_t n, sexp version) {
+static sexp sexp_make_null_env_op (sexp ctx, sexp self, sexp_sint_t n, sexp version) {
   sexp_uint_t i;
   sexp_gc_var2(e, core);
   sexp_gc_preserve2(ctx, e, core);
@@ -11914,9 +12768,9 @@ sexp sexp_make_null_env_op (sexp ctx, sexp self, sexp_sint_t n, sexp version) {
   return e;
 }
 
-extern struct sexp_opcode_struct* sexp_primitive_opcodes;  /* from opcodes.c */
+static struct sexp_opcode_struct* sexp_primitive_opcodes;  /* from opcodes.c */
 
-sexp sexp_make_primitive_env_op (sexp ctx, sexp self, sexp_sint_t n, sexp version) {
+static sexp sexp_make_primitive_env_op (sexp ctx, sexp self, sexp_sint_t n, sexp version) {
   int i;
   sexp_gc_var4(e, op, sym, name);
   sexp_gc_preserve4(ctx, e, op, sym, name);
@@ -11940,12 +12794,12 @@ sexp sexp_make_primitive_env_op (sexp ctx, sexp self, sexp_sint_t n, sexp versio
   return e;
 }
 
-char* sexp_find_module_file_raw (sexp ctx, const char *file) {
+static char* sexp_find_module_file_raw (sexp ctx, const char *file) {
   (void)ctx; (void)file;
   return NULL;
 }
 
-sexp sexp_find_module_file (sexp ctx, const char *file) {
+static sexp sexp_find_module_file (sexp ctx, const char *file) {
   char* path = sexp_find_module_file_raw(ctx, file);
   if (!path) return SEXP_FALSE;
   return sexp_c_string(ctx, path, -1);
@@ -11953,7 +12807,7 @@ sexp sexp_find_module_file (sexp ctx, const char *file) {
 
 #define sexp_file_not_found "couldn't find file in module path"
 
-sexp sexp_load_module_file (sexp ctx, const char *file, sexp env) {
+static sexp sexp_load_module_file (sexp ctx, const char *file, sexp env) {
   sexp res;
   sexp_gc_var1(path);
   sexp_gc_preserve1(ctx, path);
@@ -11968,38 +12822,38 @@ sexp sexp_load_module_file (sexp ctx, const char *file, sexp env) {
   return res;
 }
 
-sexp sexp_current_environment (sexp ctx, sexp self, sexp_sint_t n) {
+static sexp sexp_current_environment (sexp ctx, sexp self, sexp_sint_t n) {
   return sexp_context_env(ctx);
 }
 
-sexp sexp_current_module_path_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
+static sexp sexp_current_module_path_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
   if (sexp_pairp(x) && sexp_stringp(sexp_car(x))) {
     sexp_global(ctx, SEXP_G_MODULE_PATH) = sexp_reverse(ctx, x);
     sexp_global(ctx, SEXP_G_MODULE_PATH) = sexp_reverse(ctx, sexp_global(ctx, SEXP_G_MODULE_PATH));
   }
   return sexp_global(ctx, SEXP_G_MODULE_PATH);
 }
-sexp sexp_find_module_file_op (sexp ctx, sexp self, sexp_sint_t n, sexp file) {
+static sexp sexp_find_module_file_op (sexp ctx, sexp self, sexp_sint_t n, sexp file) {
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, file);
   return sexp_find_module_file(ctx, sexp_string_data(file));
 }
-sexp sexp_load_module_file_op (sexp ctx, sexp self, sexp_sint_t n, sexp file, sexp env) {
+static sexp sexp_load_module_file_op (sexp ctx, sexp self, sexp_sint_t n, sexp file, sexp env) {
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, file);
   sexp_assert_type(ctx, sexp_envp, SEXP_ENV, env);
   return sexp_load_module_file(ctx, sexp_string_data(file), env);
 }
-sexp sexp_set_current_environment (sexp ctx, sexp self, sexp_sint_t n, sexp env) {
+static sexp sexp_set_current_environment (sexp ctx, sexp self, sexp_sint_t n, sexp env) {
   sexp oldenv;
   sexp_assert_type(ctx, sexp_envp, SEXP_ENV, env);
   oldenv = sexp_context_env(ctx);
   sexp_context_env(ctx) = env;
   return oldenv;
 }
-sexp sexp_meta_environment (sexp ctx, sexp self, sexp_sint_t n) {
+static sexp sexp_meta_environment (sexp ctx, sexp self, sexp_sint_t n) {
   return sexp_global(ctx, SEXP_G_META_ENV);
 }
 
-sexp sexp_add_module_directory_op (sexp ctx, sexp self, sexp_sint_t n, sexp dir, sexp appendp) {
+static sexp sexp_add_module_directory_op (sexp ctx, sexp self, sexp_sint_t n, sexp dir, sexp appendp) {
   sexp ls;
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, dir);
   if (sexp_truep(appendp)) {
@@ -12016,23 +12870,23 @@ sexp sexp_add_module_directory_op (sexp ctx, sexp self, sexp_sint_t n, sexp dir,
   return SEXP_VOID;
 }
 
-sexp sexp_parameter_ref (sexp ctx, sexp param) {
+static sexp sexp_parameter_ref (sexp ctx, sexp param) {
   return sexp_opcodep(param) && sexp_opcode_data(param) && sexp_pairp(sexp_opcode_data(param))
     ? sexp_cdr(sexp_opcode_data(param)) : SEXP_FALSE;
 }
 
 
-sexp sexp_thread_parameters (sexp ctx, sexp self, sexp_sint_t n) {
+static sexp sexp_thread_parameters (sexp ctx, sexp self, sexp_sint_t n) {
   sexp res = sexp_context_params(ctx);
   return res ? res : SEXP_NULL;
 }
 
-sexp sexp_thread_parameters_set (sexp ctx, sexp self, sexp_sint_t n, sexp new_params) {
+static sexp sexp_thread_parameters_set (sexp ctx, sexp self, sexp_sint_t n, sexp new_params) {
   sexp_context_params(ctx) = new_params;
   return SEXP_VOID;
 }
 
-void sexp_set_parameter (sexp ctx, sexp env, sexp name, sexp value) {
+static void sexp_set_parameter (sexp ctx, sexp env, sexp name, sexp value) {
   sexp param = sexp_env_ref(ctx, env, name, SEXP_FALSE);
   if (sexp_opcodep(param)) {
     if (! sexp_pairp(sexp_opcode_data(param)))
@@ -12044,7 +12898,7 @@ void sexp_set_parameter (sexp ctx, sexp env, sexp name, sexp value) {
   }
 }
 
-sexp sexp_set_standard_ports (sexp ctx, sexp env, sexp in, sexp out, sexp err) {
+static sexp sexp_set_standard_ports (sexp ctx, sexp env, sexp in, sexp out, sexp err) {
   if (!env) env = sexp_context_env(ctx);
   if (sexp_portp(in))
     sexp_set_parameter(ctx, env, sexp_global(ctx, SEXP_G_CUR_IN_SYMBOL), in);
@@ -12055,7 +12909,7 @@ sexp sexp_set_standard_ports (sexp ctx, sexp env, sexp in, sexp out, sexp err) {
   return SEXP_VOID;
 }
 
-sexp sexp_load_standard_env (sexp ctx, sexp e, sexp version) {
+static sexp sexp_load_standard_env (sexp ctx, sexp e, sexp version) {
   sexp_gc_var3(op, tmp, sym);
   sexp_gc_preserve3(ctx, op, tmp, sym);
   (void)version;
@@ -12095,7 +12949,7 @@ sexp sexp_load_standard_env (sexp ctx, sexp e, sexp version) {
 }
 
 
-sexp sexp_make_standard_env_op (sexp ctx, sexp self, sexp_sint_t n, sexp version) {
+static sexp sexp_make_standard_env_op (sexp ctx, sexp self, sexp_sint_t n, sexp version) {
   sexp_gc_var1(env);
   sexp_gc_preserve1(ctx, env);
   env = sexp_make_primitive_env(ctx, version);
@@ -12105,7 +12959,7 @@ sexp sexp_make_standard_env_op (sexp ctx, sexp self, sexp_sint_t n, sexp version
   return env;
 }
 
-sexp sexp_make_immutable_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
+static sexp sexp_make_immutable_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
   if (sexp_pointerp(x)) {
     sexp_immutablep(x) = 1;
     return SEXP_TRUE;
@@ -12113,7 +12967,7 @@ sexp sexp_make_immutable_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
   return SEXP_FALSE;
 }
 
-sexp sexp_env_parent_op (sexp ctx, sexp self, sexp_sint_t n, sexp e) {
+static sexp sexp_env_parent_op (sexp ctx, sexp self, sexp_sint_t n, sexp e) {
   sexp_assert_type(ctx, sexp_envp, SEXP_ENV, e);
   return sexp_env_parent(e) ? sexp_env_parent(e) : SEXP_FALSE;
 }
@@ -12121,7 +12975,7 @@ sexp sexp_env_parent_op (sexp ctx, sexp self, sexp_sint_t n, sexp e) {
 #define sexp_same_bindingp(x, y) ((x) == (y))
 
 /* Rewrite to in place: to => empty->imports->to */
-sexp sexp_env_import_op (sexp ctx, sexp self, sexp_sint_t n, sexp to, sexp from, sexp ls, sexp immutp) {
+static sexp sexp_env_import_op (sexp ctx, sexp self, sexp_sint_t n, sexp to, sexp from, sexp ls, sexp immutp) {
   sexp oldname, newname;
   sexp_gc_var3(value, oldcell, tmp);
   sexp_gc_preserve3(ctx, value, oldcell, tmp);
@@ -12179,7 +13033,7 @@ sexp sexp_env_import_op (sexp ctx, sexp self, sexp_sint_t n, sexp to, sexp from,
 
 /************************** eval interface ****************************/
 
-sexp sexp_generate_op (sexp ctx, sexp self, sexp_sint_t n, sexp ast, sexp env) {
+static sexp sexp_generate_op (sexp ctx, sexp self, sexp_sint_t n, sexp ast, sexp env) {
   sexp_gc_var3(ctx2, vec, res);
   if (sexp_contextp(env)) {
     ctx2 = env;
@@ -12201,7 +13055,7 @@ sexp sexp_generate_op (sexp ctx, sexp self, sexp_sint_t n, sexp ast, sexp env) {
   return res;
 }
 
-sexp sexp_compile_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp env) {
+static sexp sexp_compile_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp env) {
   sexp_gc_var3(ast, tmp, res);
   sexp ctx2;
   if (! env) env = sexp_context_env(ctx);
@@ -12233,7 +13087,7 @@ sexp sexp_compile_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp env) {
   return res;
 }
 
-sexp sexp_eval_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp env) {
+static sexp sexp_eval_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp env) {
   sexp_sint_t top;
   sexp ctx2;
   sexp_gc_var3(res, tmp, params);
@@ -12257,7 +13111,7 @@ sexp sexp_eval_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp env) {
   return res;
 }
 
-sexp sexp_eval_string (sexp ctx, const char *str, sexp_sint_t len, sexp env) {
+static sexp sexp_eval_string (sexp ctx, const char *str, sexp_sint_t len, sexp env) {
   sexp res;
   sexp_gc_var1(obj);
   sexp_gc_preserve1(ctx, obj);
@@ -12267,11 +13121,11 @@ sexp sexp_eval_string (sexp ctx, const char *str, sexp_sint_t len, sexp env) {
   return res;
 }
 
-sexp sexp_make_eval_context (sexp ctx, sexp stack, sexp env, sexp_uint_t size, sexp_uint_t max_size) {
+static sexp sexp_make_eval_context (sexp ctx, sexp stack, sexp env, sexp_uint_t size, sexp_uint_t max_size) {
   return sexp_make_eval_context_host(ctx, stack, env, size, max_size, NULL);
 }
 
-void sexp_scheme_init (void) {
+static void sexp_scheme_init (void) {
   /* puchi: no process-global scheme init */
 }
 /* ==== simplify.c ==== */
@@ -12426,7 +13280,7 @@ static sexp simplify (sexp ctx, sexp ast, sexp init_substs, sexp lambda) {
   return res;
 }
 
-sexp sexp_simplify (sexp ctx, sexp self, sexp_sint_t n, sexp ast) {
+static sexp sexp_simplify (sexp ctx, sexp self, sexp_sint_t n, sexp ast) {
   return simplify(ctx, ast, SEXP_NULL, NULL);
 }
 
@@ -12458,7 +13312,7 @@ static int usedp (sexp lambda, sexp var, sexp x) {
   return 0;
 }
 
-int sexp_rest_unused_p (sexp lambda) {
+static int sexp_rest_unused_p (sexp lambda) {
   sexp var;
   for (var=sexp_lambda_params(lambda); sexp_pairp(var); var=sexp_cdr(var))
     ;
@@ -12482,7 +13336,7 @@ static int puchi_bignum_hex_digit (int n) {
   return ((n<=9) ? ('0' + n) : ('A' + n - 10));
 }
 
-sexp sexp_make_bignum (sexp ctx, sexp_uint_t len) {
+static sexp sexp_make_bignum (sexp ctx, sexp_uint_t len) {
   sexp_uint_t size = sexp_sizeof(bignum) + len*sizeof(sexp_uint_t);
   sexp res = sexp_alloc_tagged(ctx, size, SEXP_BIGNUM);
   if (!sexp_exceptionp(res)) {
@@ -12492,7 +13346,7 @@ sexp sexp_make_bignum (sexp ctx, sexp_uint_t len) {
   return res;
 }
 
-sexp sexp_fixnum_to_bignum (sexp ctx, sexp a) {
+static sexp sexp_fixnum_to_bignum (sexp ctx, sexp a) {
   sexp res = sexp_make_bignum(ctx, 1);
   if (!sexp_exceptionp(res)) {
     sexp_bignum_data(res)[0] = sexp_unbox_fx_abs(a);
@@ -12501,7 +13355,7 @@ sexp sexp_fixnum_to_bignum (sexp ctx, sexp a) {
   return res;
 }
 
-sexp sexp_make_integer_from_lsint (sexp ctx, sexp_lsint_t x) {
+static sexp sexp_make_integer_from_lsint (sexp ctx, sexp_lsint_t x) {
   sexp res;
   if (lsint_is_fixnum(x)) {
     res = sexp_make_fixnum(lsint_to_sint(x));
@@ -12529,7 +13383,7 @@ sexp sexp_make_integer_from_lsint (sexp ctx, sexp_lsint_t x) {
   return res;
 }
 
-sexp sexp_make_unsigned_integer_from_luint (sexp ctx, sexp_luint_t x) {
+static sexp sexp_make_unsigned_integer_from_luint (sexp ctx, sexp_luint_t x) {
   sexp res;
   if (luint_is_fixnum(x)) {
     res = sexp_make_fixnum(luint_to_uint(x));
@@ -12546,15 +13400,15 @@ sexp sexp_make_unsigned_integer_from_luint (sexp ctx, sexp_luint_t x) {
   return res;
 }
 
-sexp sexp_make_integer(sexp ctx, long long x) {
+static sexp sexp_make_integer(sexp ctx, long long x) {
   return sexp_make_integer_from_lsint(ctx, lsint_from_sint(x));
 }
-sexp sexp_make_unsigned_integer(sexp ctx, unsigned long long x) {
+static sexp sexp_make_unsigned_integer(sexp ctx, unsigned long long x) {
   return sexp_make_unsigned_integer_from_luint(ctx, luint_from_uint(x));
 }
 
 #if !SEXP_64_BIT
-long long sexp_bignum_to_sint(sexp x) {
+static long long sexp_bignum_to_sint(sexp x) {
   if (!sexp_bignump(x))
     return 0;
   if (sexp_bignum_length(x) > 1)
@@ -12563,7 +13417,7 @@ long long sexp_bignum_to_sint(sexp x) {
   return sexp_bignum_sign(x) * sexp_bignum_data(x)[0];
 }
 
-unsigned long long sexp_bignum_to_uint(sexp x) {
+static unsigned long long sexp_bignum_to_uint(sexp x) {
   if (!sexp_bignump(x))
     return 0;
   if (sexp_bignum_length(x) > 1)
@@ -12577,7 +13431,7 @@ unsigned long long sexp_bignum_to_uint(sexp x) {
 
 #define double_16s_digit(f) PUCHI_FMOD(f,16.0)
 
-sexp sexp_double_to_bignum (sexp ctx, double f) {
+static sexp sexp_double_to_bignum (sexp ctx, double f) {
   int sign;
   sexp_gc_var3(res, scale, tmp);
   sexp_gc_preserve3(ctx, res, scale, tmp);
@@ -12594,7 +13448,7 @@ sexp sexp_double_to_bignum (sexp ctx, double f) {
   return res;
 }
 
-sexp sexp_copy_bignum (sexp ctx, sexp dst, sexp a, sexp_uint_t len0) {
+static sexp sexp_copy_bignum (sexp ctx, sexp dst, sexp a, sexp_uint_t len0) {
   sexp_uint_t len = (len0 > 0) ? len0 : sexp_bignum_length(a), size;
   size = sexp_sizeof(bignum) + len*sizeof(sexp_uint_t);
   if (! dst || sexp_bignum_length(dst) < len) {
@@ -12612,7 +13466,7 @@ sexp sexp_copy_bignum (sexp ctx, sexp dst, sexp a, sexp_uint_t len0) {
   return dst;
 }
 
-int sexp_bignum_zerop (sexp a) {
+static int sexp_bignum_zerop (sexp a) {
   int i;
   sexp_uint_t *data = sexp_bignum_data(a);
   for (i=sexp_bignum_length(a)-1; i>=0; i--)
@@ -12621,14 +13475,14 @@ int sexp_bignum_zerop (sexp a) {
   return 1;
 }
 
-sexp_uint_t sexp_bignum_hi (sexp a) {
+static sexp_uint_t sexp_bignum_hi (sexp a) {
   sexp_uint_t i=sexp_bignum_length(a)-1;
   while ((i>0) && ! sexp_bignum_data(a)[i])
     i--;
   return i+1;
 }
 
-sexp_sint_t sexp_bignum_compare_abs (sexp a, sexp b) {
+static sexp_sint_t sexp_bignum_compare_abs (sexp a, sexp b) {
   int ai=sexp_bignum_hi(a), bi=sexp_bignum_hi(b);
   sexp_uint_t *adata=sexp_bignum_data(a), *bdata=sexp_bignum_data(b);
   if (ai != bi)
@@ -12642,14 +13496,14 @@ sexp_sint_t sexp_bignum_compare_abs (sexp a, sexp b) {
   return 0;
 }
 
-sexp_sint_t sexp_bignum_compare (sexp a, sexp b) {
+static sexp_sint_t sexp_bignum_compare (sexp a, sexp b) {
   if (sexp_bignum_sign(a) != sexp_bignum_sign(b))
     return sexp_bignum_sign(a);
   sexp_sint_t cmp = sexp_bignum_compare_abs(a, b);
   return sexp_bignum_sign(a) < 0 ? -cmp : cmp;
 }
 
-sexp sexp_bignum_normalize (sexp a) {
+static sexp sexp_bignum_normalize (sexp a) {
   sexp_uint_t *data;
   if ((! sexp_bignump(a)) || (sexp_bignum_hi(a)>1))
     return a;
@@ -12660,7 +13514,7 @@ sexp sexp_bignum_normalize (sexp a) {
   return sexp_make_fixnum((sexp_sint_t)data[0] * sexp_bignum_sign(a));
 }
 
-double sexp_bignum_to_double (sexp a) {
+static double sexp_bignum_to_double (sexp a) {
   double res = 0;
   sexp_sint_t i;
   sexp_uint_t *data=sexp_bignum_data(a);
@@ -12669,7 +13523,7 @@ double sexp_bignum_to_double (sexp a) {
   return res * sexp_bignum_sign(a);
 }
 
-sexp sexp_bignum_fxadd (sexp ctx, sexp a, sexp_uint_t b) {
+static sexp sexp_bignum_fxadd (sexp ctx, sexp a, sexp_uint_t b) {
   sexp_uint_t len=sexp_bignum_hi(a), *data=sexp_bignum_data(a),
     carry=b, i=0, n;
   do { n = data[i];
@@ -12683,7 +13537,7 @@ sexp sexp_bignum_fxadd (sexp ctx, sexp a, sexp_uint_t b) {
   return a;
 }
 
-sexp sexp_bignum_fxsub (sexp ctx, sexp a, sexp_uint_t b) {
+static sexp sexp_bignum_fxsub (sexp ctx, sexp a, sexp_uint_t b) {
   sexp_uint_t len=sexp_bignum_hi(a), *data=sexp_bignum_data(a), borrow, i=0, n;
   if ((len == 1) && (b > data[0])) {
     data[0] = b - data[0];
@@ -12698,7 +13552,7 @@ sexp sexp_bignum_fxsub (sexp ctx, sexp a, sexp_uint_t b) {
   return a;
 }
 
-sexp sexp_bignum_fxmul (sexp ctx, sexp d, sexp a, sexp_uint_t b, int offset) {
+static sexp sexp_bignum_fxmul (sexp ctx, sexp d, sexp a, sexp_uint_t b, int offset) {
   sexp_uint_t len=sexp_bignum_length(a), *data, *adata=sexp_bignum_data(a),
     carry=0, i;
   sexp_luint_t n;
@@ -12722,7 +13576,7 @@ sexp sexp_bignum_fxmul (sexp ctx, sexp d, sexp a, sexp_uint_t b, int offset) {
   return d;
 }
 
-sexp_uint_t sexp_bignum_fxdiv (sexp ctx, sexp a, sexp_uint_t b, int offset) {
+static sexp_uint_t sexp_bignum_fxdiv (sexp ctx, sexp a, sexp_uint_t b, int offset) {
   sexp_uint_t len=sexp_bignum_hi(a), *data=sexp_bignum_data(a), q, r=0;
   int i;
   sexp_luint_t n = luint_from_uint(0);
@@ -12736,7 +13590,7 @@ sexp_uint_t sexp_bignum_fxdiv (sexp ctx, sexp a, sexp_uint_t b, int offset) {
   return r;
 }
 
-sexp sexp_bignum_fxrem (sexp ctx, sexp a, sexp_sint_t b) {
+static sexp sexp_bignum_fxrem (sexp ctx, sexp a, sexp_sint_t b) {
   sexp_uint_t len=sexp_bignum_hi(a), *data=sexp_bignum_data(a), q, b0;
   int i;
   sexp_luint_t n = luint_from_uint(0);
@@ -12757,7 +13611,7 @@ sexp sexp_bignum_fxrem (sexp ctx, sexp a, sexp_sint_t b) {
   return sexp_make_fixnum(sexp_bignum_sign(a) * (sexp_sint_t)luint_to_uint(n));
 }
 
-sexp sexp_read_bignum (sexp ctx, sexp in, sexp_uint_t init,
+static sexp sexp_read_bignum (sexp ctx, sexp in, sexp_uint_t init,
                        signed char sign, sexp_uint_t base) {
   int c, digit;
   sexp_gc_var3(res, tmp, imag);
@@ -12833,7 +13687,7 @@ static int log2i(int v) {
   return i;
 }
 
-sexp sexp_write_bignum (sexp ctx, sexp a, sexp out, sexp_uint_t base) {
+static sexp sexp_write_bignum (sexp ctx, sexp a, sexp out, sexp_uint_t base) {
   int i, str_len, lg_base = log2i(base);
   char *data;
   sexp_gc_var2(b, str);
@@ -12861,7 +13715,7 @@ sexp sexp_write_bignum (sexp ctx, sexp a, sexp out, sexp_uint_t base) {
 
 /****************** bignum arithmetic *************************/
 
-sexp sexp_bignum_add_fixnum (sexp ctx, sexp a, sexp b) {
+static sexp sexp_bignum_add_fixnum (sexp ctx, sexp a, sexp b) {
   sexp_gc_var1(c);
   sexp_gc_preserve1(ctx, c);
   c = sexp_copy_bignum(ctx, NULL, a, 0);
@@ -12873,7 +13727,7 @@ sexp sexp_bignum_add_fixnum (sexp ctx, sexp a, sexp b) {
   return c;
 }
 
-sexp sexp_bignum_sub_digits (sexp ctx, sexp dst, sexp a, sexp b) {
+static sexp sexp_bignum_sub_digits (sexp ctx, sexp dst, sexp a, sexp b) {
   sexp_uint_t alen=sexp_bignum_hi(a), blen=sexp_bignum_hi(b),
     borrow=0, i, *adata, *bdata, *cdata;
   sexp_gc_var1(c);
@@ -12905,7 +13759,7 @@ sexp sexp_bignum_sub_digits (sexp ctx, sexp dst, sexp a, sexp b) {
   return c;
 }
 
-sexp sexp_bignum_add_digits (sexp ctx, sexp dst, sexp a, sexp b) {
+static sexp sexp_bignum_add_digits (sexp ctx, sexp dst, sexp a, sexp b) {
   sexp_uint_t alen=sexp_bignum_hi(a), blen=sexp_bignum_hi(b),
     carry=0, i, old_a, p_sum, *adata, *bdata, *cdata;
   sexp_gc_var1(c);
@@ -12935,7 +13789,7 @@ sexp sexp_bignum_add_digits (sexp ctx, sexp dst, sexp a, sexp b) {
   return c;
 }
 
-sexp sexp_bignum_add (sexp ctx, sexp dst, sexp a, sexp b) {
+static sexp sexp_bignum_add (sexp ctx, sexp dst, sexp a, sexp b) {
   sexp res;
   if (sexp_bignum_sign(a) == sexp_bignum_sign(b)) {
     res = sexp_bignum_add_digits(ctx, dst, a, b);
@@ -12948,7 +13802,7 @@ sexp sexp_bignum_add (sexp ctx, sexp dst, sexp a, sexp b) {
   return res;
 }
 
-sexp sexp_bignum_sub (sexp ctx, sexp dst, sexp a, sexp b) {
+static sexp sexp_bignum_sub (sexp ctx, sexp dst, sexp a, sexp b) {
   sexp res;
   int sign;
   if (sexp_bignum_sign(a) == sexp_bignum_sign(b)) {
@@ -12985,7 +13839,7 @@ static sexp sexp_bignum_shift (sexp ctx, sexp a, sexp_uint_t k) {
   return res;
 }
 
-sexp sexp_bignum_mul (sexp ctx, sexp dst, sexp a, sexp b) {
+static sexp sexp_bignum_mul (sexp ctx, sexp dst, sexp a, sexp b) {
   sexp_uint_t alen=sexp_bignum_hi(a), blen=sexp_bignum_hi(b), k,
     *bdata=sexp_bignum_data(b);
   sexp_gc_var7(a0, a1, b0, b1, z0, z1, z2);
@@ -13023,7 +13877,7 @@ sexp sexp_bignum_mul (sexp ctx, sexp dst, sexp a, sexp b) {
   return z1;
 }
 
-sexp sexp_bignum_quot_rem (sexp ctx, sexp *rem, sexp a, sexp b) {
+static sexp sexp_bignum_quot_rem (sexp ctx, sexp *rem, sexp a, sexp b) {
   sexp_luint_t d, dn, dd;
   sexp_uint_t dlo, dhi;
   sexp_sint_t alen, blen=sexp_bignum_hi(b), sign=1, off=0;
@@ -13124,7 +13978,7 @@ sexp sexp_bignum_quot_rem (sexp ctx, sexp *rem, sexp a, sexp b) {
   return q;
 }
 
-sexp sexp_bignum_quotient (sexp ctx, sexp a, sexp b) {
+static sexp sexp_bignum_quotient (sexp ctx, sexp a, sexp b) {
   sexp res;
   sexp_gc_var1(rem);
   sexp_gc_preserve1(ctx, rem);
@@ -13133,7 +13987,7 @@ sexp sexp_bignum_quotient (sexp ctx, sexp a, sexp b) {
   return res;
 }
 
-sexp sexp_bignum_remainder (sexp ctx, sexp a, sexp b) {
+static sexp sexp_bignum_remainder (sexp ctx, sexp a, sexp b) {
   sexp_gc_var1(rem);
   sexp_gc_preserve1(ctx, rem);
   sexp_bignum_quot_rem(ctx, &rem, a, b); /* discard quotient */
@@ -13141,7 +13995,7 @@ sexp sexp_bignum_remainder (sexp ctx, sexp a, sexp b) {
   return rem;
 }
 
-sexp sexp_bignum_expt (sexp ctx, sexp a, sexp b) {
+static sexp sexp_bignum_expt (sexp ctx, sexp a, sexp b) {
   sexp_sint_t e = sexp_unbox_fixnum(b);
   sexp_sint_t abs_e;
   if (e < 0)
@@ -13168,7 +14022,7 @@ sexp sexp_bignum_expt (sexp ctx, sexp a, sexp b) {
 /*
  * a = x * 2^2n, with 0.1 <= x < 1.0 (base 2)  =>  PUCHI_SQRT(a) ~ 2^n
  */
-sexp sexp_bignum_sqrt_estimate (sexp ctx, sexp a) {
+static sexp sexp_bignum_sqrt_estimate (sexp ctx, sexp a) {
   sexp_uint_t alen=sexp_bignum_hi(a), adata_hi;
   int nbits, i;
   sexp_gc_var1(res);
@@ -13189,7 +14043,7 @@ sexp sexp_bignum_sqrt_estimate (sexp ctx, sexp a) {
 #define SEXP_MAX_ACCURATE_FLONUM_SQRT 1073741824.0 /* 2^30 */
 
 /* Babylonian method */
-sexp sexp_bignum_sqrt (sexp ctx, sexp a, sexp* rem_out) {
+static sexp sexp_bignum_sqrt (sexp ctx, sexp a, sexp* rem_out) {
   sexp_gc_var4(res, rem, tmp, tmpa);
   if (! sexp_bignump(a)) return sexp_type_exception(ctx, NULL, SEXP_BIGNUM, a);
   sexp_gc_preserve4(ctx, res, rem, tmp, tmpa);
@@ -13238,7 +14092,7 @@ sexp sexp_bignum_sqrt (sexp ctx, sexp a, sexp* rem_out) {
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
 
-double sexp_ratio_to_double (sexp ctx, sexp rat) {
+static double sexp_ratio_to_double (sexp ctx, sexp rat) {
   sexp_gc_var1(quot);
   sexp num = sexp_ratio_numerator(rat), den = sexp_ratio_denominator(rat);
   double res = (sexp_bignump(num) ? sexp_bignum_to_double(num)
@@ -13259,7 +14113,7 @@ double sexp_ratio_to_double (sexp ctx, sexp rat) {
   return res;
 }
 
-sexp sexp_double_to_ratio (sexp ctx, double f) {
+static sexp sexp_double_to_ratio (sexp ctx, double f) {
   int sign, i;
   sexp_gc_var3(res, whole, scale);
   if (f == PUCHI_TRUNC(f))
@@ -13290,7 +14144,7 @@ sexp sexp_double_to_ratio (sexp ctx, double f) {
  * For conversion that does not introduce round-off error,
  * no matter what FLT_RADIX is.
  */
-sexp sexp_double_to_ratio_2 (sexp ctx, double f) {
+static sexp sexp_double_to_ratio_2 (sexp ctx, double f) {
   int sign,i;
   sexp_gc_var3(res, whole, scale);
   if (f == PUCHI_TRUNC(f))
@@ -13321,7 +14175,7 @@ sexp sexp_double_to_ratio_2 (sexp ctx, double f) {
   return res;
 }
 
-sexp sexp_ratio_add (sexp ctx, sexp a, sexp b) {
+static sexp sexp_ratio_add (sexp ctx, sexp a, sexp b) {
   sexp_gc_var3(res, num, den);
   sexp_gc_preserve3(ctx, res, num, den);
   num = sexp_mul(ctx, sexp_ratio_numerator(a), sexp_ratio_denominator(b));
@@ -13334,7 +14188,7 @@ sexp sexp_ratio_add (sexp ctx, sexp a, sexp b) {
   return res;
 }
 
-sexp sexp_ratio_mul (sexp ctx, sexp a, sexp b) {
+static sexp sexp_ratio_mul (sexp ctx, sexp a, sexp b) {
   sexp_gc_var3(res, num, den);
   sexp_gc_preserve3(ctx, res, num, den);
   num = sexp_mul(ctx, sexp_ratio_numerator(a), sexp_ratio_numerator(b));
@@ -13345,7 +14199,7 @@ sexp sexp_ratio_mul (sexp ctx, sexp a, sexp b) {
   return res;
 }
 
-sexp sexp_ratio_div (sexp ctx, sexp a, sexp b) {
+static sexp sexp_ratio_div (sexp ctx, sexp a, sexp b) {
   sexp_gc_var3(res, num, den);
   sexp_gc_preserve3(ctx, res, num, den);
   num = sexp_mul(ctx, sexp_ratio_numerator(a), sexp_ratio_denominator(b));
@@ -13356,7 +14210,7 @@ sexp sexp_ratio_div (sexp ctx, sexp a, sexp b) {
   return res;
 }
 
-sexp sexp_ratio_compare (sexp ctx, sexp a, sexp b) {
+static sexp sexp_ratio_compare (sexp ctx, sexp a, sexp b) {
   sexp_gc_var2(a2, b2);
   sexp_gc_preserve2(ctx, a2, b2);
   a2 = sexp_mul(ctx, sexp_ratio_numerator(a), sexp_ratio_denominator(b));
@@ -13366,7 +14220,7 @@ sexp sexp_ratio_compare (sexp ctx, sexp a, sexp b) {
   return a2;
 }
 
-sexp sexp_ratio_round (sexp ctx, sexp a) {
+static sexp sexp_ratio_round (sexp ctx, sexp a) {
   sexp_gc_var2(q, r);
   sexp_gc_preserve2(ctx, q, r);
   q = sexp_quotient(ctx, sexp_ratio_numerator(a), sexp_ratio_denominator(a));
@@ -13383,11 +14237,11 @@ sexp sexp_ratio_round (sexp ctx, sexp a) {
   return q;
 }
 
-sexp sexp_ratio_trunc (sexp ctx, sexp a) {
+static sexp sexp_ratio_trunc (sexp ctx, sexp a) {
   return sexp_quotient(ctx, sexp_ratio_numerator(a), sexp_ratio_denominator(a));
 }
 
-sexp sexp_ratio_floor (sexp ctx, sexp a) {
+static sexp sexp_ratio_floor (sexp ctx, sexp a) {
   sexp_gc_var1(q);
   sexp_gc_preserve1(ctx, q);
   q = sexp_quotient(ctx, sexp_ratio_numerator(a), sexp_ratio_denominator(a));
@@ -13397,7 +14251,7 @@ sexp sexp_ratio_floor (sexp ctx, sexp a) {
   return q;
 }
 
-sexp sexp_ratio_ceiling (sexp ctx, sexp a) {
+static sexp sexp_ratio_ceiling (sexp ctx, sexp a) {
   sexp_gc_var1(q);
   sexp_gc_preserve1(ctx, q);
   q = sexp_quotient(ctx, sexp_ratio_numerator(a), sexp_ratio_denominator(a));
@@ -13412,7 +14266,7 @@ sexp sexp_ratio_ceiling (sexp ctx, sexp a) {
 #endif
 
 #if !defined(PUCHI_INTEGER_ONLY)
-double sexp_to_double (sexp ctx, sexp x) {
+static double sexp_to_double (sexp ctx, sexp x) {
   if (sexp_flonump(x))
     return sexp_flonum_value(x);
   else if (sexp_fixnump(x))
@@ -13452,7 +14306,7 @@ static sexp sexp_complex_copy (sexp ctx, sexp a) {
   return res;
 }
 
-sexp sexp_complex_add (sexp ctx, sexp a, sexp b) {
+static sexp sexp_complex_add (sexp ctx, sexp a, sexp b) {
   sexp_gc_var3(res, real, imag);
   sexp_gc_preserve3(ctx, res, real, imag);
   real = sexp_add(ctx, sexp_complex_real(a), sexp_complex_real(b));
@@ -13462,7 +14316,7 @@ sexp sexp_complex_add (sexp ctx, sexp a, sexp b) {
   return sexp_complex_normalize(res);
 }
 
-sexp sexp_complex_sub (sexp ctx, sexp a, sexp b) {
+static sexp sexp_complex_sub (sexp ctx, sexp a, sexp b) {
   sexp_gc_var2(res, tmp);
   sexp_gc_preserve2(ctx, res, tmp);
   tmp = sexp_complex_copy(ctx, b);
@@ -13473,7 +14327,7 @@ sexp sexp_complex_sub (sexp ctx, sexp a, sexp b) {
   return res;
 }
 
-sexp sexp_complex_mul (sexp ctx, sexp a, sexp b) {
+static sexp sexp_complex_mul (sexp ctx, sexp a, sexp b) {
   sexp_gc_var3(res, real, imag);
   sexp_gc_preserve3(ctx, res, real, imag);
   real = sexp_mul(ctx, sexp_complex_real(a), sexp_complex_real(b));
@@ -13491,7 +14345,7 @@ sexp sexp_complex_mul (sexp ctx, sexp a, sexp b) {
 /* -------- = -----------  + ----------- i */
 /* (c + di)   (c^2 + d^2)    (c^2 + d^2)   */
 
-sexp sexp_complex_div (sexp ctx, sexp a, sexp b) {
+static sexp sexp_complex_div (sexp ctx, sexp a, sexp b) {
   sexp_gc_var4(res, real, imag, denom);
   sexp_gc_preserve4(ctx, res, real, imag, denom);
   /* c^2 + d^2 */
@@ -13532,7 +14386,7 @@ static sexp sexp_to_complex (sexp ctx, sexp x) {
   }
 }
 
-sexp sexp_complex_exp (sexp ctx, sexp z) {
+static sexp sexp_complex_exp (sexp ctx, sexp z) {
   double e2x = PUCHI_EXP(sexp_to_double(ctx, sexp_complex_real(z))),
     y = sexp_to_double(ctx, sexp_complex_imag(z));
   sexp_gc_var1(res);
@@ -13544,7 +14398,7 @@ sexp sexp_complex_exp (sexp ctx, sexp z) {
   return res;
 }
 
-sexp sexp_complex_log (sexp ctx, sexp z) {
+static sexp sexp_complex_log (sexp ctx, sexp z) {
   double x = sexp_to_double(ctx, sexp_complex_real(z)),
     y = sexp_to_double(ctx, sexp_complex_imag(z));
   sexp_gc_var1(res);
@@ -13556,7 +14410,7 @@ sexp sexp_complex_log (sexp ctx, sexp z) {
   return res;
 }
 
-sexp sexp_complex_expt (sexp ctx, sexp a, sexp b) {
+static sexp sexp_complex_expt (sexp ctx, sexp a, sexp b) {
   sexp_gc_var1(res);
   sexp_gc_preserve1(ctx, res);
   res = sexp_to_complex(ctx, a);
@@ -13569,7 +14423,7 @@ sexp sexp_complex_expt (sexp ctx, sexp a, sexp b) {
 
 #if !defined(PUCHI_INTEGER_ONLY)
 
-sexp sexp_complex_sqrt (sexp ctx, sexp z) {
+static sexp sexp_complex_sqrt (sexp ctx, sexp z) {
   double x = sexp_to_double(ctx, sexp_complex_real(z)),
     y = sexp_to_double(ctx, sexp_complex_imag(z)), r;
   sexp_gc_var1(res);
@@ -13582,7 +14436,7 @@ sexp sexp_complex_sqrt (sexp ctx, sexp z) {
   return res;
 }
 
-sexp sexp_complex_sin (sexp ctx, sexp z) {
+static sexp sexp_complex_sin (sexp ctx, sexp z) {
   double x = sexp_to_double(ctx, sexp_complex_real(z)),
     y = sexp_to_double(ctx, sexp_complex_imag(z));
   sexp_gc_var1(res);
@@ -13594,7 +14448,7 @@ sexp sexp_complex_sin (sexp ctx, sexp z) {
   return res;
 }
 
-sexp sexp_complex_cos (sexp ctx, sexp z) {
+static sexp sexp_complex_cos (sexp ctx, sexp z) {
   double x = sexp_to_double(ctx, sexp_complex_real(z)),
     y = sexp_to_double(ctx, sexp_complex_imag(z));
   sexp_gc_var1(res);
@@ -13606,7 +14460,7 @@ sexp sexp_complex_cos (sexp ctx, sexp z) {
   return res;
 }
 
-sexp sexp_complex_tan (sexp ctx, sexp z) {
+static sexp sexp_complex_tan (sexp ctx, sexp z) {
   sexp res;
   sexp_gc_var2(sin, cos);
   sexp_gc_preserve2(ctx, sin, cos);
@@ -13617,7 +14471,7 @@ sexp sexp_complex_tan (sexp ctx, sexp z) {
   return res;
 }
 
-sexp sexp_complex_asin (sexp ctx, sexp z) {
+static sexp sexp_complex_asin (sexp ctx, sexp z) {
   sexp_gc_var3(res, tmp, tmp2);
   sexp_gc_preserve3(ctx, res, tmp, tmp2);
   res = sexp_complex_mul(ctx, z, z);
@@ -13634,7 +14488,7 @@ sexp sexp_complex_asin (sexp ctx, sexp z) {
   return res;
 }
 
-sexp sexp_complex_acos (sexp ctx, sexp z) {
+static sexp sexp_complex_acos (sexp ctx, sexp z) {
   sexp_gc_var2(res, tmp);
   sexp_gc_preserve2(ctx, res, tmp);
   res = sexp_complex_asin(ctx, z);
@@ -13645,7 +14499,7 @@ sexp sexp_complex_acos (sexp ctx, sexp z) {
   return res;
 }
 
-sexp sexp_complex_atan (sexp ctx, sexp z) {
+static sexp sexp_complex_atan (sexp ctx, sexp z) {
   sexp_gc_var3(res, tmp1, tmp2);
   sexp_gc_preserve3(ctx, res, tmp1, tmp2);
   tmp1 = sexp_make_complex(ctx, SEXP_ZERO, SEXP_ONE);
@@ -13775,7 +14629,7 @@ static int sexp_number_type (sexp a) {
     : sexp_fixnump(a);
 }
 
-sexp sexp_add (sexp ctx, sexp a, sexp b) {
+static sexp sexp_add (sexp ctx, sexp a, sexp b) {
   sexp_sint_t sum;
   int at=sexp_number_type(a), bt=sexp_number_type(b), t;
   sexp r=SEXP_VOID;
@@ -13845,7 +14699,7 @@ sexp sexp_add (sexp ctx, sexp a, sexp b) {
   return r;
 }
 
-sexp sexp_sub (sexp ctx, sexp a, sexp b) {
+static sexp sexp_sub (sexp ctx, sexp a, sexp b) {
 #if !defined(PUCHI_INTEGER_ONLY)
   int negatep=0;
 #endif
@@ -13972,7 +14826,7 @@ sexp sexp_sub (sexp ctx, sexp a, sexp b) {
   return r;
 }
 
-sexp sexp_mul (sexp ctx, sexp a, sexp b) {
+static sexp sexp_mul (sexp ctx, sexp a, sexp b) {
   sexp_lsint_t prod;
   int at=sexp_number_type(a), bt=sexp_number_type(b), t;
   sexp r=SEXP_VOID;
@@ -14041,7 +14895,7 @@ sexp sexp_mul (sexp ctx, sexp a, sexp b) {
   return r;
 }
 
-sexp sexp_div (sexp ctx, sexp a, sexp b) {
+static sexp sexp_div (sexp ctx, sexp a, sexp b) {
   int at=sexp_number_type(a), bt=sexp_number_type(b);
 #if !defined(PUCHI_ENABLE_NUMERICAL_TOWER)
   double f;
@@ -14170,13 +15024,13 @@ sexp sexp_div (sexp ctx, sexp a, sexp b) {
   return r;
 }
 
-sexp sexp_to_inexact (sexp ctx, sexp a) {
+static sexp sexp_to_inexact (sexp ctx, sexp a) {
   if (sexp_fixnump(a)) return sexp_fixnum_to_flonum(ctx, a);
   if (sexp_bignump(a)) return sexp_make_flonum(ctx, sexp_bignum_to_double(a));
   return a;
 }
 
-sexp sexp_quotient (sexp ctx, sexp a, sexp b) {
+static sexp sexp_quotient (sexp ctx, sexp a, sexp b) {
   int at=sexp_number_type(a), bt=sexp_number_type(b);
   sexp r=SEXP_VOID;
   sexp_gc_var1(tmp);
@@ -14254,7 +15108,7 @@ sexp sexp_quotient (sexp ctx, sexp a, sexp b) {
   return r;
 }
 
-sexp sexp_remainder (sexp ctx, sexp a, sexp b) {
+static sexp sexp_remainder (sexp ctx, sexp a, sexp b) {
   int at=sexp_number_type(a), bt=sexp_number_type(b);
   sexp r=SEXP_VOID;
   sexp_gc_var1(tmp);
@@ -14333,7 +15187,7 @@ sexp sexp_remainder (sexp ctx, sexp a, sexp b) {
   return r;
 }
 
-sexp sexp_compare (sexp ctx, sexp a, sexp b) {
+static sexp sexp_compare (sexp ctx, sexp a, sexp b) {
   int at=sexp_number_type(a), bt=sexp_number_type(b);
   sexp r=SEXP_VOID;
   double f, g;
@@ -16307,22 +17161,22 @@ static sexp puchi_load_init7_into_env(sexp ctx, sexp env) {
   return env;
 }
 
-puchi puchi_create_context(puchi_uint_t heap_size, puchi_uint_t heap_max_size, const puchi_host *host) {
+PUCHI_API puchi puchi_create_context(puchi_uint_t heap_size, puchi_uint_t heap_max_size, const puchi_host *host) {
   if (!host || !host->alloc || !host->free)
     puchi_default_fatal(NULL, PUCHI_FATAL_INTERNAL, "puchi_host alloc/free required");
   return sexp_make_eval_context_host(NULL, NULL, NULL, heap_size, heap_max_size, host);
 }
 
-puchi puchi_delete_context(puchi ctx) {
+PUCHI_API puchi puchi_delete_context(puchi ctx) {
   return sexp_destroy_context(ctx);
 }
 
-puchi puchi_load_default_libs(puchi ctx) {
+PUCHI_API puchi puchi_load_default_libs(puchi ctx) {
   if (!ctx || sexp_exceptionp(ctx)) return ctx;
   return puchi_load_init7_into_env(ctx, sexp_context_env(ctx));
 }
 
-puchi puchi_make_eval_context_host(puchi ctx, puchi stack, puchi env,
+PUCHI_API puchi puchi_make_eval_context_host(puchi ctx, puchi stack, puchi env,
                                    puchi_uint_t size, puchi_uint_t max_size,
                                    const puchi_host *host) {
   return sexp_make_eval_context_host(ctx, stack, env, size, max_size, host);
@@ -16494,7 +17348,7 @@ static int puchi_modules_enabled_p(sexp ctx) {
   return tmp != SEXP_VOID;
 }
 
-puchi puchi_enable_modules(puchi ctx, const puchi_module_ops *ops) {
+PUCHI_API puchi puchi_enable_modules(puchi ctx, const puchi_module_ops *ops) {
   sexp env, meta, tmp, sym;
   sexp_heap h;
   sexp_gc_var3(meta_gc, tmp_gc, sym_gc);
@@ -16580,659 +17434,1361 @@ puchi puchi_enable_modules(puchi ctx, const puchi_module_ops *ops) {
   return ctx;
 }
 
+/* ==== puchi host accessors impl ==== */
+/* Host accessor bodies — IMPLEMENTATION && !PUCHI_TEST_CLIB. */
+
+PUCHI_API puchi puchi_port_name(puchi p) {
+  return sexp_port_name(p);
+}
+
+PUCHI_API void puchi_port_set_name(puchi p, puchi name) {
+  sexp_port_name(p) = name;
+}
+
+PUCHI_API void puchi_port_set_sourcep(puchi p, int v) {
+  sexp_port_sourcep(p) = v;
+}
+
+PUCHI_API void puchi_port_set_no_close(puchi p, int v) {
+  sexp_port_no_closep(p) = v;
+}
+
+PUCHI_API puchi puchi_context_parent(puchi ctx) {
+  return sexp_context_parent(ctx);
+}
+
+PUCHI_API void puchi_context_set_parent(puchi ctx, puchi parent) {
+  sexp_context_parent(ctx) = parent;
+}
+
+PUCHI_API void puchi_context_set_tailp(puchi ctx, int v) {
+  sexp_context_tailp(ctx) = v;
+}
+
+PUCHI_API void puchi_context_set_env(puchi ctx, puchi env) {
+  sexp_context_env(ctx) = env;
+}
+
+PUCHI_API void puchi_set_global(puchi ctx, int idx, puchi val) {
+  sexp_global(ctx, idx) = val;
+}
+
+PUCHI_API puchi puchi_set_standard_ports(puchi ctx, puchi env, puchi in, puchi out, puchi err) {
+  return sexp_set_standard_ports(ctx, env, in, out, err);
+}
+
+PUCHI_API void puchi_stack_trace(puchi ctx, puchi out) {
+  sexp_stack_trace(ctx, out);
+}
+
+#if defined(PUCHI_TEST)
+/* ==== puchi_TEST_* API impl ==== */
+/* PUCHI_TEST API bodies — emitted under IMPLEMENTATION && !PUCHI_TEST_CLIB. */
+
+PUCHI_API void puchi_TEST_add_static_libraries(puchi ctx, struct puchi_library_entry_t *libraries) {
+  sexp_add_static_libraries(ctx, libraries);
+}
+
+PUCHI_API puchi puchi_TEST_load_op(puchi ctx, puchi self, puchi_sint_t n, puchi source, puchi env) {
+  return sexp_load_op(ctx, self, n, source, env);
+}
+
+PUCHI_API puchi puchi_TEST_current_module_path_op(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
+  return sexp_current_module_path_op(ctx, self, n, x);
+}
+
+PUCHI_API puchi puchi_TEST_load_module_file_op(puchi ctx, puchi self, puchi_sint_t n, puchi file, puchi env) {
+  return sexp_load_module_file_op(ctx, self, n, file, env);
+}
+
+PUCHI_API puchi puchi_TEST_add_module_directory_op(puchi ctx, puchi self, puchi_sint_t n, puchi dir, puchi appendp) {
+  return sexp_add_module_directory_op(ctx, self, n, dir, appendp);
+}
+
+/* ==== auto puchi_TEST_* wrappers -> sexp_* ==== */
+/* ==== auto puchi_TEST_* wrappers -> sexp_* (generated) ==== */
+
+PUCHI_API puchi puchi_TEST_analyze(puchi context, puchi x) {
+  return sexp_analyze(context, x);
+}
+
+PUCHI_API puchi puchi_TEST_apply_no_err_handler(puchi ctx, puchi proc, puchi args) {
+  return sexp_apply_no_err_handler(ctx, proc, args);
+}
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_add(puchi ctx, puchi dst, puchi a, puchi b) {
+  return sexp_bignum_add(ctx, dst, a, b);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi_sint_t puchi_TEST_bignum_compare(puchi a, puchi b) {
+  return sexp_bignum_compare(a, b);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_expt(puchi ctx, puchi n, puchi e) {
+  return sexp_bignum_expt(ctx, n, e);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_fxadd(puchi ctx, puchi a, puchi_uint_t b) {
+  return sexp_bignum_fxadd(ctx, a, b);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi_uint_t puchi_TEST_bignum_fxdiv(puchi ctx, puchi a, puchi_uint_t b, int offset) {
+  return sexp_bignum_fxdiv(ctx, a, b, offset);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_fxmul(puchi ctx, puchi d, puchi a, puchi_uint_t b, int offset) {
+  return sexp_bignum_fxmul(ctx, d, a, b, offset);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_fxsub(puchi ctx, puchi a, puchi_uint_t b) {
+  return sexp_bignum_fxsub(ctx, a, b);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi_uint_t puchi_TEST_bignum_hi(puchi a) {
+  return sexp_bignum_hi(a);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_mul(puchi ctx, puchi dst, puchi a, puchi b) {
+  return sexp_bignum_mul(ctx, dst, a, b);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_normalize(puchi a) {
+  return sexp_bignum_normalize(a);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_sqrt(puchi ctx, puchi a, puchi* rem) {
+  return sexp_bignum_sqrt(ctx, a, rem);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_bignum_sub(puchi ctx, puchi dst, puchi a, puchi b) {
+  return sexp_bignum_sub(ctx, dst, a, b);
+}
+#endif
+
+PUCHI_API int puchi_TEST_buffered_flush(puchi ctx, puchi p, int forcep) {
+  return sexp_buffered_flush(ctx, p, forcep);
+}
+
+PUCHI_API int puchi_TEST_buffered_read_char(puchi ctx, puchi p) {
+  return sexp_buffered_read_char(ctx, p);
+}
+
+PUCHI_API int puchi_TEST_buffered_write_string_n(puchi ctx, const char *str, puchi_uint_t len, puchi p) {
+  return sexp_buffered_write_string_n(ctx, str, len, p);
+}
+
+PUCHI_API puchi puchi_TEST_char_ready_p(puchi ctx, puchi self, puchi_sint_t n, puchi in) {
+  return sexp_char_ready_p(ctx, self, n, in);
+}
+
+PUCHI_API puchi puchi_TEST_compile_error(puchi ctx, const char *message, puchi obj) {
+  return sexp_compile_error(ctx, message, obj);
+}
+
+PUCHI_API puchi puchi_TEST_compile_op(puchi context, puchi self, puchi_sint_t n, puchi obj, puchi env) {
+  return sexp_compile_op(context, self, n, obj, env);
+}
+
+PUCHI_API puchi puchi_TEST_complete_bytecode(puchi ctx) {
+  return sexp_complete_bytecode(ctx);
+}
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_acos(puchi ctx, puchi z) {
+  return sexp_complex_acos(ctx, z);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_asin(puchi ctx, puchi z) {
+  return sexp_complex_asin(ctx, z);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_atan(puchi ctx, puchi z) {
+  return sexp_complex_atan(ctx, z);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_cos(puchi ctx, puchi z) {
+  return sexp_complex_cos(ctx, z);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_exp(puchi ctx, puchi z) {
+  return sexp_complex_exp(ctx, z);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_expt(puchi ctx, puchi a, puchi b) {
+  return sexp_complex_expt(ctx, a, b);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_imag_op(puchi ctx, puchi self, puchi_sint_t n, puchi rat) {
+  return sexp_complex_imag_op(ctx, self, n, rat);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_log(puchi ctx, puchi z) {
+  return sexp_complex_log(ctx, z);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_normalize(puchi real) {
+  return sexp_complex_normalize(real);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_real_op(puchi ctx, puchi self, puchi_sint_t n, puchi rat) {
+  return sexp_complex_real_op(ctx, self, n, rat);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_sin(puchi ctx, puchi z) {
+  return sexp_complex_sin(ctx, z);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_sqrt(puchi ctx, puchi z) {
+  return sexp_complex_sqrt(ctx, z);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_complex_tan(puchi ctx, puchi z) {
+  return sexp_complex_tan(ctx, z);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_copy_bignum(puchi ctx, puchi dst, puchi a, puchi_uint_t len) {
+  return sexp_copy_bignum(ctx, dst, a, len);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_double_to_bignum(puchi ctx, double f) {
+  return sexp_double_to_bignum(ctx, f);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_double_to_ratio(puchi ctx, double f) {
+  return sexp_double_to_ratio(ctx, f);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_double_to_ratio_2(puchi ctx, double f) {
+  return sexp_double_to_ratio_2(ctx, f);
+}
+#endif
+
+PUCHI_API void puchi_TEST_emit(puchi ctx, unsigned char c) {
+  sexp_emit(ctx, c);
+}
+
+PUCHI_API void puchi_TEST_emit_return(puchi ctx) {
+  sexp_emit_return(ctx);
+}
+
+PUCHI_API puchi puchi_TEST_equalp_bound(puchi ctx, puchi self, puchi_sint_t n, puchi a, puchi b, puchi depth, puchi bound) {
+  return sexp_equalp_bound(ctx, self, n, a, b, depth, bound);
+}
+
+PUCHI_API void puchi_TEST_expand_bcode(puchi ctx, puchi_sint_t size) {
+  sexp_expand_bcode(ctx, size);
+}
+
+PUCHI_API puchi puchi_TEST_finalize_c_type(puchi ctx, puchi self, puchi_sint_t n, puchi obj) {
+  return sexp_finalize_c_type(ctx, self, n, obj);
+}
+
+PUCHI_API puchi puchi_TEST_finalize_port(puchi ctx, puchi self, puchi_sint_t n, puchi port) {
+  return sexp_finalize_port(ctx, self, n, port);
+}
+
+PUCHI_API puchi puchi_TEST_find_module_file(puchi ctx, const char *file) {
+  return sexp_find_module_file(ctx, file);
+}
+
+PUCHI_API puchi puchi_TEST_find_module_file_op(puchi ctx, puchi self, puchi_sint_t n, puchi file) {
+  return sexp_find_module_file_op(ctx, self, n, file);
+}
+
+PUCHI_API char* puchi_TEST_find_module_file_raw(puchi ctx, const char *file) {
+  return sexp_find_module_file_raw(ctx, file);
+}
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_fixnum_to_bignum(puchi ctx, puchi a) {
+  return sexp_fixnum_to_bignum(ctx, a);
+}
+#endif
+
+PUCHI_API puchi puchi_TEST_flonump_op(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
+  return sexp_flonump_op(ctx, self, n, x);
+}
+
+PUCHI_API puchi puchi_TEST_free_vars(puchi context, puchi x, puchi fv) {
+  return sexp_free_vars(context, x, fv);
+}
+
+PUCHI_API void puchi_TEST_generate(puchi ctx, puchi name, puchi loc, puchi lam, puchi x) {
+  sexp_generate(ctx, name, loc, lam, x);
+}
+
+PUCHI_API puchi puchi_TEST_generate_op(puchi context, puchi self, puchi_sint_t n, puchi obj, puchi env) {
+  return sexp_generate_op(context, self, n, obj, env);
+}
+
+#if defined(PUCHI_TEST)
+PUCHI_API puchi puchi_TEST_get_port_fileno(puchi ctx, puchi self, puchi_sint_t n, puchi port) {
+  return sexp_get_port_fileno(ctx, self, n, port);
+}
+#endif
+
+PUCHI_API puchi puchi_TEST_get_port_fold_case(puchi ctx, puchi self, puchi_sint_t n, puchi in) {
+  return sexp_get_port_fold_case(ctx, self, n, in);
+}
+
+PUCHI_API int puchi_TEST_grow_heap(puchi ctx, size_t size, size_t chunk_size) {
+  return sexp_grow_heap(ctx, size, chunk_size);
+}
+
+PUCHI_API puchi puchi_TEST_id_name(puchi x) {
+  return sexp_id_name(x);
+}
+
+PUCHI_API puchi puchi_TEST_identifierp_op(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
+  return sexp_identifierp_op(ctx, self, n, x);
+}
+
+PUCHI_API int puchi_TEST_idp(puchi x) {
+  return sexp_idp(x);
+}
+
+PUCHI_API int puchi_TEST_is_separator(int c) {
+  return sexp_is_separator(c);
+}
+
+PUCHI_API puchi puchi_TEST_load_module_file(puchi ctx, const char *file, puchi env) {
+  return sexp_load_module_file(ctx, file, env);
+}
+
+PUCHI_API puchi puchi_TEST_load_standard_env(puchi context, puchi env, puchi version) {
+  return sexp_load_standard_env(context, env, version);
+}
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_make_bignum(puchi ctx, puchi_uint_t len) {
+  return sexp_make_bignum(ctx, len);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_make_complex(puchi ctx, puchi real, puchi image) {
+  return sexp_make_complex(ctx, real, image);
+}
+#endif
+
+PUCHI_API puchi_heap puchi_TEST_make_heap(const puchi_host *host, size_t size, size_t max_size, size_t chunk_size) {
+  return sexp_make_heap(host, size, max_size, chunk_size);
+}
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_make_integer_from_lsint(puchi ctx, puchi_lsint_t x) {
+  return sexp_make_integer_from_lsint(ctx, x);
+}
+#endif
+
+PUCHI_API puchi puchi_TEST_make_lambda(puchi ctx, puchi params) {
+  return sexp_make_lambda(ctx, params);
+}
+
+PUCHI_API puchi puchi_TEST_make_lit(puchi ctx, puchi value) {
+  return sexp_make_lit(ctx, value);
+}
+
+PUCHI_API puchi puchi_TEST_make_non_null_input_port(puchi ctx, const puchi_stream_ops *ops, void *udata, puchi name) {
+  return sexp_make_non_null_input_port(ctx, ops, udata, name);
+}
+
+PUCHI_API puchi puchi_TEST_make_non_null_output_port(puchi ctx, const puchi_stream_ops *ops, void *udata, puchi name) {
+  return sexp_make_non_null_output_port(ctx, ops, udata, name);
+}
+
+PUCHI_API puchi puchi_TEST_make_opcode(puchi a0, puchi a1, puchi a2, puchi a3, puchi a4, puchi a5, puchi a6, puchi a7, puchi a8, puchi a9, puchi a10, puchi a11, puchi_proc1 a12) {
+  return sexp_make_opcode(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12);
+}
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_make_ratio(puchi ctx, puchi num, puchi den) {
+  return sexp_make_ratio(ctx, num, den);
+}
+#endif
+
+PUCHI_API puchi puchi_TEST_make_ref(puchi ctx, puchi name, puchi cell) {
+  return sexp_make_ref(ctx, name, cell);
+}
+
+PUCHI_API puchi puchi_TEST_make_trampoline(puchi ctx, puchi proc, puchi args) {
+  return sexp_make_trampoline(ctx, proc, args);
+}
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_make_unsigned_integer_from_luint(puchi ctx, puchi_luint_t x) {
+  return sexp_make_unsigned_integer_from_luint(ctx, x);
+}
+#endif
+
+PUCHI_API void puchi_TEST_mark(puchi ctx, puchi x) {
+  sexp_mark(ctx, x);
+}
+
+#if defined(PUCHI_TEST)
+PUCHI_API puchi puchi_TEST_open_input_file_descriptor(puchi ctx, puchi self, puchi_sint_t n, puchi fileno, puchi socketp) {
+  return sexp_open_input_file_descriptor(ctx, self, n, fileno, socketp);
+}
+#endif
+
+#if defined(PUCHI_TEST)
+PUCHI_API puchi puchi_TEST_open_output_file_descriptor(puchi ctx, puchi self, puchi_sint_t n, puchi fileno, puchi socketp) {
+  return sexp_open_output_file_descriptor(ctx, self, n, fileno, socketp);
+}
+#endif
+
+PUCHI_API int puchi_TEST_param_index(puchi ctx, puchi lambda, puchi name) {
+  return sexp_param_index(ctx, lambda, name);
+}
+
+PUCHI_API puchi puchi_TEST_port_binaryp_op(puchi ctx, puchi self, puchi_sint_t n, puchi port) {
+  return sexp_port_binaryp_op(ctx, self, n, port);
+}
+
+PUCHI_API puchi puchi_TEST_port_openp_op(puchi ctx, puchi self, puchi_sint_t n, puchi port) {
+  return sexp_port_openp_op(ctx, self, n, port);
+}
+
+PUCHI_API puchi puchi_TEST_port_outputp_op(puchi ctx, puchi self, puchi_sint_t n, puchi port) {
+  return sexp_port_outputp_op(ctx, self, n, port);
+}
+
+PUCHI_API puchi puchi_TEST_push_op(puchi ctx, puchi* loc, puchi x) {
+  return sexp_push_op(ctx, loc, x);
+}
+
+PUCHI_API void puchi_TEST_push_utf8_char(puchi ctx, int i, puchi port) {
+  sexp_push_utf8_char(ctx, i, port);
+}
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_ceiling(puchi ctx, puchi a) {
+  return sexp_ratio_ceiling(ctx, a);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_compare(puchi ctx, puchi a, puchi b) {
+  return sexp_ratio_compare(ctx, a, b);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_denominator_op(puchi ctx, puchi self, puchi_sint_t n, puchi rat) {
+  return sexp_ratio_denominator_op(ctx, self, n, rat);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_floor(puchi ctx, puchi a) {
+  return sexp_ratio_floor(ctx, a);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_normalize(puchi ctx, puchi rat, puchi in) {
+  return sexp_ratio_normalize(ctx, rat, in);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_numerator_op(puchi ctx, puchi self, puchi_sint_t n, puchi rat) {
+  return sexp_ratio_numerator_op(ctx, self, n, rat);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_round(puchi ctx, puchi a) {
+  return sexp_ratio_round(ctx, a);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_ratio_trunc(puchi ctx, puchi a) {
+  return sexp_ratio_trunc(ctx, a);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_read_bignum(puchi ctx, puchi in, puchi_uint_t init, signed char sign, puchi_uint_t base) {
+  return sexp_read_bignum(ctx, in, init, sign, base);
+}
+#endif
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_read_complex_tail(puchi ctx, puchi in, puchi res) {
+  return sexp_read_complex_tail(ctx, in, res);
+}
+#endif
+
+PUCHI_API puchi puchi_TEST_read_float_tail(puchi ctx, puchi in, double whole, int negp) {
+  return sexp_read_float_tail(ctx, in, whole, negp);
+}
+
+PUCHI_API puchi puchi_TEST_read_number(puchi ctx, puchi in, int base, int exactp) {
+  return sexp_read_number(ctx, in, base, exactp);
+}
+
+PUCHI_API puchi puchi_TEST_read_raw(puchi ctx, puchi in, puchi *shares) {
+  return sexp_read_raw(ctx, in, shares);
+}
+
+PUCHI_API puchi puchi_TEST_read_string(puchi ctx, puchi in, int sentinel) {
+  return sexp_read_string(ctx, in, sentinel);
+}
+
+PUCHI_API puchi puchi_TEST_read_symbol(puchi ctx, puchi in, int init, int internp) {
+  return sexp_read_symbol(ctx, in, init, internp);
+}
+
+PUCHI_API puchi puchi_TEST_read_utf8_char(puchi ctx, puchi port, int i) {
+  return sexp_read_utf8_char(ctx, port, i);
+}
+
+PUCHI_API puchi puchi_TEST_register_optimization(puchi ctx, puchi self, puchi_sint_t n, puchi f, puchi i) {
+  return sexp_register_optimization(ctx, self, n, f, i);
+}
+
+PUCHI_API puchi puchi_TEST_set_port_fold_case(puchi ctx, puchi self, puchi_sint_t n, puchi in, puchi x) {
+  return sexp_set_port_fold_case(ctx, self, n, in, x);
+}
+
+PUCHI_API puchi puchi_TEST_set_port_line_op(puchi ctx, puchi self, puchi_sint_t n, puchi port, puchi line) {
+  return sexp_set_port_line_op(ctx, self, n, port, line);
+}
+
+PUCHI_API puchi puchi_TEST_set_standard_ports(puchi context, puchi env, puchi in, puchi out, puchi err) {
+  return sexp_set_standard_ports(context, env, in, out, err);
+}
+
+PUCHI_API void puchi_TEST_shrink_bcode(puchi ctx, puchi_uint_t i) {
+  sexp_shrink_bcode(ctx, i);
+}
+
+PUCHI_API puchi puchi_TEST_simplify(puchi ctx, puchi self, puchi_sint_t n, puchi ast) {
+  return sexp_simplify(ctx, self, n, ast);
+}
+
+PUCHI_API puchi puchi_TEST_square_brackets_sym(puchi ctx, puchi self, puchi_sint_t n) {
+  return sexp_square_brackets_sym(ctx, self, n);
+}
+
+PUCHI_API void puchi_TEST_stack_trace(puchi ctx, puchi out) {
+  sexp_stack_trace(ctx, out);
+}
+
+PUCHI_API puchi puchi_TEST_stack_trace_op(puchi ctx, puchi self, puchi_sint_t n, puchi out) {
+  return sexp_stack_trace_op(ctx, self, n, out);
+}
+
+PUCHI_API puchi puchi_TEST_stream_portp_op(puchi ctx, puchi self, puchi_sint_t n, puchi port) {
+  return sexp_stream_portp_op(ctx, self, n, port);
+}
+
+PUCHI_API puchi puchi_TEST_strip_synclos(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
+  return sexp_strip_synclos(ctx, self, n, x);
+}
+
+PUCHI_API puchi puchi_TEST_sweep(puchi ctx, size_t *sum_freed_ptr) {
+  return sexp_sweep(ctx, sum_freed_ptr);
+}
+
+PUCHI_API puchi puchi_TEST_thread_parameters(puchi ctx, puchi self, puchi_sint_t n) {
+  return sexp_thread_parameters(ctx, self, n);
+}
+
+PUCHI_API puchi puchi_TEST_thread_parameters_set(puchi ctx, puchi self, puchi_sint_t n, puchi val) {
+  return sexp_thread_parameters_set(ctx, self, n, val);
+}
+
+PUCHI_API void puchi_TEST_warn(puchi ctx, const char *msg, puchi x) {
+  sexp_warn(ctx, msg, x);
+}
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+PUCHI_API puchi puchi_TEST_write_bignum(puchi ctx, puchi a, puchi out, puchi_uint_t base) {
+  return sexp_write_bignum(ctx, a, out, base);
+}
+#endif
+
+PUCHI_API puchi puchi_TEST_write_simple_object(puchi ctx, puchi self, puchi_sint_t n, puchi obj, puchi writer, puchi out) {
+  return sexp_write_simple_object(ctx, self, n, obj, writer, out);
+}
+
+PUCHI_API int puchi_TEST_write_utf8_char(puchi ctx, int c, puchi out) {
+  return sexp_write_utf8_char(ctx, c, out);
+}
+
+#endif
+
 /* ==== puchi_* wrappers -> sexp_* ==== */
 /* ==== puchi host API wrappers -> sexp_* (generated) ==== */
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_acos(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
+PUCHI_API puchi puchi_acos(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
   return sexp_acos(ctx, self, n, z);
 }
 #endif
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
 #if !defined(puchi_add)
-puchi puchi_add(puchi ctx, puchi a, puchi b) {
+PUCHI_API puchi puchi_add(puchi ctx, puchi a, puchi b) {
   return sexp_add(ctx, a, b);
 }
 #endif
 #endif
 
-puchi puchi_append2_op(puchi ctx, puchi self, puchi_sint_t n, puchi a, puchi b) {
+PUCHI_API puchi puchi_add_module_directory_op(puchi ctx, puchi self, puchi_sint_t n, puchi dir, puchi appendp) {
+  return sexp_add_module_directory_op(ctx, self, n, dir, appendp);
+}
+
+PUCHI_API puchi puchi_alloc_tagged_aux(puchi ctx, size_t size, puchi_uint_t tag) {
+  return sexp_alloc_tagged_aux(ctx, size, tag);
+}
+
+PUCHI_API puchi puchi_append2_op(puchi ctx, puchi self, puchi_sint_t n, puchi a, puchi b) {
   return sexp_append2_op(ctx, self, n, a, b);
 }
 
-puchi puchi_apply(puchi context, puchi proc, puchi args) {
+PUCHI_API puchi puchi_apply(puchi context, puchi proc, puchi args) {
   return sexp_apply(context, proc, args);
 }
 
-puchi puchi_apply1(puchi ctx, puchi f, puchi x) {
+PUCHI_API puchi puchi_apply1(puchi ctx, puchi f, puchi x) {
   return sexp_apply1(ctx, f, x);
 }
 
-puchi puchi_apply2(puchi ctx, puchi f, puchi x, puchi y) {
+PUCHI_API puchi puchi_apply2(puchi ctx, puchi f, puchi x, puchi y) {
   return sexp_apply2(ctx, f, x, y);
 }
 
-puchi puchi_apply3(puchi ctx, puchi f, puchi x, puchi y, puchi z) {
+PUCHI_API puchi puchi_apply3(puchi ctx, puchi f, puchi x, puchi y, puchi z) {
   return sexp_apply3(ctx, f, x, y, z);
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_asin(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
+PUCHI_API puchi puchi_asin(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
   return sexp_asin(ctx, self, n, z);
 }
 #endif
 
-puchi puchi_assq_op(puchi ctx, puchi self, puchi_sint_t n, puchi x, puchi ls) {
+PUCHI_API puchi puchi_assq_op(puchi ctx, puchi self, puchi_sint_t n, puchi x, puchi ls) {
   return sexp_assq_op(ctx, self, n, x, ls);
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_atan(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
+PUCHI_API puchi puchi_atan(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
   return sexp_atan(ctx, self, n, z);
 }
 #endif
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-double puchi_bignum_to_double(puchi a) {
+PUCHI_API double puchi_bignum_to_double(puchi a) {
   return sexp_bignum_to_double(a);
 }
 #endif
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-long long puchi_bignum_to_sint(puchi x) {
+PUCHI_API long long puchi_bignum_to_sint(puchi x) {
   return sexp_bignum_to_sint(x);
 }
 #endif
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-unsigned long long puchi_bignum_to_uint(puchi x) {
+PUCHI_API unsigned long long puchi_bignum_to_uint(puchi x) {
   return sexp_bignum_to_uint(x);
 }
 #endif
 
-puchi puchi_c_string(puchi ctx, const char *str, puchi_sint_t slen) {
+PUCHI_API int puchi_buffered_write_char(puchi ctx, int c, puchi p) {
+  return sexp_buffered_write_char(ctx, c, p);
+}
+
+PUCHI_API int puchi_buffered_write_string(puchi ctx, const char *str, puchi p) {
+  return sexp_buffered_write_string(ctx, str, p);
+}
+
+PUCHI_API puchi puchi_c_string(puchi ctx, const char *str, puchi_sint_t slen) {
   return sexp_c_string(ctx, str, slen);
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_ceiling(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
+PUCHI_API puchi puchi_ceiling(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
   return sexp_ceiling(ctx, self, n, x);
 }
 #endif
 
-puchi puchi_close_port_op(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
+PUCHI_API puchi puchi_close_port_op(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
   return sexp_close_port_op(ctx, self, n, x);
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_compare(puchi ctx, puchi a, puchi b) {
+PUCHI_API puchi puchi_compare(puchi ctx, puchi a, puchi b) {
   return sexp_compare(ctx, a, b);
 }
 #endif
 
-puchi puchi_cons_op(puchi ctx, puchi self, puchi_sint_t n, puchi head, puchi tail) {
+PUCHI_API puchi puchi_cons_op(puchi ctx, puchi self, puchi_sint_t n, puchi head, puchi tail) {
   return sexp_cons_op(ctx, self, n, head, tail);
 }
 
-puchi puchi_copy_list_op(puchi ctx, puchi self, puchi_sint_t n, puchi ls) {
+PUCHI_API puchi puchi_copy_list_op(puchi ctx, puchi self, puchi_sint_t n, puchi ls) {
   return sexp_copy_list_op(ctx, self, n, ls);
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_cos(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
+PUCHI_API puchi puchi_cos(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
   return sexp_cos(ctx, self, n, z);
 }
 #endif
 
-puchi puchi_current_environment(puchi ctx, puchi self, puchi_sint_t n) {
+PUCHI_API puchi puchi_current_environment(puchi ctx, puchi self, puchi_sint_t n) {
   return sexp_current_environment(ctx, self, n);
 }
 
-puchi puchi_define_foreign_aux(puchi ctx, puchi env, const char *name, int num_args, int flags, const char *fname, puchi_proc1 f, puchi data) {
+PUCHI_API puchi puchi_define_foreign_aux(puchi ctx, puchi env, const char *name, int num_args, int flags, const char *fname, puchi_proc1 f, puchi data) {
   return sexp_define_foreign_aux(ctx, env, name, num_args, flags, fname, f, data);
 }
 
-puchi puchi_define_foreign_param_aux(puchi ctx, puchi env, const char *name, int num_args, const char *fname, puchi_proc1 f, const char *param) {
+PUCHI_API puchi puchi_define_foreign_param_aux(puchi ctx, puchi env, const char *name, int num_args, const char *fname, puchi_proc1 f, const char *param) {
   return sexp_define_foreign_param_aux(ctx, env, name, num_args, fname, f, param);
 }
 
-puchi puchi_define_foreign_proc_aux(puchi ctx, puchi env, const char *name, int num_args, int flags, const char *fname, puchi_proc1 f, puchi data) {
+PUCHI_API puchi puchi_define_foreign_proc_aux(puchi ctx, puchi env, const char *name, int num_args, int flags, const char *fname, puchi_proc1 f, puchi data) {
   return sexp_define_foreign_proc_aux(ctx, env, name, num_args, flags, fname, f, data);
 }
 
 #if !defined(puchi_destroy_context)
-puchi puchi_destroy_context(puchi ctx) {
+PUCHI_API puchi puchi_destroy_context(puchi ctx) {
   return sexp_destroy_context(ctx);
 }
 #endif
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
 #if !defined(puchi_div)
-puchi puchi_div(puchi ctx, puchi a, puchi b) {
+PUCHI_API puchi puchi_div(puchi ctx, puchi a, puchi b) {
   return sexp_div(ctx, a, b);
 }
 #endif
 #endif
 
-puchi puchi_env_cell(puchi ctx, puchi env, puchi sym, int localp) {
+PUCHI_API puchi puchi_env_cell(puchi ctx, puchi env, puchi sym, int localp) {
   return sexp_env_cell(ctx, env, sym, localp);
 }
 
-puchi puchi_env_cell_define(puchi ctx, puchi env, puchi name, puchi value, puchi* varenv) {
+PUCHI_API puchi puchi_env_cell_define(puchi ctx, puchi env, puchi name, puchi value, puchi* varenv) {
   return sexp_env_cell_define(ctx, env, name, value, varenv);
 }
 
-puchi puchi_env_define(puchi ctx, puchi env, puchi sym, puchi val) {
+PUCHI_API puchi puchi_env_define(puchi ctx, puchi env, puchi sym, puchi val) {
   return sexp_env_define(ctx, env, sym, val);
 }
 
-puchi puchi_env_exports_op(puchi ctx, puchi self, puchi_sint_t n, puchi env) {
+PUCHI_API puchi puchi_env_exports_op(puchi ctx, puchi self, puchi_sint_t n, puchi env) {
   return sexp_env_exports_op(ctx, self, n, env);
 }
 
-puchi puchi_env_import_op(puchi ctx, puchi self, puchi_sint_t n, puchi to, puchi from, puchi ls, puchi immutp) {
+PUCHI_API puchi puchi_env_import_op(puchi ctx, puchi self, puchi_sint_t n, puchi to, puchi from, puchi ls, puchi immutp) {
   return sexp_env_import_op(ctx, self, n, to, from, ls, immutp);
 }
 
-puchi puchi_env_parent_op(puchi ctx, puchi self, puchi_sint_t n, puchi env) {
+PUCHI_API puchi puchi_env_parent_op(puchi ctx, puchi self, puchi_sint_t n, puchi env) {
   return sexp_env_parent_op(ctx, self, n, env);
 }
 
-puchi puchi_env_ref(puchi ctx, puchi env, puchi sym, puchi dflt) {
+PUCHI_API puchi puchi_env_ref(puchi ctx, puchi env, puchi sym, puchi dflt) {
   return sexp_env_ref(ctx, env, sym, dflt);
 }
 
-puchi puchi_env_rename(puchi ctx, puchi env, puchi key, puchi value) {
+PUCHI_API puchi puchi_env_rename(puchi ctx, puchi env, puchi key, puchi value) {
   return sexp_env_rename(ctx, env, key, value);
 }
 
-puchi puchi_equalp_op(puchi ctx, puchi self, puchi_sint_t n, puchi a, puchi b) {
+PUCHI_API puchi puchi_equalp_op(puchi ctx, puchi self, puchi_sint_t n, puchi a, puchi b) {
   return sexp_equalp_op(ctx, self, n, a, b);
 }
 
-puchi puchi_eval_op(puchi context, puchi self, puchi_sint_t n, puchi obj, puchi env) {
+PUCHI_API puchi puchi_eval_op(puchi context, puchi self, puchi_sint_t n, puchi obj, puchi env) {
   return sexp_eval_op(context, self, n, obj, env);
 }
 
-puchi puchi_eval_string(puchi context, const char *str, puchi_sint_t len, puchi env) {
+PUCHI_API puchi puchi_eval_string(puchi context, const char *str, puchi_sint_t len, puchi env) {
   return sexp_eval_string(context, str, len, env);
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_exact_sqrt(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
+PUCHI_API puchi puchi_exact_sqrt(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
   return sexp_exact_sqrt(ctx, self, n, z);
 }
 #endif
 
-puchi puchi_exact_to_inexact(puchi ctx, puchi self, puchi_sint_t n, puchi i) {
+PUCHI_API puchi puchi_exact_to_inexact(puchi ctx, puchi self, puchi_sint_t n, puchi i) {
   return sexp_exact_to_inexact(ctx, self, n, i);
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_exp(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
+PUCHI_API puchi puchi_exp(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
   return sexp_exp(ctx, self, n, z);
 }
 #endif
 
-puchi puchi_expt_op(puchi ctx, puchi self, puchi_sint_t n, puchi z1, puchi z2) {
+PUCHI_API puchi puchi_expt_op(puchi ctx, puchi self, puchi_sint_t n, puchi z1, puchi z2) {
   return sexp_expt_op(ctx, self, n, z1, z2);
 }
 
-puchi puchi_extend_env(puchi ctx, puchi env, puchi vars, puchi value) {
+PUCHI_API puchi puchi_extend_env(puchi ctx, puchi env, puchi vars, puchi value) {
   return sexp_extend_env(ctx, env, vars, value);
 }
 
-puchi puchi_file_exception(puchi ctx, puchi self, const char *msg, puchi x) {
+PUCHI_API puchi puchi_file_exception(puchi ctx, puchi self, const char *msg, puchi x) {
   return sexp_file_exception(ctx, self, msg, x);
 }
 
 #if !defined(puchi_flonum_value)
-float puchi_flonum_value(puchi x) {
+PUCHI_API float puchi_flonum_value(puchi x) {
   return sexp_flonum_value(x);
 }
 #endif
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_floor(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
+PUCHI_API puchi puchi_floor(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
   return sexp_floor(ctx, self, n, x);
 }
 #endif
 
-puchi puchi_flush_output_op(puchi ctx, puchi self, puchi_sint_t n, puchi out) {
+PUCHI_API puchi puchi_flush_output_op(puchi ctx, puchi self, puchi_sint_t n, puchi out) {
   return sexp_flush_output_op(ctx, self, n, out);
 }
 
 #if !defined(puchi_gc)
-puchi puchi_gc(puchi ctx, size_t *sum_freed) {
+PUCHI_API puchi puchi_gc(puchi ctx, size_t *sum_freed) {
   return sexp_gc(ctx, sum_freed);
 }
 #endif
 
-puchi puchi_get_output_string_op(puchi ctx, puchi self, puchi_sint_t n, puchi port) {
+PUCHI_API puchi puchi_get_output_string_op(puchi ctx, puchi self, puchi_sint_t n, puchi port) {
   return sexp_get_output_string_op(ctx, self, n, port);
 }
 
-puchi puchi_get_stack_trace(puchi ctx) {
+PUCHI_API puchi puchi_get_stack_trace(puchi ctx) {
   return sexp_get_stack_trace(ctx);
 }
 
+PUCHI_API puchi puchi_identifier_eq_op(puchi ctx, puchi self, puchi_sint_t n, puchi a, puchi b, puchi c, puchi d) {
+  return sexp_identifier_eq_op(ctx, self, n, a, b, c, d);
+}
+
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_inexact_sqrt(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
+PUCHI_API puchi puchi_inexact_sqrt(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
   return sexp_inexact_sqrt(ctx, self, n, z);
 }
 #endif
 
-puchi puchi_inexact_to_exact(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
+PUCHI_API puchi puchi_inexact_to_exact(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
   return sexp_inexact_to_exact(ctx, self, n, x);
 }
 
-void puchi_init(void) {
+PUCHI_API void puchi_init(void) {
   sexp_init();
 }
 
-puchi puchi_intern(puchi ctx, const char *str, puchi_sint_t len) {
+PUCHI_API puchi puchi_intern(puchi ctx, const char *str, puchi_sint_t len) {
   return sexp_intern(ctx, str, len);
 }
 
-puchi puchi_length_op(puchi ctx, puchi self, puchi_sint_t n, puchi ls) {
+PUCHI_API puchi puchi_length_op(puchi ctx, puchi self, puchi_sint_t n, puchi ls) {
   return sexp_length_op(ctx, self, n, ls);
 }
 
-puchi puchi_list2(puchi ctx, puchi a, puchi b) {
+PUCHI_API puchi puchi_list2(puchi ctx, puchi a, puchi b) {
   return sexp_list2(ctx, a, b);
 }
 
-puchi puchi_list3(puchi ctx, puchi a, puchi b, puchi c) {
+PUCHI_API puchi puchi_list3(puchi ctx, puchi a, puchi b, puchi c) {
   return sexp_list3(ctx, a, b, c);
 }
 
-puchi puchi_list_to_uvector_op(puchi ctx, puchi self, puchi_sint_t n, puchi etype, puchi ls) {
+PUCHI_API puchi puchi_list_to_uvector_op(puchi ctx, puchi self, puchi_sint_t n, puchi etype, puchi ls) {
   return sexp_list_to_uvector_op(ctx, self, n, etype, ls);
 }
 
-puchi puchi_list_to_vector_op(puchi ctx, puchi self, puchi_sint_t n, puchi ls) {
+PUCHI_API puchi puchi_list_to_vector_op(puchi ctx, puchi self, puchi_sint_t n, puchi ls) {
   return sexp_list_to_vector_op(ctx, self, n, ls);
 }
 
-puchi puchi_listp_op(puchi ctx, puchi self, puchi_sint_t n, puchi obj) {
+PUCHI_API puchi puchi_listp_op(puchi ctx, puchi self, puchi_sint_t n, puchi obj) {
   return sexp_listp_op(ctx, self, n, obj);
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_log(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
+PUCHI_API puchi puchi_log(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
   return sexp_log(ctx, self, n, z);
 }
 #endif
 
-puchi puchi_lookup_type_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi id) {
+PUCHI_API puchi puchi_lookup_type_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi id) {
   return sexp_lookup_type_op(ctx, self, n, name, id);
 }
 
-puchi puchi_make_bytes_op(puchi ctx, puchi self, puchi_sint_t n, puchi len, puchi i) {
+PUCHI_API puchi puchi_make_bytes_op(puchi ctx, puchi self, puchi_sint_t n, puchi len, puchi i) {
   return sexp_make_bytes_op(ctx, self, n, len, i);
 }
 
-puchi puchi_make_child_context(puchi context, puchi lambda) {
+PUCHI_API puchi puchi_make_child_context(puchi context, puchi lambda) {
   return sexp_make_child_context(context, lambda);
 }
 
-puchi puchi_make_constructor_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi type) {
+PUCHI_API puchi puchi_make_constructor_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi type) {
   return sexp_make_constructor_op(ctx, self, n, name, type);
 }
 
-puchi puchi_make_context(puchi ctx, size_t size, size_t max_size, const puchi_host *host) {
+PUCHI_API puchi puchi_make_context(puchi ctx, size_t size, size_t max_size, const puchi_host *host) {
   return sexp_make_context(ctx, size, max_size, host);
 }
 
-puchi puchi_make_cpointer(puchi ctx, puchi_uint_t type_id, void* value, puchi parent, int freep) {
+PUCHI_API puchi puchi_make_cpointer(puchi ctx, puchi_uint_t type_id, void* value, puchi parent, int freep) {
   return sexp_make_cpointer(ctx, type_id, value, parent, freep);
 }
 
-puchi puchi_make_env_op(puchi context, puchi self, puchi_sint_t n) {
+PUCHI_API puchi puchi_make_env_op(puchi context, puchi self, puchi_sint_t n) {
   return sexp_make_env_op(context, self, n);
 }
 
-puchi puchi_make_ephemeron_op(puchi ctx, puchi self, puchi_sint_t n, puchi key, puchi value) {
+PUCHI_API puchi puchi_make_ephemeron_op(puchi ctx, puchi self, puchi_sint_t n, puchi key, puchi value) {
   return sexp_make_ephemeron_op(ctx, self, n, key, value);
 }
 
-puchi puchi_make_eval_context(puchi context, puchi stack, puchi env, puchi_uint_t size, puchi_uint_t max_size) {
+PUCHI_API puchi puchi_make_eval_context(puchi context, puchi stack, puchi env, puchi_uint_t size, puchi_uint_t max_size) {
   return sexp_make_eval_context(context, stack, env, size, max_size);
 }
 
-puchi puchi_make_exception(puchi ctx, puchi kind, puchi message, puchi irritants, puchi procedure, puchi source) {
+PUCHI_API puchi puchi_make_exception(puchi ctx, puchi kind, puchi message, puchi irritants, puchi procedure, puchi source) {
   return sexp_make_exception(ctx, kind, message, irritants, procedure, source);
 }
 
-#if !defined(PUCHI_INTEGER_ONLY)
+#if defined(PUCHI_TEST)
+PUCHI_API puchi puchi_make_fileno_op(puchi ctx, puchi self, puchi_sint_t n, puchi fd, puchi no_closep) {
+  return sexp_make_fileno_op(ctx, self, n, fd, no_closep);
+}
+#endif
+
+#if !defined(PUCHI_INTEGER_ONLY) || defined(PUCHI_TEST)
 #if !defined(puchi_make_flonum)
-puchi puchi_make_flonum(puchi ctx, float f) {
+PUCHI_API puchi puchi_make_flonum(puchi ctx, double f) {
   return sexp_make_flonum(ctx, f);
 }
 #endif
 #endif
 
-puchi puchi_make_foreign(puchi ctx, const char *name, int num_args, int flags, const char *fname, puchi_proc1 f, puchi data) {
+PUCHI_API puchi puchi_make_foreign(puchi ctx, const char *name, int num_args, int flags, const char *fname, puchi_proc1 f, puchi data) {
   return sexp_make_foreign(ctx, name, num_args, flags, fname, f, data);
 }
 
-puchi puchi_make_getter_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi type, puchi index) {
+PUCHI_API puchi puchi_make_getter_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi type, puchi index) {
   return sexp_make_getter_op(ctx, self, n, name, type, index);
 }
 
-puchi puchi_make_immutable_op(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
+PUCHI_API puchi puchi_make_immutable_op(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
   return sexp_make_immutable_op(ctx, self, n, x);
 }
 
-puchi puchi_make_input_port(puchi ctx, const puchi_stream_ops *ops, void *udata, puchi name) {
+PUCHI_API puchi puchi_make_input_port(puchi ctx, const puchi_stream_ops *ops, void *udata, puchi name) {
   return sexp_make_input_port(ctx, ops, udata, name);
 }
 
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
 #if !defined(puchi_make_integer)
-puchi puchi_make_integer(puchi ctx, long long x) {
+PUCHI_API puchi puchi_make_integer(puchi ctx, long long x) {
   return sexp_make_integer(ctx, x);
 }
 #endif
+#endif
 
-puchi puchi_make_null_env_op(puchi context, puchi self, puchi_sint_t n, puchi version) {
+PUCHI_API puchi puchi_make_null_env_op(puchi context, puchi self, puchi_sint_t n, puchi version) {
   return sexp_make_null_env_op(context, self, n, version);
 }
 
-puchi puchi_make_output_port(puchi ctx, const puchi_stream_ops *ops, void *udata, puchi name) {
+PUCHI_API puchi puchi_make_output_port(puchi ctx, const puchi_stream_ops *ops, void *udata, puchi name) {
   return sexp_make_output_port(ctx, ops, udata, name);
 }
 
-puchi puchi_make_primitive_env_op(puchi context, puchi self, puchi_sint_t n, puchi version) {
+PUCHI_API puchi puchi_make_primitive_env_op(puchi context, puchi self, puchi_sint_t n, puchi version) {
   return sexp_make_primitive_env_op(context, self, n, version);
 }
 
-puchi puchi_make_setter_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi type, puchi index) {
+PUCHI_API puchi puchi_make_procedure_op(puchi ctx, puchi self, puchi_sint_t n, puchi flags, puchi num_args, puchi bc, puchi vars) {
+  return sexp_make_procedure_op(ctx, self, n, flags, num_args, bc, vars);
+}
+
+PUCHI_API puchi puchi_make_setter_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi type, puchi index) {
   return sexp_make_setter_op(ctx, self, n, name, type, index);
 }
 
-puchi puchi_make_standard_env_op(puchi context, puchi self, puchi_sint_t n, puchi version) {
+PUCHI_API puchi puchi_make_standard_env_op(puchi context, puchi self, puchi_sint_t n, puchi version) {
   return sexp_make_standard_env_op(context, self, n, version);
 }
 
-puchi puchi_make_string_op(puchi ctx, puchi self, puchi_sint_t n, puchi len, puchi ch) {
+PUCHI_API puchi puchi_make_string_op(puchi ctx, puchi self, puchi_sint_t n, puchi len, puchi ch) {
   return sexp_make_string_op(ctx, self, n, len, ch);
 }
 
-puchi puchi_make_type_predicate_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi type) {
+PUCHI_API puchi puchi_make_synclo_op(puchi ctx, puchi self, puchi_sint_t n, puchi env, puchi fv, puchi expr) {
+  return sexp_make_synclo_op(ctx, self, n, env, fv, expr);
+}
+
+PUCHI_API puchi puchi_make_type_predicate_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi type) {
   return sexp_make_type_predicate_op(ctx, self, n, name, type);
 }
 
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
 #if !defined(puchi_make_unsigned_integer)
-puchi puchi_make_unsigned_integer(puchi ctx, unsigned long long x) {
+PUCHI_API puchi puchi_make_unsigned_integer(puchi ctx, unsigned long long x) {
   return sexp_make_unsigned_integer(ctx, x);
 }
 #endif
+#endif
 
-puchi puchi_make_uvector_op(puchi ctx, puchi self, puchi_sint_t n, puchi elt_type, puchi len) {
+PUCHI_API puchi puchi_make_uvector_op(puchi ctx, puchi self, puchi_sint_t n, puchi elt_type, puchi len) {
   return sexp_make_uvector_op(ctx, self, n, elt_type, len);
 }
 
-puchi puchi_make_vector_op(puchi ctx, puchi self, puchi_sint_t n, puchi len, puchi dflt) {
+PUCHI_API puchi puchi_make_vector_op(puchi ctx, puchi self, puchi_sint_t n, puchi len, puchi dflt) {
   return sexp_make_vector_op(ctx, self, n, len, dflt);
 }
 
-puchi puchi_maybe_wrap_error(puchi ctx, puchi obj) {
+PUCHI_API puchi puchi_maybe_wrap_error(puchi ctx, puchi obj) {
   return sexp_maybe_wrap_error(ctx, obj);
 }
 
-puchi puchi_memq_op(puchi ctx, puchi self, puchi_sint_t n, puchi x, puchi ls) {
+PUCHI_API puchi puchi_memq_op(puchi ctx, puchi self, puchi_sint_t n, puchi x, puchi ls) {
   return sexp_memq_op(ctx, self, n, x, ls);
 }
 
-puchi puchi_meta_environment(puchi ctx, puchi self, puchi_sint_t n) {
+PUCHI_API puchi puchi_meta_environment(puchi ctx, puchi self, puchi_sint_t n) {
   return sexp_meta_environment(ctx, self, n);
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
 #if !defined(puchi_mul)
-puchi puchi_mul(puchi ctx, puchi a, puchi b) {
+PUCHI_API puchi puchi_mul(puchi ctx, puchi a, puchi b) {
   return sexp_mul(ctx, a, b);
 }
 #endif
 #endif
 
-puchi puchi_nreverse_op(puchi ctx, puchi self, puchi_sint_t n, puchi ls) {
+PUCHI_API puchi puchi_nreverse_op(puchi ctx, puchi self, puchi_sint_t n, puchi ls) {
   return sexp_nreverse_op(ctx, self, n, ls);
 }
 
-puchi puchi_open_input_string_op(puchi ctx, puchi self, puchi_sint_t n, puchi str) {
+PUCHI_API puchi puchi_open_input_string_op(puchi ctx, puchi self, puchi_sint_t n, puchi str) {
   return sexp_open_input_string_op(ctx, self, n, str);
 }
 
-puchi puchi_open_output_string_op(puchi ctx, puchi self, puchi_sint_t n) {
+PUCHI_API puchi puchi_open_output_string_op(puchi ctx, puchi self, puchi_sint_t n) {
   return sexp_open_output_string_op(ctx, self, n);
 }
 
-puchi puchi_parameter_ref(puchi ctx, puchi param) {
+PUCHI_API puchi puchi_parameter_ref(puchi ctx, puchi param) {
   return sexp_parameter_ref(ctx, param);
 }
 
-void puchi_preserve_object(puchi ctx, puchi x) {
+PUCHI_API void puchi_preserve_object(puchi ctx, puchi x) {
   sexp_preserve_object(ctx, x);
 }
 
-puchi puchi_print_exception_op(puchi ctx, puchi self, puchi_sint_t n, puchi exn, puchi out) {
+PUCHI_API puchi puchi_print_exception_op(puchi ctx, puchi self, puchi_sint_t n, puchi exn, puchi out) {
   return sexp_print_exception_op(ctx, self, n, exn, out);
 }
 
-puchi puchi_print_exception_stack_trace_op(puchi ctx, puchi self, puchi_sint_t n, puchi exn, puchi out) {
+PUCHI_API puchi puchi_print_exception_stack_trace_op(puchi ctx, puchi self, puchi_sint_t n, puchi exn, puchi out) {
   return sexp_print_exception_stack_trace_op(ctx, self, n, exn, out);
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_quotient(puchi ctx, puchi a, puchi b) {
+PUCHI_API puchi puchi_quotient(puchi ctx, puchi a, puchi b) {
   return sexp_quotient(ctx, a, b);
 }
 #endif
 
-puchi puchi_range_exception(puchi ctx, puchi obj, puchi start, puchi end) {
+PUCHI_API puchi puchi_range_exception(puchi ctx, puchi obj, puchi start, puchi end) {
   return sexp_range_exception(ctx, obj, start, end);
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-double puchi_ratio_to_double(puchi ctx, puchi rat) {
+PUCHI_API double puchi_ratio_to_double(puchi ctx, puchi rat) {
   return sexp_ratio_to_double(ctx, rat);
 }
 #endif
 
-puchi puchi_read_error(puchi ctx, const char *msg, puchi ir, puchi port) {
+PUCHI_API puchi puchi_read_error(puchi ctx, const char *msg, puchi ir, puchi port) {
   return sexp_read_error(ctx, msg, ir, port);
 }
 
-puchi puchi_read_from_string(puchi ctx, const char *str, puchi_sint_t len) {
+PUCHI_API puchi puchi_read_from_string(puchi ctx, const char *str, puchi_sint_t len) {
   return sexp_read_from_string(ctx, str, len);
 }
 
-puchi puchi_read_op(puchi ctx, puchi self, puchi_sint_t n, puchi in) {
+PUCHI_API puchi puchi_read_op(puchi ctx, puchi self, puchi_sint_t n, puchi in) {
   return sexp_read_op(ctx, self, n, in);
 }
 
-puchi puchi_register_simple_type_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi parent, puchi slots) {
+PUCHI_API puchi puchi_register_simple_type_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi parent, puchi slots) {
   return sexp_register_simple_type_op(ctx, self, n, name, parent, slots);
 }
 
-puchi puchi_register_type_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi parent, puchi slots, puchi fb, puchi felb, puchi flb, puchi flo, puchi fls, puchi sb, puchi so, puchi sc, puchi w, puchi wb, puchi wo, puchi ws, puchi we, puchi p, const char *fname, puchi_proc2 f) {
+PUCHI_API puchi puchi_register_type_op(puchi ctx, puchi self, puchi_sint_t n, puchi name, puchi parent, puchi slots, puchi fb, puchi felb, puchi flb, puchi flo, puchi fls, puchi sb, puchi so, puchi sc, puchi w, puchi wb, puchi wo, puchi ws, puchi we, puchi p, const char *fname, puchi_proc2 f) {
   return sexp_register_type_op(ctx, self, n, name, parent, slots, fb, felb, flb, flo, fls, sb, so, sc, w, wb, wo, ws, we, p, fname, f);
 }
 
-void puchi_release_object(puchi ctx, puchi x) {
+PUCHI_API void puchi_release_object(puchi ctx, puchi x) {
   sexp_release_object(ctx, x);
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_remainder(puchi ctx, puchi a, puchi b) {
+PUCHI_API puchi puchi_remainder(puchi ctx, puchi a, puchi b) {
   return sexp_remainder(ctx, a, b);
 }
 #endif
 
-puchi puchi_reverse_op(puchi ctx, puchi self, puchi_sint_t n, puchi ls) {
+PUCHI_API puchi puchi_reverse_op(puchi ctx, puchi self, puchi_sint_t n, puchi ls) {
   return sexp_reverse_op(ctx, self, n, ls);
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_round(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
+PUCHI_API puchi puchi_round(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
   return sexp_round(ctx, self, n, x);
 }
 #endif
 
-void puchi_scheme_init(void) {
+PUCHI_API void puchi_scheme_init(void) {
   sexp_scheme_init();
 }
 
-puchi puchi_set_current_environment(puchi ctx, puchi self, puchi_sint_t n, puchi env) {
+PUCHI_API puchi puchi_set_current_environment(puchi ctx, puchi self, puchi_sint_t n, puchi env) {
   return sexp_set_current_environment(ctx, self, n, env);
 }
 
-void puchi_set_parameter(puchi ctx, puchi env, puchi name, puchi value) {
+PUCHI_API void puchi_set_parameter(puchi ctx, puchi env, puchi name, puchi value) {
   sexp_set_parameter(ctx, env, name, value);
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_sin(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
+PUCHI_API puchi puchi_sin(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
   return sexp_sin(ctx, self, n, z);
 }
 #endif
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_sqrt(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
+PUCHI_API puchi puchi_sqrt(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
   return sexp_sqrt(ctx, self, n, z);
 }
 #endif
 
-puchi puchi_string_cmp_op(puchi ctx, puchi self, puchi_sint_t n, puchi a, puchi b, puchi ci) {
+PUCHI_API puchi puchi_string_cmp_op(puchi ctx, puchi self, puchi_sint_t n, puchi a, puchi b, puchi ci) {
   return sexp_string_cmp_op(ctx, self, n, a, b, ci);
 }
 
-puchi puchi_string_concatenate_op(puchi ctx, puchi self, puchi_sint_t n, puchi str_ls, puchi sep) {
+PUCHI_API puchi puchi_string_concatenate_op(puchi ctx, puchi self, puchi_sint_t n, puchi str_ls, puchi sep) {
   return sexp_string_concatenate_op(ctx, self, n, str_ls, sep);
 }
 
-puchi puchi_string_cursor_offset(puchi ctx, puchi self, puchi_sint_t n, puchi cur) {
+PUCHI_API puchi puchi_string_cursor_offset(puchi ctx, puchi self, puchi_sint_t n, puchi cur) {
   return sexp_string_cursor_offset(ctx, self, n, cur);
 }
 
-puchi puchi_string_cursor_to_index(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi offset) {
+PUCHI_API puchi puchi_string_cursor_to_index(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi offset) {
   return sexp_string_cursor_to_index(ctx, self, n, str, offset);
 }
 
-puchi puchi_string_index_to_cursor(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi index) {
+PUCHI_API puchi puchi_string_index_to_cursor(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi index) {
   return sexp_string_index_to_cursor(ctx, self, n, str, index);
 }
 
-puchi puchi_string_to_number_op(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi b) {
+PUCHI_API puchi puchi_string_to_number_op(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi b) {
   return sexp_string_to_number_op(ctx, self, n, str, b);
 }
 
-puchi puchi_string_to_symbol_op(puchi ctx, puchi self, puchi_sint_t n, puchi str) {
+PUCHI_API puchi puchi_string_to_symbol_op(puchi ctx, puchi self, puchi_sint_t n, puchi str) {
   return sexp_string_to_symbol_op(ctx, self, n, str);
 }
 
-puchi puchi_string_utf8_index_ref(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi i) {
+PUCHI_API puchi puchi_string_utf8_index_ref(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi i) {
   return sexp_string_utf8_index_ref(ctx, self, n, str, i);
 }
 
-puchi puchi_string_utf8_index_set(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi i, puchi ch) {
+PUCHI_API puchi puchi_string_utf8_index_set(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi i, puchi ch) {
   return sexp_string_utf8_index_set(ctx, self, n, str, i, ch);
 }
 
-puchi_uint_t puchi_string_utf8_length(unsigned char *p, long len) {
+PUCHI_API puchi_uint_t puchi_string_utf8_length(unsigned char *p, long len) {
   return sexp_string_utf8_length(p, len);
 }
 
-char* puchi_string_utf8_prev(unsigned char *p) {
+PUCHI_API char* puchi_string_utf8_prev(unsigned char *p) {
   return sexp_string_utf8_prev(p);
 }
 
-puchi puchi_string_utf8_ref(puchi ctx, puchi str, puchi i) {
+PUCHI_API puchi puchi_string_utf8_ref(puchi ctx, puchi str, puchi i) {
   return sexp_string_utf8_ref(ctx, str, i);
 }
 
-void puchi_string_utf8_set(puchi ctx, puchi str, puchi index, puchi ch) {
+PUCHI_API void puchi_string_utf8_set(puchi ctx, puchi str, puchi index, puchi ch) {
   sexp_string_utf8_set(ctx, str, index, ch);
 }
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
 #if !defined(puchi_sub)
-puchi puchi_sub(puchi ctx, puchi a, puchi b) {
+PUCHI_API puchi puchi_sub(puchi ctx, puchi a, puchi b) {
   return sexp_sub(ctx, a, b);
 }
 #endif
 #endif
 
-puchi puchi_subbytes_op(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi start, puchi end) {
+PUCHI_API puchi puchi_subbytes_op(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi start, puchi end) {
   return sexp_subbytes_op(ctx, self, n, str, start, end);
 }
 
-puchi puchi_substring_op(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi start, puchi end) {
+PUCHI_API puchi puchi_substring_op(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi start, puchi end) {
   return sexp_substring_op(ctx, self, n, str, start, end);
 }
 
-puchi puchi_symbol_to_string_op(puchi ctx, puchi self, puchi_sint_t n, puchi sym) {
+PUCHI_API puchi puchi_symbol_to_string_op(puchi ctx, puchi self, puchi_sint_t n, puchi sym) {
   return sexp_symbol_to_string_op(ctx, self, n, sym);
 }
 
+PUCHI_API puchi puchi_syntactic_closure_expr_op(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
+  return sexp_syntactic_closure_expr_op(ctx, self, n, x);
+}
+
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_tan(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
+PUCHI_API puchi puchi_tan(puchi ctx, puchi self, puchi_sint_t n, puchi z) {
   return sexp_tan(ctx, self, n, z);
 }
 #endif
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-double puchi_to_double(puchi ctx, puchi x) {
+PUCHI_API double puchi_to_double(puchi ctx, puchi x) {
   return sexp_to_double(ctx, x);
 }
 #endif
 
 #if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
-puchi puchi_trunc(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
+PUCHI_API puchi puchi_trunc(puchi ctx, puchi self, puchi_sint_t n, puchi x) {
   return sexp_trunc(ctx, self, n, x);
 }
 #endif
 
-puchi puchi_type_exception(puchi ctx, puchi self, puchi_uint_t type_id, puchi x) {
+PUCHI_API puchi puchi_type_exception(puchi ctx, puchi self, puchi_uint_t type_id, puchi x) {
   return sexp_type_exception(ctx, self, type_id, x);
 }
 
-puchi puchi_type_slot_offset_op(puchi ctx, puchi self, puchi_sint_t n, puchi type, puchi index) {
+PUCHI_API puchi puchi_type_slot_offset_op(puchi ctx, puchi self, puchi_sint_t n, puchi type, puchi index) {
   return sexp_type_slot_offset_op(ctx, self, n, type, index);
 }
 
-puchi puchi_user_exception(puchi ctx, puchi self, const char *msg, puchi x) {
+PUCHI_API puchi puchi_user_exception(puchi ctx, puchi self, const char *msg, puchi x) {
   return sexp_user_exception(ctx, self, msg, x);
 }
 
-/* skip wrapper for sexp_user_exception_ls: unhandled params */
-int puchi_utf8_char_byte_count(int c) {
+PUCHI_API puchi puchi_user_exception_ls(puchi ctx, puchi self, const char *msg, int n, ...) {
+  int i;
+  va_list ap;
+  sexp_gc_var2(res, ir);
+  sexp_gc_preserve2(ctx, res, ir);
+  va_start(ap, n);
+  for (i = 0, ir = SEXP_NULL; i < n; ++i)
+    ir = sexp_cons(ctx, va_arg(ap, sexp), ir);
+  ir = sexp_nreverse(ctx, ir);
+  res = sexp_user_exception(ctx, self, msg, ir);
+  sexp_gc_release2(ctx);
+  va_end(ap);
+  return res;
+}
+
+PUCHI_API int puchi_utf8_char_byte_count(int c) {
   return sexp_utf8_char_byte_count(c);
 }
 
-void puchi_utf8_encode_char(unsigned char* p, int len, int c) {
+PUCHI_API void puchi_utf8_encode_char(unsigned char* p, int len, int c) {
   sexp_utf8_encode_char(p, len, c);
 }
 
-int puchi_utf8_initial_byte_count(int c) {
+PUCHI_API int puchi_utf8_initial_byte_count(int c) {
   return sexp_utf8_initial_byte_count(c);
 }
 
-puchi puchi_utf8_substring_op(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi start, puchi end) {
+PUCHI_API puchi puchi_utf8_substring_op(puchi ctx, puchi self, puchi_sint_t n, puchi str, puchi start, puchi end) {
   return sexp_utf8_substring_op(ctx, self, n, str, start, end);
 }
 
-puchi puchi_write_op(puchi ctx, puchi self, puchi_sint_t n, puchi obj, puchi out) {
+PUCHI_API puchi puchi_warn_undefs_op(puchi ctx, puchi self, puchi_sint_t n, puchi from, puchi to, puchi res) {
+  return sexp_warn_undefs_op(ctx, self, n, from, to, res);
+}
+
+PUCHI_API puchi puchi_write_op(puchi ctx, puchi self, puchi_sint_t n, puchi obj, puchi out) {
   return sexp_write_op(ctx, self, n, obj, out);
 }
 
-puchi puchi_write_to_string(puchi ctx, puchi obj) {
+PUCHI_API puchi puchi_write_to_string(puchi ctx, puchi obj) {
   return sexp_write_to_string(ctx, obj);
 }
 
-puchi puchi_xtype_exception(puchi ctx, puchi self, const char *msg, puchi x) {
+PUCHI_API puchi puchi_xtype_exception(puchi ctx, puchi self, const char *msg, puchi x) {
   return sexp_xtype_exception(ctx, self, msg, x);
 }
 

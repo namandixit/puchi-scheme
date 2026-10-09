@@ -13,6 +13,7 @@ Requires bash (Git Bash on Windows), `patch` or `git apply`, and Python 3.
 The amalgamated header is platform-independent for embeds:
 
 - **Host owns memory and I/O.** Pass a `puchi_host` with `alloc` / `free` at context create. Ports use `puchi_stream_ops`. A null or incomplete host does not fall back to CRT `malloc`.
+- **Host API surface.** Use always-visible `puchi_*` / `PUCHI_*` entrypoints (`puchi_create_context`, `puchi_eval_string`, …) and symbols listed as HOST in `product/puchi_host_symbols.txt`, plus the HOST accessors in `product/`. Always-visible ABI may include INTERNAL tag/mask macros as glue for HOST accessors — do not treat opcode enums, core-form codes, or GC freelist types as the host contract (those stay under `PUCHI_IMPLEMENTATION` / `PUCHI_TEST`).
 - **No OS `#if` or syscalls in the header.** No `_WIN32` / `__APPLE__` / … layout forks, no `close` / `fopen` / `dlopen`. Post-amalgamate assert fails if those tokens return.
 - **No OS names in `*features*`.** `"chibi"` and `"puchi"` stay; `"windows"` does not. A `PUCHI_TEST` harness may use the CRT and may cons `windows` onto `*features*` at runtime so upstream Chibi libs (e.g. `(scheme process-context)`) load.
 
@@ -55,10 +56,11 @@ Sanitizer pass needs the Clang ASan runtime DLL on PATH (the bat adds `$(clang -
 
 | Path | Role |
 |------|------|
-| `product/` | Puchi-owned C (banner, feature forces, API, `#e` mul helper) — concatenated as-is |
+| `product/` | Puchi-owned fragments (banner, feature forces, host API/accessors, test API, `#e` mul) — concatenated as-is |
+| `product/puchi_host_symbols.txt` | HOST allowlist: which Chibi symbols become always-visible `puchi_*` / `PUCHI_*` (vs `PUCHI_TEST` / impl-only) |
 | `patches/` | Thin unified diffs: host ports, diskless boot, safe fixnum read |
 | `tools/amalgamate.sh` | Orchestrator: copy → patch → mechanical rewrite → trim/embed → concat → strip |
-| `tools/puchi_*.py` | Mechanical helpers (features scrub, alloc rewrite, ABI-f splice, libc, strip) |
+| `tools/puchi_*.py` | Mechanical helpers (HOST ABI gen from manifest, features scrub, strip, …) |
 | `tools/build_puchi_tests.bat` | **Mandatory verify**: amalgamate + MSVC + Clang + Clang ASan/UBSan (tag `asan`) |
 
 ## Numeric modes
@@ -76,9 +78,10 @@ Middle mode (F∧¬B): ABI-f splice gates call sites (`sexp_to_double` / `exact-
 1. Copy upstream Chibi sources into `tools/.amalgamate-tmp/`.
 2. Apply `patches/*.diff` in sorted order (hard fail on reject).
 3. Mechanical rewrites: features scrub, GC host policy, ABI-f splice, branding, libc → `PUCHI_*`, allocators → `SEXP_MALLOC`.
-4. Trim init-7 / meta-7 (file/load stubs, if-style and/or, include-shared stubs), embed as C strings.
-5. Concatenate `product/` + transformed sources → `puchi.h`.
-6. `strip-dead-backends` + single-header assert.
+4. Generate host ABI / decls / wrappers from `product/puchi_host_symbols.txt` (`puchi_gen_host_api.py`).
+5. Trim init-7 / meta-7 (file/load stubs, if-style and/or, include-shared stubs), embed as C strings.
+6. Concatenate `product/` + transformed sources → `puchi.h`.
+7. `strip-dead-backends` + assert always-visible `PUCHI_API` decls match the HOST manifest.
 
 ## Refreshing after upstream Chibi changes
 

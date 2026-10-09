@@ -247,6 +247,11 @@ echo "[puchi] embedding trimmed meta-7.scm..."
 echo "[puchi] generating host API fragments (puchi_* façade)..."
 "$PYTHON" "$TOOLS/puchi_gen_host_api.py" "$WORKDIR"
 
+echo "[puchi] making sexp_* bodies static (structural)..."
+for f in gc.c sexp.c eval.c opcodes.c vm.c simplify.c bignum.c; do
+  "$PYTHON" "$HELPERS" make-sexp-static "$WORKDIR/$f"
+done
+
 echo "[puchi] writing puchi.h..."
 {
   # ---- 1) Banner (PUCHI_* libc hooks + puchi_host types) ----
@@ -273,6 +278,16 @@ echo "[puchi] writing puchi.h..."
   echo "/* ==== puchi host API decls ==== */"
   cat "$WORKDIR/host_api_decls.inc"
   echo
+  echo "/* ==== puchi host accessors (get/set) ==== */"
+  cat "$PRODUCT/puchi_host_accessors.inc"
+  echo
+  echo "#if defined(PUCHI_TEST)"
+  echo "/* ==== puchi_TEST_* function decls ==== */"
+  cat "$PRODUCT/puchi_test_api_decls.inc"
+  echo "/* ==== auto puchi_TEST_* decls (non-HOST SEXP_API) ==== */"
+  cat "$WORKDIR/host_api_test_decls.inc"
+  echo "#endif /* PUCHI_TEST */"
+  echo
 
   # Diag push / CRT: impl or test TUs only
   echo "#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)"
@@ -284,10 +299,18 @@ echo "[puchi] writing puchi.h..."
   echo "#endif /* PUCHI_IMPLEMENTATION || PUCHI_TEST */"
   echo
 
-  # ---- 4) sexp compatibility surface (TEST stub TUs + IMPLEMENTATION) ----
+  # ---- 4) sexp compatibility surface (IMPLEMENTATION only; clibs use TEST+IMPL) ----
   echo "/* ========================================================================== */"
-  echo "#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)"
+  echo "#if defined(PUCHI_IMPLEMENTATION)"
   echo "/* ========================================================================== */"
+  echo
+  echo "/* ==== install identity sexp_* aliases ==== */"
+  cat "$PRODUCT/puchi_impl_sexp_identity.inc"
+  echo
+  echo "#if defined(PUCHI_TEST)"
+  echo "/* ==== puchi_TEST_* sexp_* aliases (clibs) ==== */"
+  cat "$PRODUCT/puchi_test_sexp_aliases.inc"
+  echo "#endif /* PUCHI_TEST */"
   echo
   echo "/* ==== sexp_* / SEXP_* aliases -> puchi_* / PUCHI_* ==== */"
   cat "$WORKDIR/host_api_aliases.inc"
@@ -305,12 +328,18 @@ echo "[puchi] writing puchi.h..."
   cat "$WORKDIR/eval.h"
   echo
 
-  echo "#endif /* PUCHI_IMPLEMENTATION || PUCHI_TEST (sexp decl surface) */"
+  echo "/* ==== TEST_CLIB sexp_* -> puchi_* / puchi_TEST_* aliases ==== */"
+  cat "$WORKDIR/host_api_test_clib_aliases.inc"
   echo
 
-  # ---- 5) PUCHI_IMPLEMENTATION (Chibi .c bodies + puchi wrappers only) ----
+  echo "#endif /* PUCHI_IMPLEMENTATION (sexp decl surface) */"
+  echo
+
+  # ---- 5) Bodies + wrappers: one TU owns defs (clibs set PUCHI_TEST_CLIB) ----
+  # Impl TU may define PUCHI_TEST so STATIC_LIBS / opcode_names paths compile.
+  # Clibs use IMPLEMENTATION + TEST + PUCHI_TEST_CLIB (decls only; harness-only).
   echo "/* ========================================================================== */"
-  echo "#if defined(PUCHI_IMPLEMENTATION)"
+  echo "#if defined(PUCHI_IMPLEMENTATION) && !defined(PUCHI_TEST_CLIB)"
   echo "/* ========================================================================== */"
   echo
 
@@ -356,6 +385,19 @@ echo "[puchi] writing puchi.h..."
   cat "$PRODUCT/puchi_enable_modules.inc"
   echo
 
+  echo "/* ==== puchi host accessors impl ==== */"
+  cat "$PRODUCT/puchi_host_accessors_impl.inc"
+  echo
+
+  echo "#if defined(PUCHI_TEST)"
+  echo "/* ==== puchi_TEST_* API impl ==== */"
+  cat "$PRODUCT/puchi_test_api_impl.inc"
+  echo
+  echo "/* ==== auto puchi_TEST_* wrappers -> sexp_* ==== */"
+  cat "$WORKDIR/host_api_test_wrappers.inc"
+  echo "#endif /* PUCHI_TEST */"
+  echo
+
   echo "/* ==== puchi_* wrappers -> sexp_* ==== */"
   cat "$WORKDIR/host_api_wrappers.inc"
   echo
@@ -365,7 +407,7 @@ echo "[puchi] writing puchi.h..."
 } /* extern "C" implementation */
 #endif
 
-#endif /* PUCHI_IMPLEMENTATION */
+#endif /* PUCHI_IMPLEMENTATION && !PUCHI_TEST_CLIB */
 
 EOF
   echo "#if defined(PUCHI_IMPLEMENTATION) || defined(PUCHI_TEST)"
