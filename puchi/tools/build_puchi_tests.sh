@@ -4,9 +4,11 @@
 #   1) amalgamate
 #   2) full suite under GCC + Clang (all three numeric configs, execute)
 #   3) same suite again under Clang ASan+UBSan
-# Run from anywhere:  bash puchi/tools/build_puchi_tests.sh
+# Run from anywhere:  bash puchi/tools/build_puchi_tests.sh [gcc|clang|asan ...]
+#   (no args = all three; the gate. Naming suites is for re-running one.)
 # Requires: gcc and clang on PATH (CC_GCC= / CC_CLANG= override), python3,
-#           patch, and the generated lib/**/*.c FFI stubs (see below).
+#           patch, the generated lib/**/*.c FFI stubs (see below), and the
+#           Clang sanitizer runtime (Debian/Ubuntu: libclang-rt-<ver>-dev).
 #
 # GCC stands in for MSVC: a second, independent compiler with its own
 # warnings (-Wall -Wextra ~ /W4).
@@ -41,6 +43,8 @@ OUT=$TEST/build
 mkdir -p "$OUT"
 
 CC_GCC="${CC_GCC:-gcc}"
+# Leak checks (LSan, part of ASan on Linux) skip known upstream stub leaks.
+export LSAN_OPTIONS="suppressions=$ROOT/puchi/test/lsan.supp:print_suppressions=0${LSAN_OPTIONS:+:$LSAN_OPTIONS}"
 CC_CLANG="${CC_CLANG:-clang}"
 
 for c in "$CC_GCC" "$CC_CLANG"; do
@@ -197,8 +201,11 @@ do_suite() {
   echo "=== [$tag] all three configs passed ==="
 }
 
-do_suite gcc
-do_suite clang
-do_suite asan
+if [[ $# -eq 0 ]]; then
+  set -- gcc clang asan
+fi
+for tag in "$@"; do
+  do_suite "$tag"
+done
 
-echo "=== all three puchi configs passed (gcc + clang + clang ASan/UBSan) ==="
+echo "=== puchi suites passed: $* ==="

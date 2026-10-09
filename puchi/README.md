@@ -61,7 +61,7 @@ Every harness script: single-threaded first, then 64 parallel contexts.
 
 **Permanently out of scope** (all configs): `tests/ffi/`, `tests/snow/`, `tests/net-tests.scm`, `tests/memory/`, install/CLI (`tests/install/`, `tests/run/`), `tests/build/build-tests.sh`, and `(chibi process)` / `(chibi system)` / `(chibi tar)` / filesystem lib tests (no dlopen, process spawn, sockets, or disk VFS in the amalgamation).
 
-On Windows the sanitizer pass needs the Clang ASan runtime DLL on PATH (the bat adds `$(clang -print-resource-dir)/lib/windows` automatically). On Linux the runtime is linked statically; nothing to set up.
+On Windows the sanitizer pass needs the Clang ASan runtime DLL on PATH (the bat adds `$(clang -print-resource-dir)/lib/windows` automatically). On Linux it needs Clang's sanitizer runtime (Debian/Ubuntu: `libclang-rt-<ver>-dev`). `build_puchi_tests.sh asan` re-runs just that pass; no arguments runs the full gate. Linux ASan also checks leaks (LSan); `test/lsan.supp` lists the upstream stub leaks it skips (never `puchi.h` code).
 
 ## Layout
 
