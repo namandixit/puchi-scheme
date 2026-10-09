@@ -678,14 +678,13 @@ static int puchi_harness_run(puchi_worker *w) {
 
   puchi_TEST_add_static_libraries(ctx, puchi_harness_static_libraries);
 
-  /* On every OS: the harness links (chibi win32 process-win32) — plain CRT
-   * exit — not (chibi process), so upstream libs such as
-   * (scheme process-context) must take their `windows` cond-expand branch. */
+#if defined(_WIN32)
   {
     puchi win = puchi_intern(ctx, "windows", -1);
     puchi_set_global(ctx, PUCHI_G_FEATURES,
                      puchi_cons(ctx, win, puchi_global(ctx, PUCHI_G_FEATURES)));
   }
+#endif
 
   tmp = puchi_enable_modules(ctx, &puchi_crt_module_ops);
   if (puchi_check(ctx, tmp)) { status = 70; goto done; }
@@ -703,6 +702,12 @@ static int puchi_harness_run(puchi_worker *w) {
         puchi_add_module_directory(ctx, puchi_c_string(ctx, a->argv[i], -1), PUCHI_FALSE);
     }
   }
+
+#if !defined(_WIN32)
+  /* Front of the module path (after -I): harness (chibi process) shim, so
+   * (scheme process-context) loads without the unshipped upstream one. */
+  puchi_add_module_directory(ctx, puchi_c_string(ctx, "puchi/test/harness-lib", -1), PUCHI_FALSE);
+#endif
 
   puchi_install_capture_ports(ctx, env, &w->capture);
 
