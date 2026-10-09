@@ -69,7 +69,7 @@ apply_patches() {
     if command -v patch >/dev/null 2>&1; then
       patch -p0 -d "$WORKDIR" --batch --forward < "$diff"
     elif command -v git >/dev/null 2>&1; then
-      git apply --unsafe-paths --directory="$WORKDIR" "$diff"
+      git apply -p0 --unsafe-paths --directory="$WORKDIR" "$diff"
     else
       echo "error: need patch or git to apply $diff" >&2
       exit 1

@@ -1,16 +1,16 @@
 --- eval.c
 +++ eval.c
-@@ -9,8 +9,6 @@
- #endif
+@@ -10,8 +10,6 @@
  
  /************************************************************************/
--
--static int scheme_initialized_p = 0;
  
+-static int scheme_initialized_p = 0;
+-
  static sexp analyze (sexp ctx, sexp x, int depth, int defok);
  
-@@ -530,9 +528,9 @@
- #endif
+ #if SEXP_USE_MODULES
+@@ -506,9 +504,9 @@
+   sexp_global(ctx, SEXP_G_MODULE_PATH) = SEXP_NULL;
  }
  
 -sexp sexp_make_eval_context (sexp ctx, sexp stack, sexp env, sexp_uint_t size, sexp_uint_t max_size) {
@@ -21,7 +21,7 @@
    if (!res || sexp_exceptionp(res))
      return res;
    if (ctx) sexp_gc_preserve1(ctx, res);
-@@ -2769,9 +2767,10 @@
+@@ -2646,9 +2644,10 @@
    return res;
  }
  
@@ -34,6 +34,5 @@
 -    scheme_initialized_p = 1;
 -    sexp_init();
 -  }
--}
 +  /* puchi: no process-global scheme init */
-+}
+ }
