@@ -5,8 +5,10 @@
 #   2) full suite under GCC + Clang (all three numeric configs, execute)
 #   3) same suite again under Clang ASan+UBSan
 #   4) same suite again under Clang ThreadSanitizer (Linux only; no Windows runtime)
-# Run from anywhere:  bash puchi/tools/build_puchi_tests.sh [gcc|clang|asan|tsan ...]
-#   (no args = all four; the gate. Naming suites is for re-running one.)
+#   5) same suite again under Clang MemorySanitizer (Linux only)
+#   (on demand: `ubsan`, a report-only audit of the non-UB UBSan checks)
+# Run from anywhere:  bash puchi/tools/build_puchi_tests.sh [gcc|clang|asan|tsan|msan|ubsan ...]
+#   (no args = gcc clang asan tsan msan; ubsan is on-demand/audit only. Naming suites is for re-running one.)
 # Requires: gcc and clang on PATH (CC_GCC= / CC_CLANG= override), python3,
 #           patch, the generated lib/**/*.c FFI stubs (see below), and the
 #           Clang sanitizer runtime (Debian/Ubuntu: libclang-rt-<ver>-dev).
@@ -102,6 +104,23 @@ run_basic() {
 }
 
 # ---------------------------------------------------------------------------
+# Summary of the report-only ubsan pass (logs under $OUT/ubsan-audit/).
+ubsan_audit_summary() {
+  local dir="$ROOT/$OUT/ubsan-audit" all
+  all="$(cat "$dir"/log.* 2>/dev/null | grep 'runtime error' || true)"
+  echo "=== ubsan audit (report-only; full logs: $OUT/ubsan-audit/) ==="
+  if [[ -z "$all" ]]; then
+    echo "no reports"
+    return 0
+  fi
+  echo "reports: $(printf '%s\n' "$all" | wc -l)," \
+       "distinct sites: $(printf '%s\n' "$all" | sed -E 's/: runtime error.*//' | sort -u | wc -l)"
+  echo "distinct sites per file:"
+  printf '%s\n' "$all" | sed -E 's/: runtime error.*//; s/:[0-9]+:[0-9]+$//' \
+    | sort -u | sed -E 's/:[0-9]+$//' | sort | uniq -c | sort -rn | head -12
+}
+
+# ---------------------------------------------------------------------------
 do_suite() {
   local tag="$1"
   local cc
@@ -127,7 +146,7 @@ do_suite() {
       # (features force / patch 005) keep these checks meaningful on x86.
       cc="$CC_CLANG"
       cf=(-O1 -g -fno-omit-frame-pointer -fsanitize=address -fsanitize=undefined
-          -fno-sanitize-recover=all)
+          -fsanitize=local-bounds -fno-sanitize-recover=all)
       ;;
     tsan)
       # Data-race net for the 64 parallel contexts the harness runs. Linux only
@@ -138,6 +157,30 @@ do_suite() {
       # TSan multiplies memory: 64 contexts of lib-tests-embed exceed 16 GB
       # (OOM-killed). 16 contexts still exercise cross-context races.
       local -x PUCHI_HARNESS_THREADS="${PUCHI_HARNESS_THREADS:-16}"
+      ;;
+    msan)
+      # Uninitialized reads (host alloc memory, heap, stack). Linux, clang
+      # only; cannot combine with ASan/TSan. Needs PIE; origin tracking makes
+      # reports name the allocation. Memory-hungry like TSan, so 16 contexts.
+      cc="$CC_CLANG"
+      cf=(-O1 -g -fno-omit-frame-pointer -fPIE -fsanitize=memory
+          -fsanitize-memory-track-origins=2 -fno-sanitize-recover=all)
+      ldf+=(-pie)
+      local -x PUCHI_HARNESS_THREADS="${PUCHI_HARNESS_THREADS:-16}"
+      ;;
+    ubsan)
+      # AUDIT, not a gate: the extra UBSan checks that are not UB (implicit
+      # integer conversions, unsigned wraparound, unsigned shifts, float /0)
+      # fire hundreds of times on intentional C in Chibi (tagged-pointer
+      # arithmetic, hashing, bit ops). Report and continue; the summary at
+      # the end lists distinct sites. Tests must still pass.
+      cc="$CC_CLANG"
+      cf=(-O1 -g -fno-omit-frame-pointer
+          -fsanitize=undefined,implicit-conversion,unsigned-integer-overflow,unsigned-shift-base,float-divide-by-zero)
+      local -x PUCHI_HARNESS_THREADS=1
+      local -x UBSAN_OPTIONS="log_path=$ROOT/$OUT/ubsan-audit/log:print_stacktrace=0"
+      rm -rf "$ROOT/$OUT/ubsan-audit"
+      mkdir -p "$ROOT/$OUT/ubsan-audit"
       ;;
     *)
       echo "unknown compiler tag: $tag" >&2
@@ -211,11 +254,14 @@ do_suite() {
   echo "=== [$tag][tower] lib-tests-embed ==="
   run "${p}_harness_tower" -I lib $TEST/lib-tests-embed.scm
 
+  if [[ "$tag" == ubsan ]]; then
+    ubsan_audit_summary
+  fi
   echo "=== [$tag] all three configs passed ==="
 }
 
 if [[ $# -eq 0 ]]; then
-  set -- gcc clang asan tsan
+  set -- gcc clang asan tsan msan
 fi
 for tag in "$@"; do
   do_suite "$tag"
