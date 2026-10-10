@@ -9,7 +9,7 @@ ast.c defines setenv).  Members, variables and parameters of any other
 type are never followed by "(" and are harmless.
 
 Usage: check_collisions.py REDIRECT_HEADER CLANG_ARGS... -- FILE...
-Exit status 1 if any collision is found."""
+Exit status 1 if any collision is found, 2 if a file does not parse."""
 import os
 import re
 import sys
@@ -36,6 +36,11 @@ def main():
     found = []
     for f in files:
         tu = ci.Index.create().parse(f, args=args)
+        errors = [d for d in tu.diagnostics if d.severity >= ci.Diagnostic.Error]
+        if errors:                      # a file that does not parse hides collisions
+            for d in errors[:5]:
+                print('parse error:', d)
+            return 2
         root = os.path.dirname(os.path.abspath(f))
         for c in tu.cursor.walk_preorder():
             try:

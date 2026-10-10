@@ -2256,13 +2256,16 @@ profile, Linux and Windows targets):
 ```sh
 B=puchi/build/src
 FILES="$(for f in gc.c sexp.c bignum.c opcodes.c vm.c simplify.c eval.c lib/chibi/ast.c lib/chibi/io/io.c lib/srfi/151/bit.c lib/srfi/39/param.c lib/srfi/69/hash.c; do echo $B/$f; done)"
-ARGS="-include puchi/src/puchi_config.h -include puchi/src/puchi_api.h -I$B/include -I$B -resource-dir $(clang -print-resource-dir)"
+ARGS="-include puchi/src/puchi_config.h -I$B/include -I$B -resource-dir $(clang -print-resource-dir)"
 python3 puchi/tools/check_collisions.py puchi/src/puchi_redirect.h $ARGS -- $FILES
+# puchi's own public header, through a wrapper (it needs Chibi's headers first):
+printf '#include "puchi_config.h"\n#include "chibi/eval.h"\n#include "puchi_api.h"\n' > puchi/build/api_check.c
+python3 puchi/tools/check_collisions.py puchi/src/puchi_redirect.h -Ipuchi/src $ARGS -- puchi/build/api_check.c
 ```
 
-Expected: `check_collisions: 0 collision(s), 46 redirected names`, exit 0.
-(The include of `puchi_api.h` assumes `chibi/eval.h` is pulled in by the C
-files first; it is.) With `--target=x86_64-w64-windows-gnu -isystem
+Expected for both: `check_collisions: 0 collision(s), 46 redirected names`,
+exit 0 (exit 2 means a file did not parse - fix the arguments, the check is
+void otherwise). With `--target=x86_64-w64-windows-gnu -isystem
 /usr/x86_64-w64-mingw32/include` added, it reports `lib/chibi/ast.c`
 `setenv`/`unsetenv` - which is why those two are not redirected on Windows.
 Negative control (must report 2): a file with
@@ -2658,7 +2661,7 @@ ast.c defines setenv).  Members, variables and parameters of any other
 type are never followed by "(" and are harmless.
 
 Usage: check_collisions.py REDIRECT_HEADER CLANG_ARGS... -- FILE...
-Exit status 1 if any collision is found."""
+Exit status 1 if any collision is found, 2 if a file does not parse."""
 import os
 import re
 import sys
@@ -2685,6 +2688,11 @@ def main():
     found = []
     for f in files:
         tu = ci.Index.create().parse(f, args=args)
+        errors = [d for d in tu.diagnostics if d.severity >= ci.Diagnostic.Error]
+        if errors:                      # a file that does not parse hides collisions
+            for d in errors[:5]:
+                print('parse error:', d)
+            return 2
         root = os.path.dirname(os.path.abspath(f))
         for c in tu.cursor.walk_preorder():
             try:
