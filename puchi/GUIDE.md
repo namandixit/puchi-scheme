@@ -2767,3 +2767,117 @@ The Scheme drivers in `puchi/tests/scheme/`:
 (import (scheme base) (chibi io-test))
 (run-tests)
 ```
+
+---
+
+## Part 13 - Updating to a new upstream chibi-scheme
+
+1. In the fork: `git fetch upstream && git merge upstream/master`. This never
+   conflicts: puchi only adds files under `puchi/`.
+2. Refresh the patches in a scratch repo (Part 5.1): pristine copy of the new
+   upstream, `git am -3 puchi/patches/*.patch`. If one fails, resolve it
+   there (keep each patch minimal), then `git format-patch --zero-commit
+   --no-signature --no-numbered -o puchi/patches <new-upstream-commit>`.
+   If upstream merged one of the patches, delete it.
+3. Regenerate: `python3 puchi/tools/amalgamate.py`.
+4. Run every gate (Part 12). What typically changes and what to do:
+   - **G6 shows a new symbol** (upstream started calling a new OS function):
+     find the call site (`python3 puchi/tools/inventory.py` lists every
+     reference with its function and whether `ctx` is in scope), then add a
+     STUB, DENY or ROUTE entry. Never emulate.
+   - **G4 fails with "ctx undeclared"** inside a redirect: a new call site
+     without `ctx`. If it can be a STUB/DENY (no `ctx` needed), make it
+     one; otherwise stop and report (it may need a patch).
+   - **G4 fails with "redefinition of X"**: a new file-static name defined in
+     two upstream files; add a rename around the second file (Part 8.1).
+   - **G5 reports a collision**: upstream added a callable identifier named
+     like a redirected function; make that name's redirect object-like or
+     redirect the function it calls instead (as done for Windows `setenv`).
+   - **G7 suite numbers change**: compare with stock chibi-scheme on the
+     same tests before blaming puchi.
+   - **collect_files fails "include-shared ... not in C_LIBRARIES"**: a
+     standard library gained a C dependency; add it to `C_LIBRARIES` if it
+     needs no OS (check G6 afterwards), or replace that library with a puchi
+     `.sld` (Part 9).
+5. Commit the regenerated `puchi.h` together with the patch refresh.
+
+---
+
+## Part 14 - Known hazards and limitations
+
+| Item | Detail | What to do |
+|---|---|---|
+| `file-position` / `set-file-position!` | In this profile `sexp_seek` (`lib/chibi/io/io.c`) only handles fd and `FILE*` ports; custom ports are "not a seekable port". A seek callback would not help (it is never consulted). | Documented limitation. Supporting it needs a patch to `sexp_seek`/`sexp_tell` - only if an embedder asks. |
+| Unclosed output ports lose data | A custom port's buffer is flushed by `close-port` or `flush-output-port`, not by the GC finalizer (finalizers cannot run Scheme). The box finalizer still closes the host stream. | Scripts must close or flush output files. `puchi_flush` flushes the standard ports; `exit` flushes them before calling `on_exit`. |
+| After an abandoning callback | Any allocation or GC on that VM reads the dead C stack (ASan-proven). | Only `puchi_close`. `puchi_close` itself does not allocate before `sexp_destroy_context`. |
+| Leaks on abandon | A C frame holding `malloc`ed memory while calling back into Scheme loses it if Scheme then exits/is interrupted. Found one case: `read` of a long string literal from a custom port whose Scheme read procedure calls `exit`. | Bounded and rare; a per-VM arena allocator makes it moot (free the arena after `puchi_close`). |
+| Jump before the jump point | A host whose `poll_interrupt`/`on_exit` longjmps during `puchi_open` jumps into an unset `jmp_buf`. | Arm jumping callbacks after `puchi_open` returns (the test host does). |
+| `puchi_open` out of memory | If `sexp_make_eval_context_with_allocator` returns an exception (half-made VM), there is no context to destroy; its memory stays with the host allocator. | Arena allocator, or accept (only on OOM at creation). |
+| Soft interrupt is catchable | Returning 1 from `poll_interrupt` raises `"interrupt"`, which `with-exception-handler`/`guard` can swallow. | For untrusted code use the hard (non-returning) form. |
+| `windows.h` in the public header | `sexp.h` includes `<winsock2.h>` and `<windows.h>` on `_WIN32`, and puts a `SOCKET` field in a public struct, so every host translation unit on Windows gets `windows.h`. | Owner's decision (not taken): accept; or a small upstreamable patch guarding those includes; or keep Chibi's headers out of the public section. |
+| `M_PI` on MSVC / strict C | `features.h` defines `_USE_MATH_DEFINES` itself; if the host includes `<math.h>` before `puchi.h` the constants may be missing. Strict `-std=c99` on glibc hides `M_PI` and `strcasecmp` declarations too. | Compile the implementation TU in gnu99+/default mode; if needed add `#ifndef M_PI` fallbacks in `puchi_impl.c` after the system headers. Not yet needed on Linux. |
+| MSVC | Never compiled. Only the MinGW-header cross-compile (G11) was done. | Add MSVC to CI and run G6-G9 there before claiming support. |
+| Locale | All locale-dependent C functions are replaced (ASCII ctype/strcasecmp) or delegated (`format`/`parse_double` with "C" locale contract). | Hosts must implement `format`/`parse_double` locale-independently (e.g. `vsnprintf_l`/`strtod_l` with a C locale, or their own). |
+| `test10-unhygiene` | Fails on upstream too. | Ignore. |
+| `sexp_mark_stack_push` | Upstream does not check `malloc` for NULL during GC. | Upstream issue; an allocator that fails during GC crashes. Report upstream. |
+| Upstream "abort trampoline" | `vm.c` has an uncatchable abort exception, but it stops at the first C caller (e.g. `load` continues with the next form). | Do not use it for exit/interrupt; use non-returning callbacks. |
+
+---
+
+## Part 15 - Decisions and why (rejected alternatives)
+
+Each was tried or analysed with evidence; do not reopen without new evidence.
+
+1. **Patch Chibi's core to add a host I/O layer** (a ~1000-line patch set:
+   fd ports carrying host streams, removal of stdio/fd/socket/getenv
+   everywhere). Rejected: it is a fork stored as patches; every upstream
+   change near those lines breaks it, and refreshing it needs deep knowledge
+   of Chibi internals. Replaced by: redirect layer (deny/stub/route) +
+   custom ports + two small patches.
+2. **Emulate libc (fake `FILE`, fd tables) behind the redirects.** Rejected:
+   couples puchi to *how* Chibi uses stdio, an undeclared contract.
+   Custom ports are Chibi's own interface and need nothing of the OS.
+3. **A big curated `puchi_*` value API wrapping Chibi** (~1100 lines).
+   Rejected: duplicates Chibi's documented API; Chibi's headers compile
+   cleanly as public API in every C/C++ mode. Kept only what Chibi lacks.
+4. **Hide all non-API symbols** (`SEXP_API static`, generated static
+   declarations for ~140 functions, patches to remove dead declarations).
+   Rejected: every exported name already starts with `sexp_` or `puchi_`
+   (verified: 535 exports, all prefixed); the machinery cost three patches
+   and a GCC-only tool for no practical gain.
+5. **Global/stb-style allocator macro.** Rejected: there are no global
+   allocations at all (verified: with patch 0001 the object references no
+   allocator symbol, and all memory returns to the VM's allocator); a global
+   allocator would be wrong for non-thread-safe per-thread allocators,
+   because heap growth happens at any time on the thread running the VM.
+6. **Thread-local "current VM"** for routing. Rejected: hosts calling
+   `sexp_*` directly would bypass whatever sets it; nested VMs need
+   save/restore. `ctx` is in scope at the call sites; use it.
+7. **Interrupt via a VM patch.** Not needed: the green-thread scheduler
+   slot is already called every quantum (verified working, ~3-6% cost).
+8. **Exit via upstream's abort trampoline or a VM unwinding patch.**
+   Rejected: the trampoline stops at the first C boundary. Non-returning
+   host callbacks (longjmp/stack switch) cross every C frame; closing the
+   VM afterwards is proven safe.
+9. **`PUCHI_TEST`-style test code inside the library** (an earlier attempt
+   claimed some test-only code had to live in the library). False: every
+   upstream test suite runs on the production configuration through a test
+   host using only the public API. The single compile switch kept,
+   `PUCHI_CHECK_UNREACHABLE`, adds a check, not a code path.
+10. **Folding `SEXP_USE_*` flags / stripping upstream code in the generator.**
+    Rejected: the preprocessor already removes disabled code; rewriting
+    upstream text makes updates and debugging harder and was a major source
+    of breakage before.
+
+---
+
+## Appendix - Where the evidence came from
+
+- Inventory of OS references and `ctx` scope: `puchi/guide/tools/inventory.py`
+  (libclang) over the compiled upstream files with the profile.
+- Abandon/close safety and the interrupt hook: `puchi/guide/tests/abandon_test.c`
+  on unpatched upstream, under ASan with a positive control.
+- Custom ports as the only port type, unreachable stubs: trap build over all
+  suites (Part 12, G7).
+- Everything in Part 12's expected outputs was produced by the files in
+  `puchi/guide/` on Linux x86-64 (gcc 13, clang 18), upstream `c4e7367`.
