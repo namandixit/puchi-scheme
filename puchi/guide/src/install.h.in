@@ -1,0 +1,8 @@
+/* Generated from puchi/src/install.h.in (upstream's Makefile writes this file
+ * for normal builds).  No sexp_architecture: it would leak the build
+ * machine's CPU name into *features*. */
+#define sexp_so_extension ".so"
+#define sexp_default_module_path "@MODULE_DIR@"
+#define sexp_platform "puchi"
+#define sexp_version "@VERSION@"
+#define sexp_release_name "@RELEASE@"

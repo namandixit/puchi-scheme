@@ -1,0 +1,5 @@
+(import (scheme base) (scheme file))
+(define p (open-input-file "tests/r7rs-tests.scm"))
+(read-char p)
+(set! p #f)
+(let loop ((i 0)) (if (< i 200000) (begin (make-vector 10) (loop (+ i 1)))))

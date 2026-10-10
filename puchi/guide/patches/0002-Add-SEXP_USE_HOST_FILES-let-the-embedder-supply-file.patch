@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: puchi <puchi@localhost>
+Date: Sat, 10 Oct 2026 05:57:27 +0000
+Subject: [PATCH] Add SEXP_USE_HOST_FILES: let the embedder supply file ports
+
+---
+ eval.c                   | 6 ++++++
+ include/chibi/eval.h     | 4 ++++
+ include/chibi/features.h | 8 ++++++++
+ 3 files changed, 18 insertions(+)
+
+diff --git a/eval.c b/eval.c
+index 0e32093..0d81c7b 100644
+--- a/eval.c
++++ b/eval.c
+@@ -1311,6 +1311,9 @@ sexp sexp_open_input_file_op (sexp ctx, sexp self, sexp_sint_t n, sexp path) {
+   FILE *in;
+   int count = 0;
+   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, path);
++#if SEXP_USE_HOST_FILES
++  return sexp_host_open_file(ctx, self, path, 0);
++#endif
+   do {
+     if (count != 0) sexp_gc(ctx, NULL);
+     in = fopen(sexp_string_data(path), "r");
+@@ -1327,6 +1330,9 @@ sexp sexp_open_output_file_op (sexp ctx, sexp self, sexp_sint_t n, sexp path) {
+   FILE *out;
+   int count = 0;
+   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, path);
++#if SEXP_USE_HOST_FILES
++  return sexp_host_open_file(ctx, self, path, 1);
++#endif
+   do {
+     if (count != 0) sexp_gc(ctx, NULL);
+     out = fopen(sexp_string_data(path), "w");
+diff --git a/include/chibi/eval.h b/include/chibi/eval.h
+index 52c7c45..27f8894 100644
+--- a/include/chibi/eval.h
++++ b/include/chibi/eval.h
+@@ -114,6 +114,10 @@ SEXP_API sexp sexp_make_synclo_op(sexp ctx, sexp self, sexp_sint_t n, sexp env,
+ SEXP_API sexp sexp_strip_synclos(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+ SEXP_API sexp sexp_syntactic_closure_expr_op(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+ SEXP_API sexp sexp_open_input_file_op(sexp ctx, sexp self, sexp_sint_t n, sexp x);
++#if SEXP_USE_HOST_FILES
++/* defined by the embedding program: return a port for path, or an exception */
++SEXP_API sexp sexp_host_open_file (sexp ctx, sexp self, sexp path, int outputp);
++#endif
+ SEXP_API sexp sexp_open_output_file_op(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+ SEXP_API sexp sexp_open_binary_input_file(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+ SEXP_API sexp sexp_open_binary_output_file(sexp ctx, sexp self, sexp_sint_t n, sexp x);
+diff --git a/include/chibi/features.h b/include/chibi/features.h
+index 90ed861..bab9992 100644
+--- a/include/chibi/features.h
++++ b/include/chibi/features.h
+@@ -493,6 +493,14 @@
+ #define SEXP_USE_HEAP_ALLOCATOR 0
+ #endif
+ 
++/* uncomment this to have open-input-file, open-output-file, load and */
++/*   module loading get their ports from sexp_host_open_file(), which */
++/*   the embedding program defines, instead of fopen() */
++/* #define SEXP_USE_HOST_FILES 1 */
++#ifndef SEXP_USE_HOST_FILES
++#define SEXP_USE_HOST_FILES 0
++#endif
++
+ /* don't include clibs.c - include separately or link */
+ #ifndef SEXP_USE_STATIC_LIBS_NO_INCLUDE
+ #if defined(PLAN9) || SEXP_USE_STATIC_LIBS_EMPTY

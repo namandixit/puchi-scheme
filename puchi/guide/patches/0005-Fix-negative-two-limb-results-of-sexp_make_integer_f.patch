@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 04:25:20 +0000
+Subject: [PATCH] Fix negative two-limb results of sexp_make_integer_from_lsint
+
+The high limb of the magnitude was ~hi, which is only right when the low
+limb is nonzero; with a zero low limb the +1 of the negation carries into
+the high limb.  On 32-bit builds sexp_make_integer(ctx, -2^32) returned 0
+and INT64_MIN came out as -(2^63 - 2^32).
+---
+ bignum.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/bignum.c b/bignum.c
+index 7580e30..e406426 100644
+--- a/bignum.c
++++ b/bignum.c
+@@ -53,7 +53,9 @@ sexp sexp_make_integer_from_lsint (sexp ctx, sexp_lsint_t x) {
+     if (lsint_lt_0(x)) {
+       sexp_bignum_sign(res) = -1;
+       sexp_bignum_data(res)[0] = -(sexp_uint_t)lsint_to_sint(x);
+-      sexp_bignum_data(res)[1] = (sexp_uint_t)~lsint_to_sint_hi(x);
++      /* two's complement negation of hi:lo carries into hi when lo is 0 */
++      sexp_bignum_data(res)[1] = (sexp_uint_t)~lsint_to_sint_hi(x)
++        + (lsint_to_sint(x) == 0);
+     } else {
+       sexp_bignum_sign(res) = 1;
+       sexp_bignum_data(res)[0] = (sexp_uint_t)lsint_to_sint(x);

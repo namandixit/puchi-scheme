@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 04:18:39 +0000
+Subject: [PATCH] Negate in unsigned arithmetic in sexp_make_integer_from_lsint
+
+Negating the most negative sexp_sint_t is undefined behavior (UBSan);
+negating after the conversion to sexp_uint_t gives the same bits.
+---
+ bignum.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/bignum.c b/bignum.c
+index 34ca5c3..7580e30 100644
+--- a/bignum.c
++++ b/bignum.c
+@@ -43,7 +43,7 @@ sexp sexp_make_integer_from_lsint (sexp ctx, sexp_lsint_t x) {
+     res = sexp_make_bignum(ctx, 1);
+     if (lsint_lt_0(x)) {
+       sexp_bignum_sign(res) = -1;
+-      sexp_bignum_data(res)[0] = (sexp_uint_t)-lsint_to_sint(x);
++      sexp_bignum_data(res)[0] = -(sexp_uint_t)lsint_to_sint(x);
+     } else {
+       sexp_bignum_sign(res) = 1;
+       sexp_bignum_data(res)[0] = (sexp_uint_t)lsint_to_sint(x);
+@@ -52,7 +52,7 @@ sexp sexp_make_integer_from_lsint (sexp ctx, sexp_lsint_t x) {
+     res = sexp_make_bignum(ctx, 2);
+     if (lsint_lt_0(x)) {
+       sexp_bignum_sign(res) = -1;
+-      sexp_bignum_data(res)[0] = (sexp_uint_t)-lsint_to_sint(x);
++      sexp_bignum_data(res)[0] = -(sexp_uint_t)lsint_to_sint(x);
+       sexp_bignum_data(res)[1] = (sexp_uint_t)~lsint_to_sint_hi(x);
+     } else {
+       sexp_bignum_sign(res) = 1;
