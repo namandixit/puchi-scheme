@@ -80,7 +80,7 @@ static void puchi_os_exit(sexp ctx, int code) {
 }
 
 #ifdef PUCHI_CHECK_UNREACHABLE
-/* Test builds only (see GUIDE.md, gate G4): a STUB was reached. */
+/* Test builds only (see GUIDE.md, gate G7): a STUB was reached. */
 #include <stdio.h>
 #include <stdlib.h>
 static void puchi_os_unreachable(const char *name) {

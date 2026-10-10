@@ -4,7 +4,7 @@
  * (that is how the gates build it). */
 
 #if defined(__GNUC__) && defined(PUCHI_AMALGAMATED)
-#pragma GCC system_header      /* upstream is not warning-free; gate G9 checks puchi's own code */
+#pragma GCC system_header      /* upstream is not warning-free; gate G10 checks puchi's own code */
 #endif
 #ifdef _MSC_VER
 #pragma warning(push, 0)

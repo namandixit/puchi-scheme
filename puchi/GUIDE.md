@@ -1264,7 +1264,7 @@ differ. First and last lines of the reference file:
  * (that is how the gates build it). */
 
 #if defined(__GNUC__) && defined(PUCHI_AMALGAMATED)
-#pragma GCC system_header      /* upstream is not warning-free; gate G9 checks puchi's own code */
+#pragma GCC system_header      /* upstream is not warning-free; gate G10 checks puchi's own code */
 #endif
 #ifdef _MSC_VER
 #pragma warning(push, 0)
@@ -1473,7 +1473,7 @@ static void puchi_os_exit(sexp ctx, int code) {
 }
 
 #ifdef PUCHI_CHECK_UNREACHABLE
-/* Test builds only (see GUIDE.md, gate G4): a STUB was reached. */
+/* Test builds only (see GUIDE.md, gate G7): a STUB was reached. */
 #include <stdio.h>
 #include <stdlib.h>
 static void puchi_os_unreachable(const char *name) {
