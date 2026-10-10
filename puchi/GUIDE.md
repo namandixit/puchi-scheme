@@ -1857,3 +1857,334 @@ sexp puchi_eval_string(sexp ctx, sexp env_arg, const char *src, size_t len) {
 compiles with no error. (The implementation needs C99 or later in GNU or
 POSIX mode for `M_PI`/`strcasecmp` declarations in upstream code; the
 *public* section works in C89 and C++98.)
+
+---
+
+## Part 9 - Phase 6: Scheme library overrides (`puchi/lib/`)
+
+Upstream R7RS libraries that touch the OS get replaced by puchi's own
+`.sld` files of the same name. The generator looks in `puchi/lib` before
+the upstream `lib/`, so these win, and only they are embedded.
+
+| Library | Upstream depends on | puchi's version |
+|---|---|---|
+| `(scheme process-context)` | `(chibi process)` (fork, exit, signals) | `exit` = unwind dynamic-wind via a continuation captured at load time (same trick as upstream `lib/chibi/process.scm`), then `%puchi-exit` -> host `on_exit`; `emergency-exit` skips the unwind; `command-line` is Chibi's core parameter; `get-environment-variables` = `'()` |
+| `(scheme time)` | `(chibi time)` | from `(puchi host)`: host `current_second` |
+| `(scheme file)` | `(chibi filesystem)` | `file-exists?`, `delete-file` from `(puchi host)`; the `open-*-file` procedures are core opcodes, routed by patch 0002 |
+| `(puchi host)` | - | `(include-shared "host")` -> static library `lib/puchi/host` in the glue |
+
+R7RS C library dependencies that are kept (they need no OS once the
+redirect layer is in place): `srfi/69/hash`, `chibi/ast`, `srfi/151/bit`,
+`chibi/io/io` (generated from `io.stub` by chibi-ffi), `srfi/39/param`.
+
+#### `puchi/lib/scheme/process-context.sld`
+
+```scheme
+;; puchi replacement for upstream lib/scheme/process-context.sld (which
+;; imports exit from the OS library (chibi process)).  exit runs the
+;; outstanding dynamic-wind "after" thunks by jumping to a continuation
+;; captured when this library was loaded (as upstream's lib/chibi/process.scm
+;; does), then calls the host's on_exit callback through %puchi-exit.
+(define-library (scheme process-context)
+  (import (chibi) (puchi host))
+  (export get-environment-variable get-environment-variables
+          command-line exit emergency-exit)
+  (begin
+    (define (get-environment-variables) '())
+    (define (exit-code o)
+      (cond ((null? o) 0)
+            ((eq? #t (car o)) 0)
+            ((exact-integer? (car o)) (car o))
+            (else 1)))
+    (define (emergency-exit . o) (%puchi-exit (exit-code o)))
+    (define unwind #f)
+    ((call-with-current-continuation
+      (lambda (k)
+        (set! unwind k)
+        (lambda () #f))))
+    (define (exit . o)
+      (unwind (lambda () (apply emergency-exit o))))))
+```
+
+#### `puchi/lib/scheme/time.sld`
+
+```scheme
+;; puchi replacement for upstream lib/scheme/time.sld (which uses the OS
+;; library (chibi time)): the clock is the host's current_second callback.
+(define-library (scheme time)
+  (import (only (puchi host) current-second current-jiffy jiffies-per-second))
+  (export current-second current-jiffy jiffies-per-second))
+```
+
+#### `puchi/lib/scheme/file.sld`
+
+```scheme
+;; puchi replacement for upstream lib/scheme/file.sld (which uses the OS
+;; library (chibi filesystem)): file-exists? and delete-file go to the host.
+;; The open-*-file procedures are core opcodes; patch 0002 sends them to the
+;; host's open_file callback.
+(define-library (scheme file)
+  (import (chibi) (only (puchi host) delete-file file-exists?))
+  (export
+   call-with-input-file call-with-output-file
+   delete-file file-exists?
+   open-binary-input-file open-binary-output-file
+   open-input-file open-output-file
+   with-input-from-file with-output-to-file))
+```
+
+#### `puchi/lib/puchi/host.sld`
+
+```scheme
+;; Host services.  The C side is puchi_init_host_library in puchi_glue.c,
+;; registered by the generated clibs.c as the static library "lib/puchi/host".
+(define-library (puchi host)
+  (export %puchi-exit current-second current-jiffy jiffies-per-second
+          get-environment-variable file-exists? delete-file)
+  (include-shared "host"))
+```
+
+---
+
+## Part 10 - Phase 7: public API (`puchi_api.h`) and `puchi.h.in`
+
+### 10.1 What is public
+
+- Everything Chibi's headers declare: `sexp_eval`, `sexp_apply`,
+  `sexp_define_foreign`, `sexp_gc_var`/`sexp_gc_preserve`,
+  `sexp_preserve_object`, value constructors and predicates ... Chibi's
+  headers were verified to compile cleanly as public API in C89/C99/C11 and
+  C++98/11/17 with `-pedantic -Wall -Wextra -Werror` (they already have
+  `extern "C"`). Host-side bindings can be written exactly as for Chibi
+  (even generated with chibi-ffi).
+- The thin `puchi_*` layer below, which is only what Chibi lacks: creating
+  a VM whose every outside contact goes through host callbacks.
+
+Rules for the host (also in the header comments):
+
+- `allocate`, `release`, `format`, `parse_double` are required. `format` has
+  the contract of `vsnprintf` in the "C" locale, `parse_double` of `strtod`
+  in the "C" locale (puchi formats floats with `%.15lg`/`%.16lg`/`%.17lg`
+  and checks each by parsing it back).
+- All allocations of a VM happen on the thread currently running that VM;
+  a non-thread-safe per-thread allocator is fine. There are no global
+  allocations at all.
+- `on_exit` and a hard-interrupting `poll_interrupt` must not return
+  (longjmp / stack switch); afterwards only `puchi_close` is legal. Do not
+  let them jump before your jump point exists (arm them after `puchi_open`
+  returns).
+- No member is named like a C library function (`on_read`, not `read`).
+
+```c
+/* puchi_api.h - the public API of puchi.h.
+ *
+ * puchi is Chibi Scheme, amalgamated and cut off from the operating system.
+ * Everything Chibi's own headers declare (sexp_*, SEXP_*) is public API too:
+ * use sexp_eval, sexp_apply, sexp_define_foreign, sexp_gc_preserve,
+ * sexp_preserve_object ... as documented by Chibi.  This header adds only
+ * what Chibi lacks: creating a VM whose every contact with the outside world
+ * goes through callbacks the host supplies.
+ *
+ * Threads: a VM (the sexp returned by puchi_open) may be used by one thread
+ * at a time.  Different VMs share nothing and may run in parallel.
+ *
+ * Names: no member or function here is named like a C library function
+ * (read, write, close, free, exit, ...).  puchi_impl.c redirects those names
+ * with macros; a member with such a name would be rewritten. */
+#ifndef PUCHI_API_H
+#define PUCHI_API_H
+
+#include <stdarg.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* A byte stream the host provides.  Any callback may be NULL. */
+typedef struct puchi_stream {
+  void *userdata;
+  /* read up to size bytes; return the count, 0 at end of file, <0 on error */
+  ptrdiff_t (*on_read)(void *userdata, char *buf, size_t size);
+  /* write size bytes; return the count written (<= 0 is an error) */
+  ptrdiff_t (*on_write)(void *userdata, const char *buf, size_t size);
+  /* called once, when the port is closed or collected, or at puchi_close */
+  void (*on_close)(void *userdata);
+} puchi_stream;
+
+/* Everything a VM may ask of the outside world.  Copied by puchi_open. */
+typedef struct puchi_host {
+  void *userdata;                 /* passed to every callback */
+
+  /* REQUIRED.  Every byte the VM uses comes from here, on the thread that
+   * is running the VM.  allocate returns NULL on failure. */
+  void *(*allocate)(void *userdata, size_t size);
+  void (*release)(void *userdata, void *ptr);
+
+  /* REQUIRED.  Number formatting and parsing, independent of any locale:
+   * format has the contract of C vsnprintf in the "C" locale (puchi uses
+   * "%.15lg", "%.16lg", "%.17lg", "#x%02hhX" and an integer format);
+   * parse_double has the contract of C strtod in the "C" locale. */
+  int (*format)(void *userdata, char *buf, size_t size, const char *fmt, va_list args);
+  double (*parse_double)(void *userdata, const char *str, char **end);
+
+  /* Files.  Paths are what the Scheme program passed.  open_file fills *out
+   * and returns 0, or returns nonzero (the program gets a file error).
+   * Library files embedded in puchi.h are found before open_file is asked. */
+  int (*open_file)(void *userdata, const char *path, int for_writing, puchi_stream *out);
+  int (*file_exists)(void *userdata, const char *path);
+  int (*delete_file)(void *userdata, const char *path);   /* 0 on success */
+
+  /* (exit code) and (emergency-exit code).  Called after dynamic-wind
+   * "after" thunks have run (exit only) and output has been flushed.  It
+   * should not return: longjmp out, or switch away from the VM's stack.
+   * After it has not returned, the ONLY legal call on the VM is puchi_close.
+   * If it returns (or is NULL), exit raises an ordinary Scheme error. */
+  void (*on_exit)(void *userdata, int code);
+
+  /* Called every SEXP_DEFAULT_QUANTUM VM instructions.  Return 0 to go on,
+   * 1 to raise a catchable "interrupt" error in the program, or do not
+   * return (longjmp / stack switch) to stop it for good; then the ONLY
+   * legal call on the VM is puchi_close. */
+  int (*poll_interrupt)(void *userdata);
+
+  /* (current-second); NULL makes it 0.0.  (get-environment-variable);
+   * NULL or a NULL result makes it #f. */
+  double (*current_second)(void *userdata);
+  const char *(*get_env)(void *userdata, const char *name);
+
+  /* current-input-port, current-output-port, current-error-port */
+  puchi_stream std_in, std_out, std_err;
+} puchi_host;
+
+/* Create a VM with R7RS-small loaded.  heap_size 0 = Chibi's default;
+ * heap_max 0 = no limit.  Returns the context, or NULL (the reason, if any,
+ * was written to host->std_err). */
+sexp puchi_open(const puchi_host *host, size_t heap_size, size_t heap_max);
+
+/* Destroy the VM: runs finalizers (closing every stream still open), then
+ * returns all memory to host->release.  Safe after an abandoning callback. */
+void puchi_close(sexp ctx);
+
+/* Read and evaluate every form of src (len bytes, or NUL-terminated if len
+ * is (size_t)-1) in env (NULL = the interaction environment, which has all
+ * of R7RS-small and import).  Returns the last value or an exception
+ * object; flushes the standard output ports.  The result is not rooted. */
+sexp puchi_eval_string(sexp ctx, sexp env, const char *src, size_t len);
+
+/* An input or output port over a host stream.  The port owns the stream
+ * from now on (on_close is called exactly once).  name may be SEXP_FALSE. */
+sexp puchi_make_port(sexp ctx, const puchi_stream *stream, int for_writing, sexp name);
+
+/* Flush current-output-port and current-error-port. */
+void puchi_flush(sexp ctx);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* PUCHI_API_H */
+```
+
+### 10.2 `puchi/src/puchi.h.in`
+
+The public section is: `#pragma GCC system_header` (silences upstream
+header warnings such as `-Wundef` on `PLAN9` in host code), the profile,
+`chibi/eval.h`, `puchi_api.h`. The implementation section includes
+`puchi_impl.c` once, and only from C.
+
+```c
+/* puchi.h - Chibi Scheme @VERSION@ as a single-header, sandboxed, embeddable
+ * library.  Generated by puchi/tools/amalgamate.py; do not edit.
+ *
+ * In exactly one C (not C++) source file:
+ *     #define PUCHI_IMPLEMENTATION
+ *     #include "puchi.h"
+ * Everywhere else (C or C++): #include "puchi.h".
+ * API: puchi_api.h section below, plus Chibi's own sexp_* API. */
+#ifndef PUCHI_H
+#define PUCHI_H
+#if defined(__GNUC__)
+#pragma GCC system_header
+#endif
+#include "puchi_config.h"
+#include "chibi/eval.h"
+#include "puchi_api.h"
+#endif /* PUCHI_H */
+
+#if defined(PUCHI_IMPLEMENTATION) && !defined(PUCHI_IMPLEMENTATION_DONE)
+#define PUCHI_IMPLEMENTATION_DONE
+#ifdef __cplusplus
+#error "puchi: define PUCHI_IMPLEMENTATION in a C source file, not in C++"
+#endif
+#define PUCHI_AMALGAMATED 1
+#include "puchi_impl.c"
+#endif
+```
+
+`puchi/src/install.h.in` (upstream's Makefile normally generates
+`chibi/install.h`; no `sexp_architecture`, so the build machine's CPU name
+does not leak into `(features)`):
+
+```c
+/* Generated from puchi/src/install.h.in (upstream's Makefile writes this file
+ * for normal builds).  No sexp_architecture: it would leak the build
+ * machine's CPU name into *features*. */
+#define sexp_so_extension ".so"
+#define sexp_default_module_path "@MODULE_DIR@"
+#define sexp_platform "puchi"
+#define sexp_version "@VERSION@"
+#define sexp_release_name "@RELEASE@"
+```
+
+---
+
+## Part 11 - Phase 8: the generator (`puchi/tools/amalgamate.py`)
+
+The reference file is `puchi/guide/tools/amalgamate.py` (verified: it
+produced a 1.1 MB `puchi.h` with 54 embedded files in 0.3 s from upstream
+`c4e7367`). What each step does and the traps it avoids:
+
+1. **copy_upstream**: copy only `git ls-files` output (not `puchi/`) to
+   `puchi/build/src`. Never copy the work tree: stale build products
+   (`clibs.c`, generated `lib/**/*.c`, `install.h`) would leak in.
+2. **apply_patches**: `git apply -p1 --whitespace=nowarn
+   --directory=puchi/build/src puchi/patches/NNNN.patch`, in sorted order,
+   run from the fork root.
+3. **write_install_h**: `install.h.in` with `@VERSION@`, `@RELEASE@` (from
+   upstream's `VERSION`/`RELEASE` files) and `@MODULE_DIR@` = `lib`.
+4. **build_host_chibi**: stock `make chibi-scheme` in `puchi/build/host`
+   (unpatched copy), or `--chibi PATH`.
+5. **run_chibi_ffi**: `chibi-scheme -q tools/chibi-ffi lib/chibi/io/io.stub`
+   in `puchi/build/src` -> `lib/chibi/io/io.c`.
+6. **collect_files**: walk `.sld` files from `ROOT_LIBRARIES` (R7RS-small,
+   `(scheme small)`, `(puchi host)`), following `import`, `include`,
+   `include-ci`, `include-library-declarations`, `include-shared` and the
+   first true `cond-expand` clause (features: `chibi puchi r7rs
+   full-unicode ratios exact-closed exact-complex ieee-float modules uvector
+   little-endian big-endian else`; `(library X)` is true iff X's `.sld`
+   exists). `(chibi)` and `(meta)` are built in. Look in `puchi/lib` first.
+   Always add `init-7.scm` and `meta-7.scm`. Every `include-shared` reached
+   must be in `C_LIBRARIES` or `PUCHI_C_LIBRARIES`, else fail.
+7. **write_clibs_c**: for each C library: a `static` prototype of a unique
+   init function, `#define sexp_init_library <unique>`, `#include` the C
+   file, `#undef`; then the table `sexp_static_libraries_array` with entries
+   `{"lib/<name>", init}`, including `{"lib/puchi/host",
+   puchi_init_host_library}`.
+8. **write_files_c**: each embedded file as an array of C string literals of
+   **at most ~4000 bytes each**, split at line ends (MSVC rejects a literal
+   over 16380 bytes, C2026, and concatenations over 65535); escape `\`,
+   `"`, newline, tab, `?` (trigraphs) and non-ASCII as octal; table sorted
+   by path (binary search at run time). Normalize CRLF to LF.
+9. **inline**: expand `puchi.h.in`: replace every `#include "..."` and
+   `#include <chibi/...>` with the file's contents, recursively; a file with
+   an include guard is inlined only the first time; system headers stay as
+   `#include` lines; `NOT_INLINED` names (`opt/x86.c`,
+   `opt/plan9-opcodes.c`, Huffman symbol headers, `gc/gc.h`) become `#error`
+   so a configuration change that makes them live fails loudly. Search
+   path: `build/src/include`, `build/src`, `src`, `build/gen`.
+10. Output must be **deterministic** (same input -> identical bytes): sort
+    everything, no timestamps.
+
+**Gate G10 (generator)**: run it twice; `sha256sum puchi/puchi.h` is the
+same both times; the output contains no `#include "` lines.
