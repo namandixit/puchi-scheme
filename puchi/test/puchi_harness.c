@@ -12,7 +12,7 @@
  *   puchi_harness.exe [-I dir] [-x module] [--expect|-e file] <script.scm> [args...]
  */
 /* Numeric mode comes from the compiler: (default) / PUCHI_INTEGER_ONLY /
- * PUCHI_ENABLE_NUMERICAL_TOWER — see build_puchi_tests.bat. */
+ * PUCHI_ENABLE_NUMERICAL_TOWER — see build_puchi_tests.bat / .sh. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,7 +34,7 @@
 /* puchi.h API + idiomatic C paths under -Weverything (see header). */
 PUCHI_DIAG_HARNESS_PEDANTIC_OFF
 
-#define PUCHI_HARNESS_THREADS 64
+#define PUCHI_HARNESS_THREADS 64 /* default and maximum */
 
 /* ---- capture buffer (per-worker stdout/stderr; no tmpfile) ---- */
 
@@ -703,6 +703,12 @@ static int puchi_harness_run(puchi_worker *w) {
     }
   }
 
+#if !defined(_WIN32)
+  /* Front of the module path (after -I): harness (chibi process) shim, so
+   * (scheme process-context) loads without the unshipped upstream one. */
+  puchi_add_module_directory(ctx, puchi_c_string(ctx, "puchi/test/harness-lib", -1), PUCHI_FALSE);
+#endif
+
   puchi_install_capture_ports(ctx, env, &w->capture);
 
   if (a->x_module) {
@@ -802,6 +808,9 @@ int main(int argc, char **argv) {
   puchi_harness_args args;
   puchi_worker workers[PUCHI_HARNESS_THREADS];
   puchi_thread threads[PUCHI_HARNESS_THREADS];
+  /* pthread_t has no null value: track creation separately. */
+  int started[PUCHI_HARNESS_THREADS];
+  int nthreads = PUCHI_HARNESS_THREADS;
   int i, script_i = -1, passed = 0, failed = 0;
   const char *x_module = NULL;
   const char *expect_path = NULL;
@@ -856,27 +865,36 @@ int main(int argc, char **argv) {
     fprintf(stderr, "puchi_harness: single-threaded run passed\n");
   }
 
-  fprintf(stderr, "puchi_harness: %d parallel contexts on %s\n",
-          PUCHI_HARNESS_THREADS, args.script);
+  /* Optional override for memory-hungry runs (TSan: 64 contexts of
+   * lib-tests-embed exceed 16 GB). Unset = 64, as on Windows. */
+  {
+    const char *e = getenv("PUCHI_HARNESS_THREADS");
+    int n = e ? atoi(e) : 0;
+    if (n >= 1 && n <= PUCHI_HARNESS_THREADS) nthreads = n;
+  }
 
-  for (i = 0; i < PUCHI_HARNESS_THREADS; i++) {
+  fprintf(stderr, "puchi_harness: %d parallel contexts on %s\n",
+          nthreads, args.script);
+
+  for (i = 0; i < nthreads; i++) {
     memset(&workers[i], 0, sizeof(workers[i]));
     workers[i].index = i;
     workers[i].args = &args;
-    threads[i] = NULL;
+    started[i] = 0;
   }
 
-  for (i = 0; i < PUCHI_HARNESS_THREADS; i++) {
+  for (i = 0; i < nthreads; i++) {
     if (puchi_thread_create(&threads[i], puchi_worker_main, &workers[i]) != 0) {
       fprintf(stderr, "puchi_harness: failed to create worker %d\n", i);
-      threads[i] = NULL;
       workers[i].status = 1;
+    } else {
+      started[i] = 1;
     }
   }
 
-  for (i = 0; i < PUCHI_HARNESS_THREADS; i++) {
+  for (i = 0; i < nthreads; i++) {
     int st = 1;
-    if (threads[i]) {
+    if (started[i]) {
       if (puchi_thread_join(threads[i], &st) != 0)
         st = 1;
     } else {
@@ -887,6 +905,6 @@ int main(int argc, char **argv) {
   }
 
   fprintf(stderr, "puchi_harness: %d/%d workers passed\n",
-          passed, PUCHI_HARNESS_THREADS);
+          passed, nthreads);
   return failed ? 1 : 0;
 }

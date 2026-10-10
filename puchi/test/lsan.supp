@@ -1,0 +1,7 @@
+# LeakSanitizer suppressions for build_puchi_tests.sh (Linux only; Windows
+# ASan has no LSan). Upstream bugs only — never puchi.h code.
+#
+# lib/chibi/filesystem.c (chibi-ffi output for filesystem.stub): stat stub
+# callocs the struct stat result, and on a failed stat() returns #f without
+# freeing it. r7rs-tests hits it via (file-exists? " no such file ").
+leak:sexp_stat_stub

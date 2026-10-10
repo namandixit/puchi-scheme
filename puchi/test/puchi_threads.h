@@ -1,6 +1,6 @@
 /* puchi_threads.h — tiny thread helpers for the harness.
  *
- * Win32 first. A later #else can call pthread with the same API.
+ * Win32 threads on Windows, pthreads elsewhere (same API).
  */
 #ifndef PUCHI_THREADS_H
 #define PUCHI_THREADS_H
@@ -64,7 +64,50 @@ static PUCHI_NORETURN void puchi_thread_exit(int status) {
 }
 
 #else
-#error puchi_threads.h: Win32 only for now; add pthread when porting
+#include <pthread.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+typedef pthread_t puchi_thread;
+typedef int (*puchi_thread_fn)(void *);
+
+typedef struct {
+  puchi_thread_fn fn;
+  void *arg;
+} puchi_thread_start;
+
+static void *puchi_thread_trampoline(void *p) {
+  puchi_thread_start *s = (puchi_thread_start *)p;
+  puchi_thread_fn fn = s->fn;
+  void *arg = s->arg;
+  free(s);
+  return (void *)(intptr_t)fn(arg);
+}
+
+static int puchi_thread_create(puchi_thread *t, puchi_thread_fn fn, void *arg) {
+  puchi_thread_start *s;
+  if (!t || !fn) return -1;
+  s = (puchi_thread_start *)malloc(sizeof(*s));
+  if (!s) return -1;
+  s->fn = fn;
+  s->arg = arg;
+  if (pthread_create(t, NULL, puchi_thread_trampoline, s) != 0) {
+    free(s);
+    return -1;
+  }
+  return 0;
+}
+
+static int puchi_thread_join(puchi_thread t, int *status) {
+  void *code = NULL;
+  if (pthread_join(t, &code) != 0) return -1;
+  if (status) *status = (int)(intptr_t)code;
+  return 0;
+}
+
+static PUCHI_NORETURN void puchi_thread_exit(int status) {
+  pthread_exit((void *)(intptr_t)status);
+}
 #endif
 
 #endif /* PUCHI_THREADS_H */

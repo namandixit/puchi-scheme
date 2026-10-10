@@ -1,0 +1,13 @@
+--- sexp.h
++++ sexp.h
+@@ -1063,8 +1063,8 @@
+ #if SEXP_USE_FLONUMS || SEXP_USE_BIGNUMS
+ 
+ #if SEXP_64_BIT
+-#define sexp_bignum_to_sint(x) (sexp_bignum_sign(x)*sexp_bignum_data(x)[0])
+-#define sexp_bignum_to_uint(x) (sexp_bignum_data(x)[0])
++#define sexp_bignum_to_sint(x) (sexp_bignump(x) ? sexp_bignum_sign(x)*sexp_bignum_data(x)[0] : 0)
++#define sexp_bignum_to_uint(x) (sexp_bignump(x) ? sexp_bignum_data(x)[0] : 0)
+ #else
+ SEXP_API long long sexp_bignum_to_sint(sexp x);
+ SEXP_API unsigned long long sexp_bignum_to_uint(sexp x);

@@ -638,7 +638,9 @@ def build_abi_and_stripped(
                     # Enum constant aliases only (not struct fields referencing
                     # features.h knobs like PUCHI_MARK_STACK_COUNT).
                     if re.search(r"\benum\b", buf):
-                        for name in set(re.findall(r"\bPUCHI_[A-Z0-9_]+\b", renamed)):
+                        # dict.fromkeys: dedupe in source order (a set's
+                        # order varies with PYTHONHASHSEED → puchi.h drift).
+                        for name in dict.fromkeys(re.findall(r"\bPUCHI_[A-Z0-9_]+\b", renamed)):
                             if name.startswith("PUCHI_USE_"):
                                 continue
                             aliases.append(f"#define SEXP_{name[6:]} {name}")

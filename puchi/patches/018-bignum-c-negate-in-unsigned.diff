@@ -1,0 +1,20 @@
+--- bignum.c
++++ bignum.c
+@@ -43,7 +43,7 @@
+     res = sexp_make_bignum(ctx, 1);
+     if (lsint_lt_0(x)) {
+       sexp_bignum_sign(res) = -1;
+-      sexp_bignum_data(res)[0] = (sexp_uint_t)-lsint_to_sint(x);
++      sexp_bignum_data(res)[0] = -(sexp_uint_t)lsint_to_sint(x);
+     } else {
+       sexp_bignum_sign(res) = 1;
+       sexp_bignum_data(res)[0] = (sexp_uint_t)lsint_to_sint(x);
+@@ -52,7 +52,7 @@
+     res = sexp_make_bignum(ctx, 2);
+     if (lsint_lt_0(x)) {
+       sexp_bignum_sign(res) = -1;
+-      sexp_bignum_data(res)[0] = (sexp_uint_t)-lsint_to_sint(x);
++      sexp_bignum_data(res)[0] = -(sexp_uint_t)lsint_to_sint(x);
+       sexp_bignum_data(res)[1] = (sexp_uint_t)~lsint_to_sint_hi(x);
+     } else {
+       sexp_bignum_sign(res) = 1;

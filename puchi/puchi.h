@@ -799,10 +799,10 @@ union puchi_flonum_conv {
 #define puchi_make_boolean(x) ((x) ? PUCHI_TRUE : PUCHI_FALSE)
 #define puchi_unbox_boolean(x) (((x) == PUCHI_FALSE) ? 0 : 1)
 #define puchi_make_fixnum(n)    ((puchi) ((((puchi_sint_t)(n))*(puchi_sint_t)((puchi_sint_t)1<<PUCHI_FIXNUM_BITS)) | PUCHI_FIXNUM_TAG))
-#define puchi_unbox_fixnum(n)   (((puchi_sint_t)((puchi_uint_t)(n) & ~PUCHI_FIXNUM_TAG))/(puchi_sint_t)((puchi_sint_t)1<<PUCHI_FIXNUM_BITS))
+#define puchi_unbox_fixnum(n)   (((puchi_sint_t)((puchi_uint_t)(n) & ~(puchi_uint_t)PUCHI_FIXNUM_TAG))/(puchi_sint_t)((puchi_sint_t)1<<PUCHI_FIXNUM_BITS))
 #define PUCHI_ZERO    puchi_make_fixnum(0)
 #define puchi_make_string_cursor(n)    ((puchi) ((((puchi_sint_t)(n))*(puchi_sint_t)(1uL<<PUCHI_STRING_CURSOR_BITS)) | PUCHI_STRING_CURSOR_TAG))
-#define puchi_unbox_string_cursor(n)   (((puchi_sint_t)((puchi_uint_t)(n) & ~PUCHI_STRING_CURSOR_TAG))/(puchi_sint_t)(1uL<<PUCHI_STRING_CURSOR_BITS))
+#define puchi_unbox_string_cursor(n)   (((puchi_sint_t)((puchi_uint_t)(n) & ~(puchi_uint_t)PUCHI_STRING_CURSOR_TAG))/(puchi_sint_t)(1uL<<PUCHI_STRING_CURSOR_BITS))
 #define puchi_string_cursor_to_fixnum(n) puchi_make_fixnum(puchi_unbox_string_cursor(n))
 #define puchi_make_character(n)  ((puchi) ((((puchi_sint_t)(n))<<PUCHI_EXTENDED_BITS) + PUCHI_CHAR_TAG))
 #define puchi_unbox_character(n) ((int) (((puchi_sint_t)(n))>>PUCHI_EXTENDED_BITS))
@@ -892,7 +892,7 @@ enum puchi_uniform_vector_type {
 #define puchi_string_maybe_null_data(x) (puchi_not(x) ? NULL : puchi_string_data(x))
 #define puchi_string_to_bytes(ctx, x)  puchi_string_bytes(x)
 #define puchi_bytes_ref(x, i)    (puchi_make_fixnum((unsigned char)puchi_bytes_data(x)[puchi_unbox_fixnum(i)]))
-#define puchi_bytes_set(x, i, v) (puchi_bytes_data(x)[puchi_unbox_fixnum(i)] = puchi_unbox_fixnum(v))
+#define puchi_bytes_set(x, i, v) (puchi_bytes_data(x)[puchi_unbox_fixnum(i)] = (char)puchi_unbox_fixnum(v))
 #define puchi_port_stream_ops(p)   (puchi_pred_field(p, port, puchi_portp, stream_ops))
 #define puchi_port_stream_udata(p) (puchi_pred_field(p, port, puchi_portp, stream_udata))
 #define puchi_port_openp(p)      (puchi_pred_field(p, port, puchi_portp, openp))
@@ -1348,6 +1348,13 @@ PUCHI_API void puchi_set_global(puchi ctx, int idx, puchi val);
 PUCHI_API puchi puchi_set_standard_ports(puchi ctx, puchi env, puchi in, puchi out, puchi err);
 PUCHI_API void puchi_stack_trace(puchi ctx, puchi out);
 
+/* Checked integer conversion for host code. Return 1 and store *out when x is
+ * an exact integer (fixnum or bignum) that fits; otherwise return 0 and leave
+ * *out unchanged. Prefer these to puchi_bignum_to_sint / puchi_bignum_to_uint,
+ * which only read a bignum's low 64 bits (raw bits, no range check). */
+PUCHI_API int puchi_integer_to_sint64(puchi x, int64_t *out);
+PUCHI_API int puchi_integer_to_uint64(puchi x, uint64_t *out);
+
 #if !defined(puchi_opcodep)
 #define puchi_opcodep(x) (puchi_check_tag((x), PUCHI_OPCODE))
 #endif
@@ -1724,46 +1731,46 @@ typedef puchi_lsint_t sexp_lsint_t;
 #define SEXP_CHAR_TAG PUCHI_CHAR_TAG
 #define SEXP_READER_LABEL_TAG PUCHI_READER_LABEL_TAG
 #define SEXP_EXTENDED_TAG PUCHI_EXTENDED_TAG
-#define SEXP_PROCEDURE PUCHI_PROCEDURE
-#define SEXP_CORE PUCHI_CORE
-#define SEXP_RATIO PUCHI_RATIO
-#define SEXP_SYMBOL PUCHI_SYMBOL
-#define SEXP_BIGNUM PUCHI_BIGNUM
-#define SEXP_FIXNUM PUCHI_FIXNUM
-#define SEXP_STACK PUCHI_STACK
-#define SEXP_PAIR PUCHI_PAIR
-#define SEXP_STRING PUCHI_STRING
-#define SEXP_NUMBER PUCHI_NUMBER
-#define SEXP_COMPLEX PUCHI_COMPLEX
-#define SEXP_SYNCLO PUCHI_SYNCLO
-#define SEXP_MACRO PUCHI_MACRO
 #define SEXP_OBJECT PUCHI_OBJECT
-#define SEXP_BOOLEAN PUCHI_BOOLEAN
-#define SEXP_REF PUCHI_REF
-#define SEXP_EXCEPTION PUCHI_EXCEPTION
-#define SEXP_EPHEMERON PUCHI_EPHEMERON
-#define SEXP_CONTEXT PUCHI_CONTEXT
-#define SEXP_FILENO PUCHI_FILENO
-#define SEXP_SET PUCHI_SET
-#define SEXP_BYTES PUCHI_BYTES
 #define SEXP_TYPE PUCHI_TYPE
+#define SEXP_FIXNUM PUCHI_FIXNUM
+#define SEXP_NUMBER PUCHI_NUMBER
 #define SEXP_CHAR PUCHI_CHAR
-#define SEXP_LIT PUCHI_LIT
-#define SEXP_OPCODE PUCHI_OPCODE
-#define SEXP_SEQ PUCHI_SEQ
-#define SEXP_CPOINTER PUCHI_CPOINTER
-#define SEXP_OPORT PUCHI_OPORT
-#define SEXP_SET_SYN PUCHI_SET_SYN
-#define SEXP_ENV PUCHI_ENV
-#define SEXP_IPORT PUCHI_IPORT
-#define SEXP_LAMBDA PUCHI_LAMBDA
-#define SEXP_NUM_CORE_TYPES PUCHI_NUM_CORE_TYPES
+#define SEXP_BOOLEAN PUCHI_BOOLEAN
+#define SEXP_PAIR PUCHI_PAIR
+#define SEXP_SYMBOL PUCHI_SYMBOL
+#define SEXP_BYTES PUCHI_BYTES
+#define SEXP_STRING PUCHI_STRING
 #define SEXP_VECTOR PUCHI_VECTOR
 #define SEXP_FLONUM PUCHI_FLONUM
-#define SEXP_UNIFORM_VECTOR PUCHI_UNIFORM_VECTOR
-#define SEXP_BYTECODE PUCHI_BYTECODE
+#define SEXP_BIGNUM PUCHI_BIGNUM
+#define SEXP_RATIO PUCHI_RATIO
+#define SEXP_COMPLEX PUCHI_COMPLEX
 #define SEXP_STRING_CURSOR PUCHI_STRING_CURSOR
+#define SEXP_IPORT PUCHI_IPORT
+#define SEXP_OPORT PUCHI_OPORT
+#define SEXP_FILENO PUCHI_FILENO
+#define SEXP_EXCEPTION PUCHI_EXCEPTION
+#define SEXP_PROCEDURE PUCHI_PROCEDURE
+#define SEXP_MACRO PUCHI_MACRO
+#define SEXP_SYNCLO PUCHI_SYNCLO
+#define SEXP_ENV PUCHI_ENV
+#define SEXP_BYTECODE PUCHI_BYTECODE
+#define SEXP_CORE PUCHI_CORE
+#define SEXP_OPCODE PUCHI_OPCODE
+#define SEXP_LAMBDA PUCHI_LAMBDA
 #define SEXP_CND PUCHI_CND
+#define SEXP_REF PUCHI_REF
+#define SEXP_SET PUCHI_SET
+#define SEXP_SET_SYN PUCHI_SET_SYN
+#define SEXP_SEQ PUCHI_SEQ
+#define SEXP_LIT PUCHI_LIT
+#define SEXP_STACK PUCHI_STACK
+#define SEXP_CONTEXT PUCHI_CONTEXT
+#define SEXP_CPOINTER PUCHI_CPOINTER
+#define SEXP_UNIFORM_VECTOR PUCHI_UNIFORM_VECTOR
+#define SEXP_EPHEMERON PUCHI_EPHEMERON
+#define SEXP_NUM_CORE_TYPES PUCHI_NUM_CORE_TYPES
 #define SEXP_PROC_NONE PUCHI_PROC_NONE
 #define SEXP_PROC_VARIADIC PUCHI_PROC_VARIADIC
 #define SEXP_PROC_UNUSED_REST PUCHI_PROC_UNUSED_REST
@@ -1917,21 +1924,21 @@ typedef puchi_lsint_t sexp_lsint_t;
 #define sexp_bytes_length(x) puchi_bytes_length(x)
 #define sexp_bytes_data(x) puchi_bytes_data(x)
 #define sexp_bytes_maybe_null_data(x) puchi_bytes_maybe_null_data(x)
-#define SEXP_C128 PUCHI_C128
-#define SEXP_U16 PUCHI_U16
-#define SEXP_S16 PUCHI_S16
-#define SEXP_S8 PUCHI_S8
-#define SEXP_END_OF_UNIFORM_TYPES PUCHI_END_OF_UNIFORM_TYPES
-#define SEXP_S32 PUCHI_S32
-#define SEXP_C64 PUCHI_C64
-#define SEXP_U8 PUCHI_U8
+#define SEXP_NOT_A_UNIFORM_TYPE PUCHI_NOT_A_UNIFORM_TYPE
 #define SEXP_U1 PUCHI_U1
+#define SEXP_S8 PUCHI_S8
+#define SEXP_U8 PUCHI_U8
+#define SEXP_S16 PUCHI_S16
+#define SEXP_U16 PUCHI_U16
+#define SEXP_S32 PUCHI_S32
 #define SEXP_U32 PUCHI_U32
 #define SEXP_S64 PUCHI_S64
-#define SEXP_NOT_A_UNIFORM_TYPE PUCHI_NOT_A_UNIFORM_TYPE
-#define SEXP_F64 PUCHI_F64
 #define SEXP_U64 PUCHI_U64
 #define SEXP_F32 PUCHI_F32
+#define SEXP_F64 PUCHI_F64
+#define SEXP_C64 PUCHI_C64
+#define SEXP_C128 PUCHI_C128
+#define SEXP_END_OF_UNIFORM_TYPES PUCHI_END_OF_UNIFORM_TYPES
 #define sexp_uvector_freep(x) puchi_uvector_freep(x)
 #define sexp_uvector_type(x) puchi_uvector_type(x)
 #define sexp_string_size(x) puchi_string_size(x)
@@ -1991,41 +1998,41 @@ typedef puchi_lsint_t sexp_lsint_t;
 #if defined(puchi_div)
 #define sexp_div(ctx, a, b) puchi_div(ctx, a, b)
 #endif
-#define SEXP_G_UNQUOTE_SYMBOL PUCHI_G_UNQUOTE_SYMBOL
-#define SEXP_G_SQUARE_BRACKETS_SYM PUCHI_G_SQUARE_BRACKETS_SYM
-#define SEXP_G_META_ENV PUCHI_G_META_ENV
-#define SEXP_G_QUASIQUOTE_SYMBOL PUCHI_G_QUASIQUOTE_SYMBOL
-#define SEXP_G_ERR_HANDLER PUCHI_G_ERR_HANDLER
-#define SEXP_G_WEAK_OBJECTS_PRESENT PUCHI_G_WEAK_OBJECTS_PRESENT
-#define SEXP_G_OOS_ERROR PUCHI_G_OOS_ERROR
-#define SEXP_G_UNSYNTAX_SPLICING_SYMBOL PUCHI_G_UNSYNTAX_SPLICING_SYMBOL
-#define SEXP_G_NUM_TYPES PUCHI_G_NUM_TYPES
-#define SEXP_G_CUR_ERR_SYMBOL PUCHI_G_CUR_ERR_SYMBOL
-#define SEXP_G_RESUMECC_BYTECODE PUCHI_G_RESUMECC_BYTECODE
-#define SEXP_G_TYPES PUCHI_G_TYPES
-#define SEXP_G_MODULE_PATH PUCHI_G_MODULE_PATH
 #define SEXP_G_SYMBOLS PUCHI_G_SYMBOLS
-#define SEXP_G_CUR_OUT_SYMBOL PUCHI_G_CUR_OUT_SYMBOL
-#define SEXP_G_NUM_GLOBALS PUCHI_G_NUM_GLOBALS
-#define SEXP_G_OPTIMIZATIONS PUCHI_G_OPTIMIZATIONS
-#define SEXP_G_FINAL_RESUMER PUCHI_G_FINAL_RESUMER
-#define SEXP_G_QUOTE_SYMBOL PUCHI_G_QUOTE_SYMBOL
-#define SEXP_G_PRESERVATIVES PUCHI_G_PRESERVATIVES
-#define SEXP_G_STRICT_P PUCHI_G_STRICT_P
-#define SEXP_G_SYNTAX_SYMBOL PUCHI_G_SYNTAX_SYMBOL
+#define SEXP_G_ENDIANNESS PUCHI_G_ENDIANNESS
+#define SEXP_G_TYPES PUCHI_G_TYPES
+#define SEXP_G_FEATURES PUCHI_G_FEATURES
+#define SEXP_G_NUM_TYPES PUCHI_G_NUM_TYPES
 #define SEXP_G_OOM_ERROR PUCHI_G_OOM_ERROR
-#define SEXP_G_INTERACTION_ENV_SYMBOL PUCHI_G_INTERACTION_ENV_SYMBOL
+#define SEXP_G_OOS_ERROR PUCHI_G_OOS_ERROR
+#define SEXP_G_ABI_ERROR PUCHI_G_ABI_ERROR
+#define SEXP_G_OPTIMIZATIONS PUCHI_G_OPTIMIZATIONS
+#define SEXP_G_META_ENV PUCHI_G_META_ENV
+#define SEXP_G_MODULE_PATH PUCHI_G_MODULE_PATH
+#define SEXP_G_QUOTE_SYMBOL PUCHI_G_QUOTE_SYMBOL
+#define SEXP_G_QUASIQUOTE_SYMBOL PUCHI_G_QUASIQUOTE_SYMBOL
+#define SEXP_G_UNQUOTE_SYMBOL PUCHI_G_UNQUOTE_SYMBOL
+#define SEXP_G_UNQUOTE_SPLICING_SYMBOL PUCHI_G_UNQUOTE_SPLICING_SYMBOL
+#define SEXP_G_SYNTAX_SYMBOL PUCHI_G_SYNTAX_SYMBOL
+#define SEXP_G_QUASISYNTAX_SYMBOL PUCHI_G_QUASISYNTAX_SYMBOL
+#define SEXP_G_UNSYNTAX_SYMBOL PUCHI_G_UNSYNTAX_SYMBOL
+#define SEXP_G_UNSYNTAX_SPLICING_SYMBOL PUCHI_G_UNSYNTAX_SPLICING_SYMBOL
 #define SEXP_G_EMPTY_VECTOR PUCHI_G_EMPTY_VECTOR
+#define SEXP_G_CUR_IN_SYMBOL PUCHI_G_CUR_IN_SYMBOL
+#define SEXP_G_CUR_OUT_SYMBOL PUCHI_G_CUR_OUT_SYMBOL
+#define SEXP_G_CUR_ERR_SYMBOL PUCHI_G_CUR_ERR_SYMBOL
+#define SEXP_G_INTERACTION_ENV_SYMBOL PUCHI_G_INTERACTION_ENV_SYMBOL
+#define SEXP_G_CONTINUABLE_SYMBOL PUCHI_G_CONTINUABLE_SYMBOL
+#define SEXP_G_ERR_HANDLER PUCHI_G_ERR_HANDLER
+#define SEXP_G_RESUMECC_BYTECODE PUCHI_G_RESUMECC_BYTECODE
+#define SEXP_G_FINAL_RESUMER PUCHI_G_FINAL_RESUMER
+#define SEXP_G_STRICT_P PUCHI_G_STRICT_P
 #define SEXP_G_NO_TAIL_CALLS_P PUCHI_G_NO_TAIL_CALLS_P
 #define SEXP_G_FOLD_CASE_P PUCHI_G_FOLD_CASE_P
-#define SEXP_G_ENDIANNESS PUCHI_G_ENDIANNESS
-#define SEXP_G_CUR_IN_SYMBOL PUCHI_G_CUR_IN_SYMBOL
-#define SEXP_G_FEATURES PUCHI_G_FEATURES
-#define SEXP_G_UNSYNTAX_SYMBOL PUCHI_G_UNSYNTAX_SYMBOL
-#define SEXP_G_QUASISYNTAX_SYMBOL PUCHI_G_QUASISYNTAX_SYMBOL
-#define SEXP_G_CONTINUABLE_SYMBOL PUCHI_G_CONTINUABLE_SYMBOL
-#define SEXP_G_ABI_ERROR PUCHI_G_ABI_ERROR
-#define SEXP_G_UNQUOTE_SPLICING_SYMBOL PUCHI_G_UNQUOTE_SPLICING_SYMBOL
+#define SEXP_G_WEAK_OBJECTS_PRESENT PUCHI_G_WEAK_OBJECTS_PRESENT
+#define SEXP_G_PRESERVATIVES PUCHI_G_PRESERVATIVES
+#define SEXP_G_SQUARE_BRACKETS_SYM PUCHI_G_SQUARE_BRACKETS_SYM
+#define SEXP_G_NUM_GLOBALS PUCHI_G_NUM_GLOBALS
 #define sexp_car(x) puchi_car(x)
 #define sexp_cdr(x) puchi_cdr(x)
 #define sexp_caar(x) puchi_caar(x)
@@ -3133,8 +3140,8 @@ SEXP_API sexp sexp_make_unsigned_integer(sexp ctx, unsigned long long x);
 #if !defined(PUCHI_INTEGER_ONLY)
 
 #if SEXP_64_BIT
-#define sexp_bignum_to_sint(x) (sexp_bignum_sign(x)*sexp_bignum_data(x)[0])
-#define sexp_bignum_to_uint(x) (sexp_bignum_data(x)[0])
+#define sexp_bignum_to_sint(x) (sexp_bignump(x) ? sexp_bignum_sign(x)*sexp_bignum_data(x)[0] : 0)
+#define sexp_bignum_to_uint(x) (sexp_bignump(x) ? sexp_bignum_data(x)[0] : 0)
 #else
 SEXP_API long long sexp_bignum_to_sint(sexp x);
 SEXP_API unsigned long long sexp_bignum_to_uint(sexp x);
@@ -7191,7 +7198,7 @@ static sexp sexp_read_string (sexp ctx, sexp in, int sentinel) {
       res = sexp_read_incomplete_error(ctx, "premature end of string", SEXP_NULL, in);
       break;
     }
-    buf[i++] = c;
+    buf[i++] = (char)c;
   maybe_expand:
     if (i+4 >= size) {       /* expand buffer w/ SEXP_MALLOC(ctx, ), later SEXP_FREE(ctx, ) it */
       tmp = (char*) SEXP_MALLOC(ctx, size*2);
@@ -7220,7 +7227,7 @@ static sexp sexp_read_symbol (sexp ctx, sexp in, int init, int internp) {
   init = (foldp ? sexp_tolower(init) : init);
 
   if (init != EOF)
-    buf[i++] = init;
+    buf[i++] = (char)init;
 
   for (c = sexp_read_char(ctx, in); ; c = sexp_read_char(ctx, in)) {
     if (foldp) c = sexp_tolower(c);
@@ -7229,7 +7236,7 @@ static sexp sexp_read_symbol (sexp ctx, sexp in, int init, int internp) {
       sexp_push_char(ctx, c, in);
       break;
     }
-    buf[i++] = c;
+    buf[i++] = (char)c;
     if (i >= size) {       /* expand buffer w/ SEXP_MALLOC(ctx, ), later SEXP_FREE(ctx, ) it */
       tmp = (char*) SEXP_MALLOC(ctx, size*2);
       if (!tmp) {res = sexp_global(ctx, SEXP_G_OOM_ERROR); break;}
@@ -7701,6 +7708,24 @@ static int sexp_resolve_uniform_type(int c, sexp len) {
   return SEXP_NOT_A_UNIFORM_TYPE;
 }
 
+/* x is an exact integer in [min, max]?  sexp_sint_value / sexp_uint_value
+ * only see a bignum's low limb, so check bignums limb by limb. */
+static int sexp_uvector_int_in_range(sexp x, long long min, unsigned long long max) {
+  sexp_uint_t i, mag;
+  if (sexp_fixnump(x))
+    return sexp_unbox_fixnum(x) >= min
+      && (sexp_unbox_fixnum(x) < 0 || (unsigned long long)sexp_unbox_fixnum(x) <= max);
+  if (!sexp_bignump(x))
+    return 0;
+  for (i = 1; i < sexp_bignum_length(x); i++)
+    if (sexp_bignum_data(x)[i])
+      return 0;
+  mag = sexp_bignum_data(x)[0];
+  if (sexp_bignum_sign(x) > 0)
+    return mag <= max;
+  return min < 0 && mag <= (unsigned long long)max + 1;
+}
+
 static sexp sexp_list_to_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp etype, sexp ls) {
   long et, i;
   long long min;
@@ -7716,8 +7741,8 @@ static sexp sexp_list_to_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp ety
     et = sexp_unbox_fixnum(etype);
     res = et == SEXP_U8 ? sexp_make_bytes(ctx, sexp_length(ctx, ls), SEXP_VOID) : sexp_make_uvector(ctx, etype, sexp_length(ctx, ls));
     if (sexp_uvector_prefix(et) == 's') {
-      min = (-1LL << (sexp_uvector_element_size(et)-1));
-      max = (1LL << (sexp_uvector_element_size(et)-1)) - 1LL;
+      min = (long long)(~0uLL << (sexp_uvector_element_size(et)-1));
+      max = (1uLL << (sexp_uvector_element_size(et)-1)) - 1uLL;
     } else {
       min = 0;
       max = sexp_uvector_element_size(et) == 64 ? -1 :
@@ -7727,8 +7752,7 @@ static sexp sexp_list_to_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp ety
       tmp = sexp_car(ls2);
       if (
           ((sexp_uvector_prefix(et) == 'u') || (sexp_uvector_prefix(et) == 's')) ?
-          !((min == 0 && sexp_bignump(tmp) ? sexp_bignum_sign(tmp) > 0 : sexp_exact_integerp(tmp) && sexp_sint_value(tmp) >= min)
-            && (sexp_sint_value(tmp) < 0 || sexp_uint_value(tmp) <= max))
+          !sexp_uvector_int_in_range(tmp, min, max)
           : ((sexp_uvector_prefix(et) == 'c') ? !sexp_numberp(tmp) :
           !(sexp_exact_integerp(tmp) || sexp_realp(tmp)))
           ) {
@@ -7856,7 +7880,7 @@ static sexp sexp_read_raw (sexp ctx, sexp in, sexp *shares) {
     if (sexp_global(ctx, SEXP_G_SQUARE_BRACKETS_SYM) == SEXP_FALSE)
       goto symbol;
   case '(':
-    line = (sexp_port_sourcep(in) ? sexp_port_line(in) : -1);
+    line = (sexp_port_sourcep(in) ? (int)sexp_port_line(in) : -1);
     res = SEXP_NULL;
     tmp = sexp_read_raw(ctx, in, shares);
     while ((tmp != SEXP_EOF) && (tmp != SEXP_CLOSE) && (tmp != SEXP_RAWDOT)) {
@@ -13363,7 +13387,7 @@ static sexp sexp_make_integer_from_lsint (sexp ctx, sexp_lsint_t x) {
     res = sexp_make_bignum(ctx, 1);
     if (lsint_lt_0(x)) {
       sexp_bignum_sign(res) = -1;
-      sexp_bignum_data(res)[0] = (sexp_uint_t)-lsint_to_sint(x);
+      sexp_bignum_data(res)[0] = -(sexp_uint_t)lsint_to_sint(x);
     } else {
       sexp_bignum_sign(res) = 1;
       sexp_bignum_data(res)[0] = (sexp_uint_t)lsint_to_sint(x);
@@ -13372,7 +13396,7 @@ static sexp sexp_make_integer_from_lsint (sexp ctx, sexp_lsint_t x) {
     res = sexp_make_bignum(ctx, 2);
     if (lsint_lt_0(x)) {
       sexp_bignum_sign(res) = -1;
-      sexp_bignum_data(res)[0] = (sexp_uint_t)-lsint_to_sint(x);
+      sexp_bignum_data(res)[0] = -(sexp_uint_t)lsint_to_sint(x);
       sexp_bignum_data(res)[1] = (sexp_uint_t)~lsint_to_sint_hi(x);
     } else {
       sexp_bignum_sign(res) = 1;
@@ -17479,6 +17503,59 @@ PUCHI_API puchi puchi_set_standard_ports(puchi ctx, puchi env, puchi in, puchi o
 
 PUCHI_API void puchi_stack_trace(puchi ctx, puchi out) {
   sexp_stack_trace(ctx, out);
+}
+
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+/* Magnitude of a bignum if it fits in one 64-bit limb (higher limbs zero). */
+static int puchi_bignum_magnitude64(puchi x, uint64_t *mag) {
+  sexp_uint_t i;
+  for (i = 1; i < sexp_bignum_length(x); i++)
+    if (sexp_bignum_data(x)[i])
+      return 0;
+  *mag = (uint64_t)sexp_bignum_data(x)[0];
+  return 1;
+}
+#endif
+
+PUCHI_API int puchi_integer_to_sint64(puchi x, int64_t *out) {
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+  uint64_t mag;
+#endif
+  if (sexp_fixnump(x)) {
+    if (out) *out = (int64_t)sexp_unbox_fixnum(x);
+    return 1;
+  }
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+  if (sexp_bignump(x) && puchi_bignum_magnitude64(x, &mag)) {
+    if (sexp_bignum_sign(x) > 0) {
+      if (mag > (uint64_t)INT64_MAX) return 0;
+      if (out) *out = (int64_t)mag;
+      return 1;
+    }
+    if (mag > (uint64_t)INT64_MAX + 1u) return 0;
+    if (out) *out = (mag == (uint64_t)INT64_MAX + 1u) ? INT64_MIN : -(int64_t)mag;
+    return 1;
+  }
+#endif
+  return 0;
+}
+
+PUCHI_API int puchi_integer_to_uint64(puchi x, uint64_t *out) {
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+  uint64_t mag;
+#endif
+  if (sexp_fixnump(x)) {
+    if (sexp_unbox_fixnum(x) < 0) return 0;
+    if (out) *out = (uint64_t)sexp_unbox_fixnum(x);
+    return 1;
+  }
+#if defined(PUCHI_ENABLE_NUMERICAL_TOWER)
+  if (sexp_bignump(x) && sexp_bignum_sign(x) > 0 && puchi_bignum_magnitude64(x, &mag)) {
+    if (out) *out = mag;
+    return 1;
+  }
+#endif
+  return 0;
 }
 
 #if defined(PUCHI_TEST)

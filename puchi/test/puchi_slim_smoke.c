@@ -80,11 +80,25 @@ int main(void) {
   nfail += expect_true(ctx, "(exact? 3)");
   nfail += expect_true(ctx, "(exact-integer? (* 1000000000 1000000000))");
 
+  /* Checked host conversion, fixnum / non-integer paths (no bignums here). */
+  {
+    int64_t s = 0;
+    uint64_t u = 0;
+    if (!puchi_integer_to_sint64(puchi_make_fixnum(-7), &s) || s != -7)
+      nfail += fail("puchi_integer_to_sint64(-7)");
+    if (puchi_integer_to_uint64(puchi_make_fixnum(-7), &u))
+      nfail += fail("puchi_integer_to_uint64(-7) should not fit");
+    if (!puchi_integer_to_uint64(puchi_make_fixnum(7), &u) || u != 7)
+      nfail += fail("puchi_integer_to_uint64(7)");
+    if (puchi_integer_to_sint64(puchi_eval_string(ctx, "1.5", (puchi_sint_t)-1, NULL), &s))
+      nfail += fail("puchi_integer_to_sint64(1.5) should not convert");
+  }
+
   if (nfail) {
     fprintf(stderr, "%d default-config checks failed\n", nfail);
     return 1;
   }
-  printf("default ok (%d checks)\n", 12);
+  printf("default ok (%d checks)\n", 16);
   puchi_delete_context(ctx);
   return 0;
 }
