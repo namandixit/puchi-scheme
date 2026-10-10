@@ -2250,26 +2250,52 @@ cd ..
 
 ### 12.2 Gates
 
-**G5 - redirect collisions** (libclang; run on the patched copy with the
-profile, Linux and Windows targets):
+**G5 - redirect collisions** (libclang; on the patched copy, with the
+profile; the checker exits 2 if any file fails to parse - a check on a file
+that did not parse is void, which is how a missing `-Ipuchi/build/gen`
+(where `clibs.c` lives) was caught):
 
 ```sh
 B=puchi/build/src
 FILES="$(for f in gc.c sexp.c bignum.c opcodes.c vm.c simplify.c eval.c lib/chibi/ast.c lib/chibi/io/io.c lib/srfi/151/bit.c lib/srfi/39/param.c lib/srfi/69/hash.c; do echo $B/$f; done)"
-ARGS="-include puchi/src/puchi_config.h -I$B/include -I$B -resource-dir $(clang -print-resource-dir)"
+ARGS="-include puchi/src/puchi_config.h -Ipuchi/build/gen -Ipuchi/src -I$B/include -I$B -resource-dir $(clang -print-resource-dir)"
 python3 puchi/tools/check_collisions.py puchi/src/puchi_redirect.h $ARGS -- $FILES
 # puchi's own public header, through a wrapper (it needs Chibi's headers first):
 printf '#include "puchi_config.h"\n#include "chibi/eval.h"\n#include "puchi_api.h"\n' > puchi/build/api_check.c
-python3 puchi/tools/check_collisions.py puchi/src/puchi_redirect.h -Ipuchi/src $ARGS -- puchi/build/api_check.c
+python3 puchi/tools/check_collisions.py puchi/src/puchi_redirect.h $ARGS -- puchi/build/api_check.c
+# Windows target (MinGW headers); the prelude declares the names the
+# redirect layer supplies there, so that upstream's green-thread code parses:
+python3 puchi/tools/check_collisions.py puchi/src/puchi_redirect.h \
+  --target=x86_64-w64-windows-gnu -isystem /usr/x86_64-w64-mingw32/include \
+  -include puchi/tools/win_parse_prelude.h $ARGS -- $FILES
 ```
 
-Expected for both: `check_collisions: 0 collision(s), 46 redirected names`,
-exit 0 (exit 2 means a file did not parse - fix the arguments, the check is
-void otherwise). With `--target=x86_64-w64-windows-gnu -isystem
-/usr/x86_64-w64-mingw32/include` added, it reports `lib/chibi/ast.c`
-`setenv`/`unsetenv` - which is why those two are not redirected on Windows.
-Negative control (must report 2): a file with
-`typedef struct { void (*free)(void*, void*); } t; int setenv(const char*n,const char*v,int o){return 0;}`.
+Expected (all verified):
+
+- Linux, upstream files: `check_collisions: 0 collision(s), 46 redirected names`, exit 0.
+- Public header: same, exit 0.
+- Windows: exactly two, exit 1 - `lib/chibi/ast.c:17: FUNCTION_DECL setenv`
+  and `:27: FUNCTION_DECL unsetenv`. These are handled: the redirect header
+  does not define `setenv`/`unsetenv` under `_WIN32` (the checker reads
+  names from the header regardless of `#ifdef`). Any other entry fails the
+  gate.
+- Negative control (must report 2, exit 1): a file containing
+  `typedef struct { void (*free)(void*, void*); } t;` and
+  `int setenv(const char*n,const char*v,int o){return 0;}`.
+
+`puchi/tools/win_parse_prelude.h`:
+
+```c
+/* parse-only prelude for the Windows run of check_collisions.py: names the
+ * redirect layer supplies on Windows (upstream never builds green threads there) */
+#define F_GETFL 3
+#define F_SETFL 4
+#define O_NONBLOCK 04000
+int fcntl(int fd, int cmd, ...);
+int usleep(unsigned usec);
+struct pollfd;
+int poll(struct pollfd *fds, unsigned long n, int timeout);
+```
 
 **G6 - the sandbox guarantee (undefined symbols)**:
 
