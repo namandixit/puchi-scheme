@@ -2201,3 +2201,535 @@ produced a 1.1 MB `puchi.h` with 54 embedded files in 0.3 s from upstream
 **Gate G10 (generator)**: run it twice; `sha256sum puchi/puchi.h` is the
 same both times (verified); `grep -c -E '^\s*#\s*include\s*"' puchi/puchi.h`
 prints `0` (the text `#include "` still appears inside comments - fine).
+
+---
+
+## Part 12 - Phase 9: tests and gates
+
+All commands run from the fork root after `python3 puchi/tools/amalgamate.py`,
+unless stated otherwise. Upstream's test files (`tests/*.scm`,
+`tests/basic/`, `lib/chibi/*-test.sld`) are used as they are; library
+files come from the embedded set, everything else from the file system
+through the test host's `open_file`.
+
+### 12.1 The test host: `puchi/tests/runner.c`
+
+A host written only against `puchi.h` (puchi API + Chibi API), as an
+embedder would write one:
+
+- allocator with per-VM byte/block counting (must be 0/0 after
+  `puchi_close`);
+- `format` = `vsnprintf`, `parse_double` = `strtod` (the test host runs in
+  the "C" locale);
+- files via `fopen`; `get_env` = real `getenv` (r7rs-tests checks that PATH
+  is visible; a real host decides its own policy);
+- `on_exit` and `--interrupt N` longjmp to a per-VM jump point, armed only
+  after `puchi_open` returned;
+- sets `(command-line)` with Chibi's API (`sexp_set_parameter` on the meta
+  environment) - the host's job, not the library's;
+- `-x LIB` evaluates in `(mutable-environment 'LIB)`, otherwise in the
+  interaction environment (programs with `import` work there);
+- `-j N` first runs N VMs on N threads started at the same moment (cold
+  start), and requires identical output and 0 bytes left in each;
+- `--expect FILE` compares the captured output byte for byte.
+
+`puchi/tests/impl.c` is the one implementation translation unit:
+`#define PUCHI_IMPLEMENTATION` + `#include "puchi.h"`.
+
+Build (two translation units, like a real embedder):
+
+```sh
+cd puchi && mkdir -p build
+gcc -std=gnu11 -O2 -g -c tests/impl.c   -I. -o build/impl.o
+gcc -std=gnu11 -O2 -g -DPUCHI_CHECK_UNREACHABLE -c tests/impl.c -I. -o build/impl_chk.o
+gcc -std=gnu11 -O2 -g -Wall -Wextra -c tests/runner.c -I. -o build/runner.o
+gcc build/impl.o     build/runner.o -o build/runner     -lm -lpthread
+gcc build/impl_chk.o build/runner.o -o build/runner_chk -lm -lpthread
+cd ..
+```
+
+### 12.2 Gates
+
+**G5 - redirect collisions** (libclang; run on the patched copy with the
+profile, Linux and Windows targets):
+
+```sh
+B=puchi/build/src
+FILES="$(for f in gc.c sexp.c bignum.c opcodes.c vm.c simplify.c eval.c lib/chibi/ast.c lib/chibi/io/io.c lib/srfi/151/bit.c lib/srfi/39/param.c lib/srfi/69/hash.c; do echo $B/$f; done)"
+ARGS="-include puchi/src/puchi_config.h -include puchi/src/puchi_api.h -I$B/include -I$B -resource-dir $(clang -print-resource-dir)"
+python3 puchi/tools/check_collisions.py puchi/src/puchi_redirect.h $ARGS -- $FILES
+```
+
+Expected: `check_collisions: 0 collision(s), 46 redirected names`, exit 0.
+(The include of `puchi_api.h` assumes `chibi/eval.h` is pulled in by the C
+files first; it is.) With `--target=x86_64-w64-windows-gnu -isystem
+/usr/x86_64-w64-mingw32/include` added, it reports `lib/chibi/ast.c`
+`setenv`/`unsetenv` - which is why those two are not redirected on Windows.
+Negative control (must report 2): a file with
+`typedef struct { void (*free)(void*, void*); } t; int setenv(const char*n,const char*v,int o){return 0;}`.
+
+**G6 - the sandbox guarantee (undefined symbols)**:
+
+```sh
+nm -u puchi/build/impl.o | awk '{print $2}' | sort
+```
+
+Expected on Linux/glibc x86-64 (gcc -O2): exactly a subset of
+
+```
+_GLOBAL_OFFSET_TABLE_ __errno_location __stack_chk_fail __udivti3
+acos asin atan atan2 cos cosh exp fmod log pow round sin sincos sinh sqrt tan
+ceil floor trunc fabs
+memcmp memcpy memmove memset strchr strcmp strlen strncmp strncpy strstr
+```
+
+Each allowlisted name must be justified as: no syscall, no internal
+allocation, no mutable global state. `__stack_chk_fail` only runs on
+detected stack corruption; `__errno_location` is thread-local. Anything
+else (`malloc`, `fopen`, `getenv`, `__ctype_b_loc`, `strcasecmp`,
+`snprintf`, `__fdelt_chk` ...) fails the gate: add a STUB/DENY/ROUTE entry
+(never an emulation) or, for a genuinely pure function, extend the
+allowlist with the justification written next to it. Symbol names differ
+per compiler, optimization level and platform (`sincos` appears at -O1+,
+fortified builds add `__*_chk`, MSVC adds `__chkstk`/`__security_check_cookie`),
+so run G6 on every platform you claim.
+
+**G6b - exported names**:
+`nm -g --defined-only puchi/build/impl.o | awk '{print $3}' | grep -v -E '^(sexp_|puchi_)'`
+prints nothing.
+
+**G6c - writable data**: `objdump -t puchi/build/impl.o | awk '$4 ~ /data|bss/'`
+lists only: upstream tables that are read-only after init
+(`_sexp_type_specs core_forms opcodes sexp_char_names sexp_initial_features
+sexp_opcode_names sexp_opcode_names_ sexp_primitive_opcodes
+sexp_static_libraries sexp_static_libraries_array`), the two init flags
+(`sexp_initialized_p scheme_initialized_p`, never written by puchi_open),
+and `puchi_file_*`/`puchi_embedded_files` in `.data.rel.ro*`. puchi's own
+code adds no writable object.
+
+**G7 - unreachable trap build + upstream suites** (run from the fork root):
+
+```sh
+R=puchi/build/runner_chk
+$R tests/r7rs-tests.scm
+$R -x "(chibi)" tests/r5rs-tests.scm
+$R tests/syntax-tests.scm
+$R -x "(chibi)" tests/unicode-tests.scm
+$R tests/division-tests.scm
+$R puchi/tests/scheme/io-test.scm          # (import (scheme base) (chibi io-test)) (run-tests)
+for t in tests/basic/test*.scm; do lib="(scheme small)"; case $t in *test09*) lib="(chibi)";; esac
+  $R -x "$lib" --expect ${t%.scm}.res $t > /dev/null || echo "differs: $t"; done
+```
+
+Expected (strip ANSI colours before reading: `sed 's/\x1b\[[0-9;]*m//g'`):
+
+| Suite | Expected |
+|---|---|
+| r7rs-tests | `1233 out of 1233 (100.0%) tests passed` |
+| r5rs-tests | `189 out of 189 passed (100%)` |
+| syntax-tests | `12 out of 12` |
+| unicode-tests | `18 out of 18` |
+| division-tests | `304 out of 304` |
+| io-test | `44 out of 45` - the failure is `file-position` ("not a seekable port"), see Part 14 |
+| tests/basic | only `test10-unhygiene.scm` differs (fails upstream too); `test09` needs `(chibi)` for `er-macro-transformer` |
+
+Every run must print `runner: exit 0, outstanding 0 bytes in 0 blocks` and
+must not print `puchi: unreachable stub reached`.
+
+**G8 - control flow and ownership**:
+
+```sh
+puchi/build/runner puchi/tests/scheme/exit.scm             # prints "after", exit status 7
+puchi/build/runner --interrupt 50 puchi/tests/scheme/spin.scm   # exit status 99
+puchi/build/runner puchi/tests/scheme/drop.scm             # exit 0; streams of dropped ports closed by GC
+```
+
+All three must end with `outstanding 0 bytes in 0 blocks`.
+
+**G8b - closing an abandoned VM is safe (stock Chibi proof)**:
+`puchi/tests/abandon_test.c` builds against the *unpatched* upstream core
+(default config) with ASan, runs evaluation on a malloc'd stack, abandons it
+with `swapcontext` from inside nested C -> Scheme -> C calls, fills the
+stack with garbage, frees it and destroys the context. Must be clean. Its
+`control` mode runs a GC on the abandoned context first and must be
+**reported** by ASan (heap-use-after-free in `sexp_mark_one`, `gc.c` -
+walking the root list into the freed stack); this proves the test can see
+such reads. Build with `--param asan-use-after-return=0` and run with
+`ASAN_OPTIONS=detect_stack_use_after_return=0`, or ASan moves the locals to
+a fake stack and the control finds nothing (this happened once).
+
+**G9 - sanitizers**:
+
+```sh
+cd puchi
+gcc -std=gnu11 -O1 -g -fsanitize=address,undefined --param asan-use-after-return=0 -DPUCHI_CHECK_UNREACHABLE -c tests/impl.c -I. -o build/impl_asan.o
+gcc -std=gnu11 -O1 -g -fsanitize=address,undefined -c tests/runner.c -I. -o build/runner_asan.o
+gcc -fsanitize=address,undefined build/impl_asan.o build/runner_asan.o -o build/runner_asan -lm -lpthread
+clang -O1 -g -fsanitize=thread -c tests/impl.c -I. -o build/impl_tsan.o
+clang -O1 -g -fsanitize=thread -c tests/runner.c -I. -o build/runner_tsan.o
+clang -fsanitize=thread build/impl_tsan.o build/runner_tsan.o -o build/runner_tsan -lm -lpthread
+cd ..
+# all G7 suites and the three G8 scripts under build/runner_asan: no report
+TSAN_OPTIONS=halt_on_error=1 puchi/build/runner_tsan -j 8 tests/r7rs-tests.scm
+```
+
+Expected: ASan/UBSan/LSan silent everywhere; TSan prints
+`runner: 8 VMs on 8 threads: identical, exit 0` and no warning.
+
+**G10 - compilers and warnings**:
+
+- Public section in every language mode (file containing only
+  `#include "puchi.h"` and a function using `puchi_eval_string` and
+  `sexp_fixnump`): `gcc`/`clang` `-std=c89|c99|c11` and `g++`/`clang++`
+  `-std=c++98|c++11|c++17`, all with `-pedantic -Wall -Wextra -Werror`:
+  compiles.
+- Implementation TU (`tests/impl.c`) with gcc and clang
+  `-std=gnu11 -O2 -Wall -Wextra`: 0 warnings.
+- puchi's own files compiled unamalgamated (`puchi/src/puchi_impl.c` with
+  `-I` paths from Gate G4) with `-Wall -Wextra`, filtering diagnostics to
+  `puchi_*.{c,h}`: none.
+
+**G11 - Windows** (no Windows machine needed for the compile check):
+
+```sh
+clang --target=x86_64-w64-windows-gnu -isystem /usr/x86_64-w64-mingw32/include -O2 -c puchi/tests/impl.c -Ipuchi -o puchi/build/impl_win.o
+llvm-nm -u puchi/build/impl_win.o
+```
+
+Expected: compiles; symbols only `___chkstk_ms __imp__errno __udivti3`,
+math (`acos ... trunc`) and `mem*`/`str*` as in G6. This verifies the
+`_WIN32` branches with MinGW headers only. **MSVC and running on Windows
+were never tested: run G6-G9 there in CI before claiming Windows support.**
+
+**G12 - determinism**: G10 of Part 11.
+
+### 12.3 `puchi/tests/runner.c`
+
+```c
+/* runner.c - test host for puchi: runs a Scheme file in a VM, the way an
+ * embedder would, using only puchi_api.h and Chibi's own API.
+ *
+ *   runner [-x LIBRARY] [-j N] [--interrupt N] [--expect FILE] SCRIPT
+ *
+ * Files: library files come from the embedded set; every other path is
+ * opened with fopen relative to the current directory (run it from the
+ * root of an upstream checkout to reach tests/).  stdout and stderr of the
+ * VM are captured in memory and printed afterwards.
+ * Exit status: the program's (exit) code, 0 at normal end, 70 on an uncaught
+ * error, 99 when --interrupt stopped it.  -j N runs the program again in N
+ * VMs on N threads that all start at once, and requires identical output.
+ * After every run the VM's allocator must be back at 0 bytes. */
+#include <pthread.h>
+#include <setjmp.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include "puchi.h"
+
+typedef struct { char *data; size_t len, cap; } buffer;
+
+typedef struct job {
+  const char *script, *library;
+  long interrupt_after, polls;
+  long bytes, blocks;            /* outstanding allocations of this VM */
+  buffer out;
+  int code;
+  jmp_buf jump;
+} job;
+
+static void buf_add(buffer *b, const char *s, size_t n) {
+  if (b->len + n + 1 > b->cap) {
+    size_t cap = b->cap ? b->cap * 2 : 4096;
+    while (cap < b->len + n + 1) cap *= 2;
+    b->data = (char*)realloc(b->data, cap);
+    if (!b->data) abort();
+    b->cap = cap;
+  }
+  memcpy(b->data + b->len, s, n);
+  b->len += n;
+  b->data[b->len] = '\0';
+}
+
+/* ---- the host callbacks ---- */
+static void *h_allocate(void *ud, size_t n) {
+  job *j = (job*)ud;
+  size_t *p = (size_t*)malloc(n + 2 * sizeof(size_t));
+  if (!p) return NULL;
+  p[0] = n;
+  j->bytes += (long)n;
+  j->blocks++;
+  return p + 2;
+}
+static void h_release(void *ud, void *ptr) {
+  job *j = (job*)ud;
+  size_t *p = (size_t*)ptr - 2;
+  j->bytes -= (long)p[0];
+  j->blocks--;
+  free(p);
+}
+static int h_format(void *ud, char *buf, size_t n, const char *fmt, va_list ap) {
+  (void)ud;
+  return vsnprintf(buf, n, fmt, ap);      /* this test host runs in the "C" locale */
+}
+static double h_parse_double(void *ud, const char *s, char **end) { (void)ud; return strtod(s, end); }
+static ptrdiff_t file_read(void *ud, char *buf, size_t n) {
+  size_t r = fread(buf, 1, n, (FILE*)ud);
+  return r > 0 ? (ptrdiff_t)r : (ferror((FILE*)ud) ? -1 : 0);
+}
+static ptrdiff_t file_write(void *ud, const char *buf, size_t n) { return (ptrdiff_t)fwrite(buf, 1, n, (FILE*)ud); }
+static void file_close(void *ud) { fclose((FILE*)ud); }
+static int h_open_file(void *ud, const char *path, int for_writing, puchi_stream *s) {
+  FILE *f = fopen(path, for_writing ? "wb" : "rb");
+  (void)ud;
+  if (!f) return -1;
+  s->userdata = f;
+  s->on_read = for_writing ? NULL : file_read;
+  s->on_write = for_writing ? file_write : NULL;
+  s->on_close = file_close;
+  return 0;
+}
+static int h_file_exists(void *ud, const char *path) {
+  FILE *f = fopen(path, "rb");
+  (void)ud;
+  if (!f) return 0;
+  fclose(f);
+  return 1;
+}
+static int h_delete_file(void *ud, const char *path) { (void)ud; return remove(path); }
+static void h_on_exit(void *ud, int code) { job *j = (job*)ud; j->code = code; longjmp(j->jump, 1); }
+static int h_poll_interrupt(void *ud) {
+  job *j = (job*)ud;
+  if (j->interrupt_after && ++j->polls >= j->interrupt_after) { j->code = 99; longjmp(j->jump, 1); }
+  return 0;
+}
+static double h_current_second(void *ud) { (void)ud; return (double)time(NULL); }
+/* the test programs check that PATH is visible; a real host decides */
+static const char *h_get_env(void *ud, const char *name) { (void)ud; return getenv(name); }
+static ptrdiff_t out_write(void *ud, const char *s, size_t n) { buf_add(&((job*)ud)->out, s, n); return (ptrdiff_t)n; }
+
+static void run(job *j) {
+  puchi_host host;
+  sexp ctx;
+  long interrupt_after = j->interrupt_after;
+  j->interrupt_after = 0;   /* no callback may jump before the jump point exists */
+  memset(&host, 0, sizeof host);
+  host.userdata = j;
+  host.allocate = h_allocate;
+  host.release = h_release;
+  host.format = h_format;
+  host.parse_double = h_parse_double;
+  host.open_file = h_open_file;
+  host.file_exists = h_file_exists;
+  host.delete_file = h_delete_file;
+  host.on_exit = h_on_exit;
+  host.poll_interrupt = h_poll_interrupt;
+  host.current_second = h_current_second;
+  host.get_env = h_get_env;
+  host.std_out.userdata = j;
+  host.std_out.on_write = out_write;
+  host.std_err.userdata = j;
+  host.std_err.on_write = out_write;
+  ctx = puchi_open(&host, 0, 0);
+  if (!ctx) { j->code = 71; return; }
+  if (setjmp(j->jump) == 0) {
+    sexp_gc_var3(env, res, tmp);
+    sexp_gc_preserve3(ctx, env, res, tmp);
+    /* (command-line) is a core parameter; set it with Chibi's API */
+    tmp = sexp_c_string(ctx, j->script, -1);
+    tmp = sexp_list1(ctx, tmp);
+    sexp_set_parameter(ctx, sexp_global(ctx, SEXP_G_META_ENV),
+                       sexp_intern(ctx, "command-line", -1), tmp);
+    if (j->library) {
+      char expr[256];
+      snprintf(expr, sizeof expr, "(mutable-environment '%s)", j->library);
+      env = sexp_eval_string(ctx, expr, -1, sexp_global(ctx, SEXP_G_META_ENV));
+    } else {
+      env = sexp_context_env(ctx);      /* the interaction environment */
+    }
+    j->polls = 0;                       /* the jump point exists: arm */
+    j->interrupt_after = interrupt_after;
+    tmp = sexp_c_string(ctx, j->script, -1);
+    res = sexp_exceptionp(env) ? env : sexp_load(ctx, tmp, env);
+    j->code = 0;
+    if (sexp_exceptionp(res)) {
+      sexp_print_exception(ctx, res, sexp_current_error_port(ctx));
+      j->code = 70;
+    }
+    puchi_flush(ctx);
+    sexp_gc_release3(ctx);
+  }
+  /* after a jump only puchi_close is legal */
+  j->interrupt_after = 0;
+  puchi_close(ctx);
+}
+
+static void *run_thread(void *arg) { run((job*)arg); return NULL; }
+
+/* (chibi test) prints "in N seconds"; drop it so runs compare */
+static void drop_timings(buffer *b) {
+  size_t i = 0, k = 0;
+  while (i < b->len) {
+    if (!strncmp(b->data + i, " in ", 4)) {
+      size_t e = i + 4;
+      while (e < b->len && ((b->data[e] >= '0' && b->data[e] <= '9') || b->data[e] == '.')) e++;
+      if (e > i + 4 && !strncmp(b->data + e, " seconds", 8)) { i = e + 8; continue; }
+    }
+    b->data[k++] = b->data[i++];
+  }
+  b->len = k;
+  if (b->data) b->data[k] = '\0';
+}
+
+int main(int argc, char **argv) {
+  int i, n = 0, status;
+  const char *expect = NULL;
+  job first;
+  memset(&first, 0, sizeof first);
+  for (i = 1; i < argc; i++) {
+    if (!strcmp(argv[i], "-x") && i + 1 < argc) first.library = argv[++i];
+    else if (!strcmp(argv[i], "-j") && i + 1 < argc) n = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--interrupt") && i + 1 < argc) first.interrupt_after = atol(argv[++i]);
+    else if (!strcmp(argv[i], "--expect") && i + 1 < argc) expect = argv[++i];
+    else first.script = argv[i];
+  }
+  if (!first.script) { fprintf(stderr, "usage: runner [-x LIB] [-j N] [--interrupt N] [--expect FILE] SCRIPT\n"); return 2; }
+  if (n > 0) {                          /* threads first: every VM starts cold */
+    pthread_t *t = (pthread_t*)calloc((size_t)n, sizeof *t);
+    job *jobs = (job*)calloc((size_t)n, sizeof *jobs);
+    for (i = 0; i < n; i++) {
+      jobs[i].script = first.script;
+      jobs[i].library = first.library;
+      if (pthread_create(&t[i], NULL, run_thread, &jobs[i]) != 0) abort();
+    }
+    for (i = 0; i < n; i++) pthread_join(t[i], NULL);
+    for (i = 1; i < n; i++) {
+      drop_timings(&jobs[0].out);
+      drop_timings(&jobs[i].out);
+      if (jobs[i].code != jobs[0].code || jobs[i].out.len != jobs[0].out.len
+          || memcmp(jobs[i].out.data, jobs[0].out.data, jobs[0].out.len)) {
+        fprintf(stderr, "runner: thread %d differs\n", i);
+        return 1;
+      }
+    }
+    for (i = 0; i < n; i++)
+      if (jobs[i].bytes || jobs[i].blocks) { fprintf(stderr, "runner: thread %d leaked %ld bytes\n", i, jobs[i].bytes); return 1; }
+    fprintf(stderr, "runner: %d VMs on %d threads: identical, exit %d\n", n, n, jobs[0].code);
+    for (i = 0; i < n; i++) free(jobs[i].out.data);
+    free(jobs);
+    free(t);
+  }
+  run(&first);
+  fwrite(first.out.data ? first.out.data : "", 1, first.out.len, stdout);
+  status = first.code;
+  fprintf(stderr, "runner: exit %d, outstanding %ld bytes in %ld blocks\n", first.code, first.bytes, first.blocks);
+  if (first.bytes || first.blocks) status = status ? status : 1;
+  free(first.out.data);
+  if (expect) {
+    FILE *f = fopen(expect, "rb");
+    char *want;
+    long len;
+    if (!f) return 2;
+    fseek(f, 0, SEEK_END); len = ftell(f); fseek(f, 0, SEEK_SET);
+    want = (char*)malloc((size_t)len + 1);
+    if (fread(want, 1, (size_t)len, f) != (size_t)len || (size_t)len != first.out.len
+        || memcmp(want, first.out.data, (size_t)len)) {
+      fprintf(stderr, "runner: output differs from %s\n", expect);
+      status = status ? status : 1;
+    }
+    fclose(f);
+    free(want);
+  }
+  return status;
+}
+```
+
+### 12.4 `puchi/tools/check_collisions.py`
+
+```python
+#!/usr/bin/env python3
+"""check_collisions.py - fail if upstream code declares an identifier that a
+puchi redirect macro would rewrite.
+
+A function-like redirect macro NAME(...) rewrites every "NAME (" token
+sequence.  That breaks a function-pointer member, variable or parameter
+named NAME (p->free(x)), and a function defined with that name (Windows
+ast.c defines setenv).  Members, variables and parameters of any other
+type are never followed by "(" and are harmless.
+
+Usage: check_collisions.py REDIRECT_HEADER CLANG_ARGS... -- FILE...
+Exit status 1 if any collision is found."""
+import os
+import re
+import sys
+import clang.cindex as ci
+
+ci.Config.set_library_file(os.environ.get('LIBCLANG', '/usr/lib/llvm-18/lib/libclang-18.so.1'))
+K = ci.CursorKind
+
+
+def redirected_names(header):
+    names = set()
+    for line in open(header, encoding='utf-8'):
+        m = re.match(r'\s*#\s*define\s+([A-Za-z_]\w*)\(', line)
+        if m and not m.group(1).startswith(('PUCHI_', 'puchi_')):
+            names.add(m.group(1))
+    return names
+
+
+def main():
+    header = sys.argv[1]
+    sep = sys.argv.index('--')
+    args, files = sys.argv[2:sep], sys.argv[sep + 1:]
+    names = redirected_names(header)
+    found = []
+    for f in files:
+        tu = ci.Index.create().parse(f, args=args)
+        root = os.path.dirname(os.path.abspath(f))
+        for c in tu.cursor.walk_preorder():
+            try:
+                kind = c.kind
+            except ValueError:
+                continue
+            if c.spelling not in names or c.location.file is None:
+                continue
+            loc = os.path.abspath(c.location.file.name)
+            if loc.startswith('/usr/'):
+                continue                         # system headers
+            t = c.type.get_canonical()
+            callable = (t.kind == ci.TypeKind.POINTER and t.get_pointee().kind
+                        in (ci.TypeKind.FUNCTIONPROTO, ci.TypeKind.FUNCTIONNOPROTO))
+            bad = ((kind == K.FUNCTION_DECL and c.is_definition())
+                   or (kind in (K.FIELD_DECL, K.VAR_DECL, K.PARM_DECL) and callable))
+            if bad:
+                found.append('%s:%d: %s %s' % (loc, c.location.line, kind.name, c.spelling))
+    for line in sorted(set(found)):
+        print('collision:', line)
+    print('check_collisions: %d collision(s), %d redirected names' % (len(set(found)), len(names)))
+    return 1 if found else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+```
+
+The Scheme drivers in `puchi/tests/scheme/`:
+
+```scheme
+;; exit.scm
+(import (scheme base) (scheme process-context) (scheme write))
+(dynamic-wind (lambda () #f) (lambda () (exit 7)) (lambda () (display "after\n")))
+;; spin.scm
+(import (scheme base))
+(define (spin) (spin))
+(spin)
+;; drop.scm
+(import (scheme base) (scheme file))
+(define p (open-input-file "tests/r7rs-tests.scm"))
+(read-char p)
+(set! p #f)
+(let loop ((i 0)) (if (< i 200000) (begin (make-vector 10) (loop (+ i 1)))))
+;; io-test.scm
+(import (scheme base) (chibi io-test))
+(run-tests)
+```
