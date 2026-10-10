@@ -159,3 +159,132 @@ commit `c4e7367`). When the guide shows code, it is copied from there.
 - Part 13 - Updating to a new upstream
 - Part 14 - Known hazards and limitations
 - Part 15 - Decisions and why (rejected alternatives)
+
+---
+
+## Part 2 - Rules for the agent
+
+Read these before every phase. They exist because each one was broken by an
+earlier attempt and cost days.
+
+### 2.1 Never
+
+1. **Never edit a file outside `puchi/`.** Upstream changes live only in
+   `puchi/patches/*.patch`, applied to a *copy* (`puchi/build/src`).
+2. **Never emulate an OS API.** A redirect may only STUB, DENY or ROUTE a
+   one-sentence contract (Part 7). If making something work seems to need a
+   fake `FILE`, a fake file-descriptor table, a fake `errno` protocol or a
+   fake `select`, stop: you are on the wrong path. Real I/O goes through
+   Chibi custom ports.
+3. **Never fold `SEXP_USE_*` flags out of the source, strip code, or
+   reformat upstream files.** The profile header selects features; the
+   preprocessor removes the rest.
+4. **Never add test-only code paths to the library.** The single allowed
+   exception is the compile switch `PUCHI_CHECK_UNREACHABLE`, which makes
+   STUBs abort; it adds no behaviour, only a check, and is off by default.
+   Anything a test needs (counting allocations, capturing output, setting
+   `command-line`) belongs in the test host, using the public API.
+5. **Never keep state in globals in puchi's code.** All state lives in the
+   `puchi_vm` struct reachable from `ctx`
+   (`sexp_context_heap(ctx)->allocator->data`).
+6. **Never name an identifier after a C library function** (`read`, `write`,
+   `close`, `free`, `alloc`, `exit`, `stat`, `getenv` ...) in puchi code or
+   in a patch. The redirect macros would rewrite `p->free(x)`. This exact
+   bug happened while writing patch 0001 (members were named
+   `alloc`/`free`; renamed to `allocate`/`release`). Gate G5 checks it.
+7. **Never call any `sexp_*` function on a VM after a host callback did not
+   return** (exit or hard interrupt). Only `puchi_close`.
+8. **Never let a host callback jump before its jump point exists.** A test
+   host that armed its interrupt counter before `puchi_open` returned
+   longjmp'd into an unset `jmp_buf` and crashed (happened twice).
+9. **Never claim a gate passed without reading its output.** Exit status 0
+   from a test runner is not "passed": read the summary lines (`(chibi
+   test)` output contains ANSI colour codes when `TERM` is visible to the
+   VM; strip them before grepping).
+10. **Never add symbol-hiding machinery** (making every upstream function
+    `static`, generated linkage headers, `SEXP_API static`). All exported
+    names already start with `sexp_` or `puchi_`; that is enough.
+
+### 2.2 Stop conditions
+
+Stop and report to the owner, instead of continuing, when:
+
+- a fix would be a workaround on top of a workaround;
+- a gate fails twice for reasons you cannot explain from the code;
+- upstream changed in a way that needs a third feature patch;
+- something in this guide turns out to be false - report which statement,
+  with the evidence (command and output).
+
+### 2.3 How to work
+
+- One phase at a time, in order. Each phase ends with a gate.
+- Commit after every phase that passes its gate. Push often.
+- When a step says "verify", run the command and compare with the expected
+  output given here.
+
+---
+
+## Part 3 - Repository layout
+
+```
+<fork of chibi-scheme>/          upstream files: NEVER edited
+  puchi/
+    GUIDE.md                     this guide (optional in the product)
+    README.md                    short: what puchi is, how to regenerate
+    puchi.h                      GENERATED output, committed
+    patches/                     0001..0005 *.patch (git format-patch output)
+    src/
+      puchi.h.in                 skeleton of puchi.h (public + implementation)
+      puchi_config.h             the feature profile
+      puchi_api.h                the puchi_* API
+      puchi_impl.c               implementation: order of includes
+      puchi_redirect.h           STUB / DENY / ROUTE macros
+      puchi_unredirect.h         undoes them, restores host macros
+      puchi_glue.c               puchi's own code (VM, ports, hooks, open/close)
+      install.h.in               template for chibi/install.h
+    lib/
+      scheme/process-context.sld replaces upstream's (exit via host)
+      scheme/time.sld            replaces upstream's (clock via host)
+      scheme/file.sld            replaces upstream's (file-exists?, delete-file)
+      puchi/host.sld             the (puchi host) library (include-shared "host")
+    tools/
+      amalgamate.py              the generator
+      check_collisions.py        gate G5 (libclang)
+      inventory.py               lists every OS reference + ctx scope (libclang)
+    tests/
+      runner.c                   test host: runs a .scm file in a VM
+      impl.c                     #define PUCHI_IMPLEMENTATION / #include "puchi.h"
+      abandon_test.c             stock-Chibi proof that close-after-abandon is safe
+      scheme/*.scm               exit / interrupt / dropped-port / io-test drivers
+    build/                       GENERATED, not committed (.gitignore)
+```
+
+`.gitignore`: add `puchi/build/` to `puchi/.gitignore` (not the root one,
+which is upstream's).
+
+---
+
+## Part 4 - Phase 1: setup and tools
+
+1. Fork chibi-scheme on GitHub; clone; create a working branch.
+2. Record the upstream commit you start from: `git rev-parse HEAD`
+   (the reference files were verified on `c4e7367`).
+3. Tools required (all were used in verification):
+   - `git`, `python3` (3.8+), `make`, a C compiler (gcc and clang);
+   - clang's `libclang` and its Python bindings for gates G5 and the
+     inventory tool: `pip install clang==<your clang major>.*` and point the
+     tools at the library with `LIBCLANG=/usr/lib/llvm-NN/lib/libclang-NN.so.1`;
+   - `llvm-nm` (works on ELF, COFF and Mach-O objects) or `nm`;
+   - for the Windows gate on a non-Windows machine: MinGW-w64 headers
+     (`apt-get install mingw-w64-x86-64-dev`) used with
+     `clang --target=x86_64-w64-windows-gnu`.
+4. Build a stock chibi-scheme once (needed only to run `chibi-ffi`, which
+   generates `lib/chibi/io/io.c` from `io.stub`):
+   `cp -r <fork> /tmp/host && make -C /tmp/host chibi-scheme`.
+   The generator can do this itself into `puchi/build/host`, or take
+   `--chibi PATH` (then set `LD_LIBRARY_PATH` and `CHIBI_MODULE_PATH` to that
+   build's directory and its `lib/`).
+
+**Gate G0**: `make -C /tmp/host chibi-scheme` succeeds and
+`/tmp/host/chibi-scheme -q -e '(display 42)'` prints `42` (with
+`LD_LIBRARY_PATH=/tmp/host CHIBI_MODULE_PATH=/tmp/host/lib`).
