@@ -69,6 +69,13 @@ SEXP_NO_WARN_UNUSED static size_t puchi_stub_size(const char *name) { puchi_os_u
 SEXP_NO_WARN_UNUSED static void *puchi_stub_ptr(const char *name) { puchi_os_unreachable(name); return NULL; }
 SEXP_NO_WARN_UNUSED static int puchi_deny_int(const char *name, int value) { puchi_os_denied(name); return value; }
 SEXP_NO_WARN_UNUSED static void *puchi_deny_ptr(const char *name) { puchi_os_denied(name); return NULL; }
+/* fstat: upstream (io.c, sexp_is_a_socket_p) reads st_mode without checking
+ * the result, so the buffer must be filled even when the call is denied. */
+SEXP_NO_WARN_UNUSED static int puchi_deny_fstat(struct stat *buf) {
+  memset(buf, 0, sizeof *buf);
+  puchi_os_denied("fstat");
+  return -1;
+}
 
 /* save the host's definitions; puchi_unredirect.h restores them */
 #pragma push_macro("getc")
@@ -229,7 +236,7 @@ SEXP_NO_WARN_UNUSED static void *puchi_deny_ptr(const char *name) { puchi_os_den
 #define write(fd, b, n)       puchi_deny_int("write", -1)
 #define close(fd)             puchi_deny_int("close", -1)
 #define lseek(fd, o, w)       puchi_deny_int("lseek", -1)
-#define fstat(fd, b)          puchi_deny_int("fstat", -1)
+#define fstat(fd, b)          puchi_deny_fstat(b)
 
 /* ---- (3) ROUTE ---- */
 #define stat(p, b)            puchi_os_stat(ctx, p)

@@ -112,6 +112,8 @@ commit `c4e7367`). When the guide shows code, it is copied from there.
 | TSan, 8 VMs started cold on 8 threads | clean, identical output |
 | Public section, C89/C99/C11, C++98/11/17, gcc+clang, -pedantic -Werror | clean |
 | Warnings in puchi's own files (gcc, clang -Wall -Wextra) | none |
+| Generated `puchi.h`: impl TU with gcc and clang `-O2 -Wall -Wextra` | 0 warnings; all suites above pass against the single header |
+| Generator determinism | identical sha256 on two runs |
 | Redirect collision check (libclang) | 0 (Linux); Windows flags ast.c `setenv`/`unsetenv` -> handled |
 
 ### 1.3 Facts the design depends on (verified; do not re-investigate)
@@ -885,6 +887,9 @@ Which functions are which (Linux list; Windows differences in 7.4):
   stderr` and the `FD_ZERO/FD_SET/FD_ISSET` macros (removes glibc's
   `__fdelt_chk`).
 - DENY: `getenv setenv unsetenv strerror read write close lseek fstat`.
+  `fstat` must also zero its `struct stat`: `sexp_is_a_socket_p` (io.c)
+  reads `st_mode` without checking the result (found by gcc
+  `-Wmaybe-uninitialized` at `-O2` on the amalgamated header).
 - ROUTE: `stat` (exists?), `snprintf` (host `format`), `sscanf` ("%lg" only:
   host `parse_double`), `exit` (host `on_exit`), `malloc calloc free` (VM
   allocator), and locale-free ASCII replacements for `isalpha isdigit
@@ -989,6 +994,13 @@ SEXP_NO_WARN_UNUSED static size_t puchi_stub_size(const char *name) { puchi_os_u
 SEXP_NO_WARN_UNUSED static void *puchi_stub_ptr(const char *name) { puchi_os_unreachable(name); return NULL; }
 SEXP_NO_WARN_UNUSED static int puchi_deny_int(const char *name, int value) { puchi_os_denied(name); return value; }
 SEXP_NO_WARN_UNUSED static void *puchi_deny_ptr(const char *name) { puchi_os_denied(name); return NULL; }
+/* fstat: upstream (io.c, sexp_is_a_socket_p) reads st_mode without checking
+ * the result, so the buffer must be filled even when the call is denied. */
+SEXP_NO_WARN_UNUSED static int puchi_deny_fstat(struct stat *buf) {
+  memset(buf, 0, sizeof *buf);
+  puchi_os_denied("fstat");
+  return -1;
+}
 
 /* save the host's definitions; puchi_unredirect.h restores them */
 #pragma push_macro("getc")
@@ -1149,7 +1161,7 @@ SEXP_NO_WARN_UNUSED static void *puchi_deny_ptr(const char *name) { puchi_os_den
 #define write(fd, b, n)       puchi_deny_int("write", -1)
 #define close(fd)             puchi_deny_int("close", -1)
 #define lseek(fd, o, w)       puchi_deny_int("lseek", -1)
-#define fstat(fd, b)          puchi_deny_int("fstat", -1)
+#define fstat(fd, b)          puchi_deny_fstat(b)
 
 /* ---- (3) ROUTE ---- */
 #define stat(p, b)            puchi_os_stat(ctx, p)
@@ -2187,4 +2199,5 @@ produced a 1.1 MB `puchi.h` with 54 embedded files in 0.3 s from upstream
     everything, no timestamps.
 
 **Gate G10 (generator)**: run it twice; `sha256sum puchi/puchi.h` is the
-same both times; the output contains no `#include "` lines.
+same both times (verified); `grep -c -E '^\s*#\s*include\s*"' puchi/puchi.h`
+prints `0` (the text `#include "` still appears inside comments - fine).
