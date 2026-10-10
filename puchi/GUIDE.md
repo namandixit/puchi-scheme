@@ -775,3 +775,445 @@ index 7580e30..e406426 100644
    (needs an `include/chibi/install.h`; copy the one `make` generates).
    Expected: no output.
 3. With both flags on, the implementation compiles (this happens in Phase 5).
+
+---
+
+## Part 6 - Phase 3: the profile (`puchi/src/puchi_config.h`)
+
+One header, included first by both sections of `puchi.h`, sets every
+`SEXP_USE_*` switch that matters. Never rely on an upstream default for a
+switch that touches the OS or global state.
+
+Why each group:
+
+- `SEXP_USE_HEAP_ALLOCATOR`, `SEXP_USE_HOST_FILES`: the two patches.
+- `SEXP_USE_GREEN_THREADS 1`: gives `vm.c` its periodic call of the
+  scheduler slot every `SEXP_DEFAULT_QUANTUM` (500) instructions - puchi's
+  interrupt hook. No threads are created. Cost measured: ~3-6% on `fib 30`.
+  It adds `fcntl`, `ferror`, `poll` references, all stubbed (unreachable:
+  only for fd and `FILE*` ports).
+- `DL`, `IMAGE_LOADING`, `MMAP_GC`, `TIME_GC`, `GC_FILE_DESCRIPTORS`,
+  `STRING_STREAMS` (fmemopen/fopencookie), `NTP_GETTIME`, `SEND_FILE`,
+  `NATIVE_X86`, `LIMITED_MALLOC` (global byte counter + getenv): all OFF.
+- `GLOBAL_HEAP`, `GLOBAL_SYMBOLS`, `BOEHM`, `MALLOC`, `HUFF_SYMS` (writable
+  tables): OFF - one heap and one symbol table per VM, no shared state.
+- `STATIC_LIBS 1`, `STATIC_LIBS_NO_INCLUDE 0`, `STATIC_LIBS_EMPTY 0`:
+  `eval.c` `#include`s the generated `clibs.c`.
+- `ALIGNED_BYTECODE 1`: no unaligned loads (portable, sanitizer-clean).
+- Windows: `SEXP_STATIC_LIBRARY` or `SEXP_API` becomes `dllimport` and the
+  build fails (`gc.c: dllimport cannot be applied to non-inline function
+  definition`).
+
+```c
+/* puchi_config.h - the one Chibi feature profile puchi is built with.
+ * Included before any Chibi header, by both the public and the
+ * implementation sections of puchi.h.  Every switch that matters is set
+ * explicitly so that an upstream default change cannot silently turn an OS
+ * feature back on.  Do not edit without re-running every gate. */
+#ifndef PUCHI_CONFIG_H
+#define PUCHI_CONFIG_H
+
+/* puchi's two upstream patches (puchi/patches/0001, 0002) */
+#define SEXP_USE_HEAP_ALLOCATOR 1     /* every heap comes from the VM's allocator */
+#define SEXP_USE_HOST_FILES 1         /* file opens go to sexp_host_open_file() */
+
+/* the VM calls the scheduler slot every SEXP_DEFAULT_QUANTUM instructions;
+ * puchi puts its interrupt hook there (no threads are ever created) */
+#define SEXP_USE_GREEN_THREADS 1
+
+/* no OS services */
+#define SEXP_USE_DL 0
+#define SEXP_USE_IMAGE_LOADING 0
+#define SEXP_USE_MMAP_GC 0
+#define SEXP_USE_TIME_GC 0
+#define SEXP_USE_GC_FILE_DESCRIPTORS 0
+#define SEXP_USE_STRING_STREAMS 0
+#define SEXP_USE_NTP_GETTIME 0
+#define SEXP_USE_SEND_FILE 0
+#define SEXP_USE_NATIVE_X86 0
+#define SEXP_USE_LIMITED_MALLOC 0
+
+/* no process-global state: one heap and one symbol table per VM */
+#define SEXP_USE_GLOBAL_HEAP 0
+#define SEXP_USE_GLOBAL_SYMBOLS 0
+#define SEXP_USE_BOEHM 0
+#define SEXP_USE_MALLOC 0
+#define SEXP_USE_HUFF_SYMS 0
+
+/* bundled C libraries are compiled in; eval.c #includes the generated clibs.c */
+#define SEXP_USE_STATIC_LIBS 1
+#define SEXP_USE_STATIC_LIBS_NO_INCLUDE 0
+#define SEXP_USE_STATIC_LIBS_EMPTY 0
+
+/* portable bytecode (no unaligned loads) */
+#define SEXP_USE_ALIGNED_BYTECODE 1
+
+/* Windows: not a DLL (otherwise SEXP_API is __declspec(dllimport)) */
+#ifdef _WIN32
+#define SEXP_STATIC_LIBRARY 1
+#endif
+
+#endif /* PUCHI_CONFIG_H */
+```
+
+**Gate G2 (profile)**: nothing to run yet; G6 (symbols) and G2b (writable
+data) in Part 12 are the real checks of the profile.
+
+---
+
+## Part 7 - Phase 4: the redirect layer
+
+### 7.1 What it is
+
+`puchi_impl.c` includes, in this order: the profile and Chibi's headers,
+**every system header upstream uses**, then `puchi_redirect.h`, then the
+upstream `.c` files, then `puchi_unredirect.h`, then puchi's glue. Inside
+that window, every OS-facing C library name upstream uses is a macro.
+
+The three kinds, and the only three:
+
+| Kind | Meaning | Implementation |
+|---|---|---|
+| STUB | the call can only run on a `FILE*`, fd, socket or missing error port; puchi never creates one, so it is unreachable | typed helper returning a failure value; calls `puchi_os_unreachable(name)`, which aborts only when `PUCHI_CHECK_UNREACHABLE` is defined (test builds) |
+| DENY | the capability is removed from the sandbox | typed helper returning failure (`-1`, `NULL`) |
+| ROUTE | a one-sentence contract | function taking `ctx`, served by the VM (`puchi_os_*` in the glue) |
+
+Which functions are which (Linux list; Windows differences in 7.4):
+
+- STUB: `getc ungetc putc fputc fputs fflush fclose clearerr ferror fgets
+  fileno fseek ftell fread fwrite fopen select usleep poll fcntl shutdown
+  stderr` and the `FD_ZERO/FD_SET/FD_ISSET` macros (removes glibc's
+  `__fdelt_chk`).
+- DENY: `getenv setenv unsetenv strerror read write close lseek fstat`.
+- ROUTE: `stat` (exists?), `snprintf` (host `format`), `sscanf` ("%lg" only:
+  host `parse_double`), `exit` (host `on_exit`), `malloc calloc free` (VM
+  allocator), and locale-free ASCII replacements for `isalpha isdigit
+  isxdigit isspace tolower toupper strcasecmp strncasecmp`.
+
+### 7.2 Rules for the macros
+
+- **Function-like** (`#define getc(f) ...`) wherever possible: such a macro
+  only expands when the name is followed by `(`, so the struct member
+  `fileno` (`x->value.fileno.fd`), the parameters `read/write/close` in
+  `io.c` and the locals `free`, `sin`, `cos` stay untouched.
+- **Object-like** only where upstream uses the name as a value:
+  `stderr`, `strcasecmp` (used as a function pointer in `sexp.c`), and on
+  Windows `getenv_s`/`_putenv_s` (declared by `ast.c`).
+- ROUTE macros pass the `ctx` that is in scope at the call site
+  (`#define malloc(n) puchi_os_malloc(ctx, n)`). If some call site has no
+  `ctx`, compilation fails - that is the check. (272 of 275 sites have one;
+  the 3 others are fixed by patch 0001 or are not routed.)
+- Each name is saved with `#pragma push_macro("name")` + `#undef` before it
+  is redefined, and `puchi_unredirect.h` does `#undef` +
+  `#pragma pop_macro`. This restores the host's own macros afterwards (MSVC's
+  `stderr` is a macro; glibc defines `getc`, `putc`, `tolower` ... as macros).
+- Never redirect a name that upstream *defines* (Windows `ast.c` defines
+  `setenv`/`unsetenv`; there `_putenv_s`/`getenv_s` are redirected instead).
+  Gate G5 finds such cases.
+- The helpers are `static` and marked `SEXP_NO_WARN_UNUSED` (from `sexp.h`),
+  because the configuration decides which ones are used.
+- STUBs use typed helper functions, not comma expressions: a call used as a
+  statement draws no `-Wunused-value` warning.
+
+### 7.3 `puchi/src/puchi_redirect.h`
+
+```c
+/* puchi_redirect.h - included by puchi_impl.c after every system header and
+ * before the first upstream .c file.  Every OS-facing function that the
+ * upstream sources call is redirected here.  A redirect may only
+ *   (1) STUB    - the call sits on a path that cannot run in puchi (it needs
+ *                 a FILE*, a file descriptor, a socket or a missing error
+ *                 port, and puchi never creates any of those);
+ *   (2) DENY    - the capability is removed; the failure value is the answer;
+ *   (3) ROUTE   - a one-sentence contract served by the VM's host/allocator.
+ * It must never EMULATE an OS API.  Function-like macros are used so that
+ * struct members and parameters with the same names are untouched.
+ * puchi_impl.c defines the puchi_os_* functions after the upstream sources. */
+
+#ifndef PUCHI_REDIRECT_H
+#define PUCHI_REDIRECT_H
+
+static void *puchi_os_malloc(sexp ctx, size_t size);
+static void *puchi_os_calloc(sexp ctx, size_t n, size_t size);
+static void puchi_os_free(sexp ctx, void *ptr);
+static int puchi_os_snprintf(sexp ctx, char *buf, size_t size, const char *fmt, ...);
+static int puchi_os_sscanf_double(sexp ctx, const char *str, const char *fmt, double *out);
+static int puchi_os_stat(sexp ctx, const char *path);
+static void puchi_os_exit(sexp ctx, int code);
+static void puchi_os_unreachable(const char *name);
+static void puchi_os_denied(const char *name);
+
+/* ASCII replacements: the C library versions depend on the process locale. */
+SEXP_NO_WARN_UNUSED static int puchi_ascii_isalpha(int c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+SEXP_NO_WARN_UNUSED static int puchi_ascii_isdigit(int c) { return c >= '0' && c <= '9'; }
+SEXP_NO_WARN_UNUSED static int puchi_ascii_isxdigit(int c) {
+  return puchi_ascii_isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+SEXP_NO_WARN_UNUSED static int puchi_ascii_isspace(int c) { return c == ' ' || (c >= '\t' && c <= '\r'); }
+SEXP_NO_WARN_UNUSED static int puchi_ascii_tolower(int c) { return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c; }
+SEXP_NO_WARN_UNUSED static int puchi_ascii_toupper(int c) { return (c >= 'a' && c <= 'z') ? c - ('a' - 'A') : c; }
+SEXP_NO_WARN_UNUSED static int puchi_ascii_strncasecmp(const char *a, const char *b, size_t n) {
+  for (; n > 0; a++, b++, n--) {
+    int d = puchi_ascii_tolower((unsigned char)*a) - puchi_ascii_tolower((unsigned char)*b);
+    if (d != 0 || *a == '\0') return d;
+  }
+  return 0;
+}
+SEXP_NO_WARN_UNUSED static int puchi_ascii_strcasecmp(const char *a, const char *b) {
+  return puchi_ascii_strncasecmp(a, b, (size_t)-1);
+}
+
+#ifdef _WIN32
+SEXP_NO_WARN_UNUSED static int puchi_win_getenv_s(size_t *len, char *buf, size_t size, const char *name) {
+  (void)buf; (void)size; (void)name;
+  puchi_os_denied("getenv_s");
+  if (len) *len = 0;
+  return 0;                                /* "not set" */
+}
+SEXP_NO_WARN_UNUSED static int puchi_win_putenv_s(const char *name, const char *value) {
+  (void)name; (void)value;
+  puchi_os_denied("_putenv_s");
+  return 22;                               /* EINVAL */
+}
+#endif
+
+/* puchi_os_* are defined in puchi_glue.c.  The helpers below are marked
+ * SEXP_NO_WARN_UNUSED (sexp.h) because the configuration decides which are used. */
+
+/* Typed helpers: a function call used as a statement draws no warning.
+ * puchi_os_unreachable aborts in test builds (PUCHI_CHECK_UNREACHABLE) and
+ * does nothing otherwise; puchi_os_denied does nothing. */
+SEXP_NO_WARN_UNUSED static int puchi_stub_int(const char *name, int value) { puchi_os_unreachable(name); return value; }
+SEXP_NO_WARN_UNUSED static long puchi_stub_long(const char *name, long value) { puchi_os_unreachable(name); return value; }
+SEXP_NO_WARN_UNUSED static size_t puchi_stub_size(const char *name) { puchi_os_unreachable(name); return 0; }
+SEXP_NO_WARN_UNUSED static void *puchi_stub_ptr(const char *name) { puchi_os_unreachable(name); return NULL; }
+SEXP_NO_WARN_UNUSED static int puchi_deny_int(const char *name, int value) { puchi_os_denied(name); return value; }
+SEXP_NO_WARN_UNUSED static void *puchi_deny_ptr(const char *name) { puchi_os_denied(name); return NULL; }
+
+/* save the host's definitions; puchi_unredirect.h restores them */
+#pragma push_macro("getc")
+#undef getc
+#pragma push_macro("ungetc")
+#undef ungetc
+#pragma push_macro("putc")
+#undef putc
+#pragma push_macro("fputc")
+#undef fputc
+#pragma push_macro("fputs")
+#undef fputs
+#pragma push_macro("fflush")
+#undef fflush
+#pragma push_macro("fclose")
+#undef fclose
+#pragma push_macro("clearerr")
+#undef clearerr
+#pragma push_macro("ferror")
+#undef ferror
+#pragma push_macro("fgets")
+#undef fgets
+#pragma push_macro("fileno")
+#undef fileno
+#pragma push_macro("fseek")
+#undef fseek
+#pragma push_macro("ftell")
+#undef ftell
+#pragma push_macro("fread")
+#undef fread
+#pragma push_macro("fwrite")
+#undef fwrite
+#pragma push_macro("fopen")
+#undef fopen
+#pragma push_macro("select")
+#undef select
+#pragma push_macro("usleep")
+#undef usleep
+#pragma push_macro("poll")
+#undef poll
+#pragma push_macro("fcntl")
+#undef fcntl
+#pragma push_macro("shutdown")
+#undef shutdown
+#pragma push_macro("stderr")
+#undef stderr
+#pragma push_macro("FD_ZERO")
+#undef FD_ZERO
+#pragma push_macro("FD_SET")
+#undef FD_SET
+#pragma push_macro("FD_ISSET")
+#undef FD_ISSET
+#pragma push_macro("getenv")
+#undef getenv
+#pragma push_macro("setenv")
+#undef setenv
+#pragma push_macro("unsetenv")
+#undef unsetenv
+#pragma push_macro("strerror")
+#undef strerror
+#pragma push_macro("read")
+#undef read
+#pragma push_macro("write")
+#undef write
+#pragma push_macro("close")
+#undef close
+#pragma push_macro("lseek")
+#undef lseek
+#pragma push_macro("fstat")
+#undef fstat
+#pragma push_macro("stat")
+#undef stat
+#pragma push_macro("snprintf")
+#undef snprintf
+#pragma push_macro("sscanf")
+#undef sscanf
+#pragma push_macro("exit")
+#undef exit
+#pragma push_macro("malloc")
+#undef malloc
+#pragma push_macro("calloc")
+#undef calloc
+#pragma push_macro("free")
+#undef free
+#pragma push_macro("isalpha")
+#undef isalpha
+#pragma push_macro("isdigit")
+#undef isdigit
+#pragma push_macro("isxdigit")
+#undef isxdigit
+#pragma push_macro("isspace")
+#undef isspace
+#pragma push_macro("tolower")
+#undef tolower
+#pragma push_macro("toupper")
+#undef toupper
+#pragma push_macro("strcasecmp")
+#undef strcasecmp
+#pragma push_macro("strncasecmp")
+#undef strncasecmp
+#pragma push_macro("getenv_s")
+#undef getenv_s
+#pragma push_macro("_putenv_s")
+#undef _putenv_s
+
+/* ---- (1) STUB ---- */
+#define getc(f)               puchi_stub_int("getc", EOF)
+#define ungetc(c, f)          puchi_stub_int("ungetc", EOF)
+#define putc(c, f)            puchi_stub_int("putc", EOF)
+#define fputc(c, f)           puchi_stub_int("fputc", EOF)
+#define fputs(s, f)           puchi_stub_int("fputs", EOF)
+#define fflush(f)             puchi_stub_int("fflush", EOF)
+#define fclose(f)             puchi_stub_int("fclose", EOF)
+#define clearerr(f)           ((void)puchi_stub_int("clearerr", 0))
+#define ferror(f)             puchi_stub_int("ferror", 0)
+#define fgets(b, n, f)        ((char*)puchi_stub_ptr("fgets"))
+#define fileno(f)             puchi_stub_int("fileno", -1)
+#define fseek(f, o, w)        puchi_stub_int("fseek", -1)
+#define ftell(f)              puchi_stub_long("ftell", -1L)
+#define fread(p, s, n, f)     puchi_stub_size("fread")
+#define fwrite(p, s, n, f)    puchi_stub_size("fwrite")
+#define fopen(p, m)           ((FILE*)puchi_stub_ptr("fopen"))
+#define select(n, r, w, e, t) puchi_stub_int("select", -1)
+#define usleep(u)             puchi_stub_int("usleep", -1)
+#define poll(f, n, t)         puchi_stub_int("poll", -1)
+#define fcntl(...)            puchi_stub_int("fcntl", -1)
+#define shutdown(s, h)        puchi_stub_int("shutdown", -1)
+#define stderr                ((FILE*)puchi_stub_ptr("stderr"))
+#define FD_ZERO(set)          ((void)0)
+#define FD_SET(fd, set)       ((void)0)
+#define FD_ISSET(fd, set)     0
+#ifdef _WIN32                 /* green-thread code names these; never runs */
+#pragma push_macro("F_GETFL")
+#pragma push_macro("F_SETFL")
+#pragma push_macro("O_NONBLOCK")
+#undef F_GETFL
+#undef F_SETFL
+#undef O_NONBLOCK
+#define F_GETFL 3
+#define F_SETFL 4
+#define O_NONBLOCK 04000
+#endif
+
+/* ---- (2) DENY ---- */
+#define getenv(n)             ((char*)puchi_deny_ptr("getenv"))
+#ifndef _WIN32
+#define setenv(n, v, o)       puchi_deny_int("setenv", -1)
+#define unsetenv(n)           puchi_deny_int("unsetenv", -1)
+#else
+/* Windows: lib/chibi/ast.c DEFINES setenv/unsetenv on top of getenv_s and
+ * _putenv_s, so those two are redirected instead, with object-like macros
+ * (ast.c also declares getenv_s, which a function-like macro would break). */
+#define getenv_s              puchi_win_getenv_s
+#define _putenv_s             puchi_win_putenv_s
+#endif
+#define strerror(e)           ((char*)"system error")
+#define read(fd, b, n)        puchi_deny_int("read", -1)
+#define write(fd, b, n)       puchi_deny_int("write", -1)
+#define close(fd)             puchi_deny_int("close", -1)
+#define lseek(fd, o, w)       puchi_deny_int("lseek", -1)
+#define fstat(fd, b)          puchi_deny_int("fstat", -1)
+
+/* ---- (3) ROUTE ---- */
+#define stat(p, b)            puchi_os_stat(ctx, p)
+#define snprintf(...)         puchi_os_snprintf(ctx, __VA_ARGS__)
+#define sscanf(s, fmt, out)   puchi_os_sscanf_double(ctx, s, fmt, out)
+#define exit(c)               puchi_os_exit(ctx, c)
+#define malloc(n)             puchi_os_malloc(ctx, n)
+#define calloc(n, s)          puchi_os_calloc(ctx, n, s)
+#define free(p)               puchi_os_free(ctx, p)
+#define isalpha(c)            puchi_ascii_isalpha(c)
+#define isdigit(c)            puchi_ascii_isdigit(c)
+#define isxdigit(c)           puchi_ascii_isxdigit(c)
+#define isspace(c)            puchi_ascii_isspace(c)
+#define tolower(c)            puchi_ascii_tolower(c)
+#define toupper(c)            puchi_ascii_toupper(c)
+#define strcasecmp            puchi_ascii_strcasecmp
+#define strncasecmp           puchi_ascii_strncasecmp
+
+#endif /* PUCHI_REDIRECT_H */
+```
+
+### 7.4 `puchi/src/puchi_unredirect.h`
+
+It is mechanical: for every name the redirect header saved, `#undef NAME`
+then `#pragma pop_macro("NAME")`; the three Windows constants are restored
+under `#ifdef _WIN32`. Generate it from the redirect header (the reference
+file was generated with a short script) so that the two lists can never
+differ. First and last lines of the reference file:
+
+```c
+/* puchi_unredirect.h - included by puchi_impl.c right after the last upstream
+ * .c file.  Removes every redirect and restores whatever the host's headers
+ * had defined under those names (e.g. MSVC's stderr macro). */
+#undef getc
+#pragma pop_macro("getc")
+#undef ungetc
+#pragma pop_macro("ungetc")
+#undef putc
+...
+#ifdef _WIN32
+#undef F_GETFL
+#pragma pop_macro("F_GETFL")
+#undef F_SETFL
+#pragma pop_macro("F_SETFL")
+#undef O_NONBLOCK
+#pragma pop_macro("O_NONBLOCK")
+#endif
+```
+
+### 7.5 Windows notes (compile-verified with clang + MinGW headers; MSVC not verified)
+
+- `sexp.h` includes `<winsock2.h>` and `<windows.h>` on `_WIN32`; they come
+  in before the redirects through the Chibi headers.
+- `features.h` maps `strcasecmp` to `_stricmp` on MSVC; the redirect header
+  `#undef`s and replaces it.
+- `ast.c` defines `setenv`/`unsetenv` with `getenv_s` and `_putenv_s`; the
+  redirect header leaves `setenv`/`unsetenv` alone on `_WIN32` and turns
+  `getenv_s`/`_putenv_s` into deny functions with object-like macros.
+- Green-thread code names `F_GETFL`, `F_SETFL`, `O_NONBLOCK`, which Windows
+  lacks; the redirect header defines them on `_WIN32` (the code using them
+  never runs). Upstream itself never compiles green threads on Windows.
+- `features.h` defines `_USE_MATH_DEFINES` for `M_PI`; on MSVC this only
+  works if no `<math.h>` was included before. If the host includes
+  `<math.h>` first, `M_PI` may be missing - see Part 14.
+
+**Gate G3 (redirect)**: covered by G5 (collisions), G6 (symbols) and G7
+(trap build) in Part 12.
